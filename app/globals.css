@@ -1,0 +1,685 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0F0F12;
+  --foreground: #ededed;
+
+  /* 🎨 PREMIUM GOLD GRADIENT THEME */
+  --primary: #B8860B;
+  --primary-hover: #FFDF73;
+  --primary-dark: #8B6914;
+
+  /* Surface Colors */
+  --surface: #18181C;
+  --surface-hover: #1F1F23;
+
+  /* Gradient Definitions - Dark Gold to Bright Gold */
+  --gradient-primary: linear-gradient(135deg, #B8860B 0%, #FFDF73 100%);
+  --gradient-primary-hover: linear-gradient(135deg, #FFDF73 0%, #B8860B 100%);
+  --gradient-secondary: linear-gradient(135deg, #FFDF73 0%, #B8860B 100%);
+  --gradient-accent: linear-gradient(135deg, #B8860B 0%, #D4AF37 100%);
+  --gradient-success: linear-gradient(135deg, #10B981 0%, #059669 100%);
+  --gradient-dark: linear-gradient(135deg, #18181C 0%, #0F0F12 100%);
+
+  /* Animated Gradient for backgrounds */
+  --gradient-animated: linear-gradient(270deg, #B8860B, #D4AF37, #FFDF73, #B8860B);
+
+  /* Button Text Color */
+  --button-text: #111115;
+
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-dark: var(--primary-dark);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-button-text: var(--button-text);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0F0F12;
+    --foreground: #ededed;
+
+    /* 🎨 PREMIUM GOLD GRADIENT THEME */
+    --primary: #B8860B;
+    --primary-hover: #FFDF73;
+    --primary-dark: #8B6914;
+
+    /* Surface Colors */
+    --surface: #18181C;
+    --surface-hover: #1F1F23;
+
+    /* Gradient Definitions - Dark Gold to Bright Gold */
+    --gradient-primary: linear-gradient(135deg, #B8860B 0%, #FFDF73 100%);
+    --gradient-primary-hover: linear-gradient(135deg, #FFDF73 0%, #B8860B 100%);
+    --gradient-secondary: linear-gradient(135deg, #FFDF73 0%, #B8860B 100%);
+    --gradient-accent: linear-gradient(135deg, #B8860B 0%, #D4AF37 100%);
+    --gradient-success: linear-gradient(135deg, #10B981 0%, #059669 100%);
+    --gradient-dark: linear-gradient(135deg, #18181C 0%, #0F0F12 100%);
+
+    /* Animated Gradient for backgrounds */
+    --gradient-animated: linear-gradient(270deg, #B8860B, #D4AF37, #FFDF73, #B8860B);
+
+    /* Button Text Color */
+    --button-text: #111115;
+
+  }
+
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* 📱 MOBILE SCROLL & LAYOUT FIXES */
+html {
+  scroll-behavior: smooth;
+  /* Prevent scroll restoration on navigation - handled by ScrollToTop component */
+  overflow-x: hidden;
+}
+
+body {
+  overflow-x: hidden;
+  /* Ensure proper height calculation on mobile browsers (iOS Safari, Android Chrome) */
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
+}
+
+/* Fix for mobile viewport height issues (iOS Safari URL bar) */
+@supports (-webkit-touch-callout: none) {
+  body {
+    min-height: -webkit-fill-available;
+  }
+}
+
+/* Prevent content from going behind footer on mobile */
+main {
+  min-height: calc(100vh - 400px); /* Adjust based on navbar + footer height */
+}
+
+@media (max-width: 768px) {
+  main {
+    min-height: calc(100vh - 600px); /* More space for mobile footer */
+    padding-bottom: 2rem !important;
+  }
+}
+
+
+/* Custom Global Dark Scrollbar Styles */
+@layer base {
+
+  /* For Chrome, Safari, Edge, and Opera */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  /* The background track area of the scrollbar slot */
+  ::-webkit-scrollbar-track {
+    background: var(--background);
+    border-left: 1px solid #27272a;
+  }
+
+  /* The actual draggable scrollbar handle/thumb */
+  ::-webkit-scrollbar-thumb {
+    background: #27272a;
+    border-radius: 9999px;
+    border: 2px solid var(--background);
+  }
+
+  /* Changes color subtly when an operator hovers over the track */
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3f3f46;
+  }
+
+  /* Standard support properties for Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #27272a var(--background);
+  }
+
+
+}
+
+.rdp {
+  --rdp-cell-size: 32px !important;
+  --rdp-accent-color: var(--primary) !important;
+  --rdp-background-color: var(--background) !important;
+  --rdp-selected-color: var(--background) !important;
+  --rdp-hover-color: rgba(184, 134, 11, 0.15);
+}
+
+.rdp-months {
+  justify-content: center;
+}
+
+.rdp-month {
+  background-color: transparent;
+}
+
+.rdp-head_cell {
+  font-size: 10px !important;
+  font-weight: 800 !important;
+  color: #a1a1aa !important;
+  text-transform: uppercase;
+  padding-bottom: 4px !important;
+}
+
+/* Style and shrink active numeric buttons */
+.rdp-day {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  border-radius: 8px !important;
+  height: 32px !important;
+  width: 32px !important;
+}
+
+.rdp-day_disabled {
+  opacity: 0.3;
+}
+
+.rdp-day_selected,
+.rdp-day_selected:hover {
+  background-color: var(--primary) !important;
+  color: #000000 !important;
+  font-weight: 900 !important;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+.rdp-button:hover:not([disabled]):not(.rdp-day_selected) {
+  background-color: #1a1a1a !important;
+  color: var(--primary) !important;
+}
+
+/* Compact style for month/year title row headers */
+.rdp-caption_label {
+  font-size: 12px !important;
+  font-weight: 900 !important;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #FFFFFF !important;
+}
+
+.rdp-nav_button {
+  color: var(--primary) !important;
+  height: 24px !important;
+  width: 24px !important;
+}
+
+
+
+/* 🎨 GRADIENT UTILITY CLASSES */
+@layer utilities {
+
+  /* Gradient Backgrounds */
+  .bg-gradient-primary {
+    background: var(--gradient-primary);
+  }
+
+  .bg-gradient-primary-hover {
+    background: var(--gradient-primary-hover);
+  }
+
+  .bg-gradient-secondary {
+    background: var(--gradient-secondary);
+  }
+
+  .bg-gradient-accent {
+    background: var(--gradient-accent);
+  }
+
+  .bg-gradient-success {
+    background: var(--gradient-success);
+  }
+
+  .bg-gradient-dark {
+    background: var(--gradient-dark);
+  }
+
+  /* Gradient Text */
+  .text-gradient-primary {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .text-gradient-secondary {
+    background: var(--gradient-secondary);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* Gradient Borders */
+  .border-gradient-primary {
+    border: 2px solid transparent;
+    background-image: var(--gradient-primary);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+
+  /* Animated Gradient Background */
+  .bg-gradient-animated {
+    background: var(--gradient-animated);
+    background-size: 300% 300%;
+    animation: gradient-shift 8s ease infinite;
+  }
+
+  /* Gradient Hover Effects */
+  .hover-gradient-shift {
+    transition: background-position 0.5s ease;
+    background-size: 200% 200%;
+    background-position: left center;
+  }
+
+  .hover-gradient-shift:hover {
+    background-position: right center;
+  }
+
+  /* Glow Effects - Premium Gold Theme */
+  .glow-primary {
+    box-shadow: 0 0 20px rgba(184, 134, 11, 0.5), 0 0 40px rgba(255, 223, 115, 0.3);
+  }
+
+  .glow-primary-hover:hover {
+    box-shadow: 0 0 30px rgba(184, 134, 11, 0.7), 0 0 60px rgba(255, 223, 115, 0.5);
+    transition: box-shadow 0.3s ease;
+  }
+
+  .glow-secondary {
+    box-shadow: 0 0 20px rgba(255, 223, 115, 0.5), 0 0 40px rgba(184, 134, 11, 0.3);
+  }
+
+  /* Subtle box glow for cards and containers */
+  .glow-box {
+    box-shadow: 0 0 15px rgba(184, 134, 11, 0.1);
+  }
+
+  .glow-box-hover:hover {
+    box-shadow: 0 0 25px rgba(184, 134, 11, 0.2);
+    transition: box-shadow 0.3s ease;
+  }
+
+  /* Strong box glow */
+  .glow-box-strong {
+    box-shadow: 0 0 20px rgba(184, 134, 11, 0.15), 0 0 40px rgba(255, 223, 115, 0.1);
+  }
+
+  /* Animated Gradient Border */
+  .border-gradient-animated {
+    position: relative;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .border-gradient-animated::before {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    background: var(--gradient-animated);
+    background-size: 300% 300%;
+    border-radius: inherit;
+    z-index: -1;
+    animation: gradient-shift 8s ease infinite;
+  }
+
+  /* Table values */
+  .text-data-visible {
+    color: var(--foreground);
+  }
+
+  .text-data-placeholder {
+    color: var(--text-muted, #a1a1aa);
+    /* Visible grey */
+    font-style: italic;
+  }
+
+  /* 🎯 TEXT VISIBILITY IMPROVEMENTS */
+
+  /* Primary Text - High visibility white */
+  .text-primary-content {
+    color: #FFFFFF;
+  }
+
+  /* Secondary Text - Brighter grey for better readability */
+  .text-secondary-content {
+    color: #D4D4D8; /* zinc-300 - much brighter than zinc-500 */
+  }
+
+  /* Muted Text - Still visible but less prominent */
+  .text-muted-content {
+    color: #A1A1AA; /* zinc-400 - balanced visibility */
+  }
+
+  /* Label Text - For form labels and small headers */
+  .text-label {
+    color: #A1A1AA; /* zinc-400 */
+    font-size: 0.6875rem; /* 11px */
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Enhanced Label - Larger and more visible */
+  .text-label-enhanced {
+    color: #D4D4D8; /* zinc-300 - brighter */
+    font-size: 0.75rem; /* 12px */
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Description Text - Readable size for body text */
+  .text-description {
+    color: #D4D4D8; /* zinc-300 */
+    font-size: 0.875rem; /* 14px - increased from common 12px */
+    line-height: 1.5;
+  }
+
+  /* Minimum readable text size */
+  .text-min {
+    font-size: 0.75rem; /* 12px minimum */
+  }
+
+  /* Enhanced minimum - slightly larger */
+  .text-min-enhanced {
+    font-size: 0.8125rem; /* 13px */
+    font-weight: 600;
+  }
+
+  .text-sm-readable {
+    font-size: 0.8125rem; /* 13px - between text-xs and text-sm */
+  }
+
+  .text-sm-enhanced {
+    font-size: 0.875rem; /* 14px */
+    font-weight: 600;
+    color: #D4D4D8; /* zinc-300 */
+  }
+
+  .text-base-readable {
+    font-size: 0.9375rem; /* 15px - slightly larger than text-sm */
+  }
+
+  /* Card Headers & Section Titles */
+  .text-section-header {
+    font-size: 0.875rem; /* 14px */
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #E4E4E7; /* zinc-200 - very bright */
+  }
+
+  /* Stats & Numbers - Make them pop */
+  .text-stat-value {
+    font-size: 1.5rem; /* 24px */
+    font-weight: 900;
+    color: #FFFFFF;
+    line-height: 1.2;
+  }
+
+  .text-stat-label {
+    font-size: 0.75rem; /* 12px */
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #D4D4D8; /* zinc-300 */
+  }
+}
+
+/* Gradient Animation Keyframes */
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* Gaming theme animations */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s infinite;
+}
+
+@keyframes swing {
+  0%, 100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(3deg);
+  }
+  75% {
+    transform: rotate(-3deg);
+  }
+}
+
+@keyframes scan {
+  0%, 100% {
+    transform: translateY(-100%);
+  }
+  50% {
+    transform: translateY(100%);
+  }
+}
+
+.animate-scan {
+  animation: scan 2s ease-in-out infinite;
+}
+
+/* ================================================
+   SONNER TOAST STYLING
+   ================================================ */
+
+/* Ensure Sonner toasts appear above Radix Dialog (z-50) */
+[data-sonner-toaster] {
+  z-index: 100 !important;
+}
+
+/* Ensure toast container is always visible */
+[data-sonner-toaster][data-theme="dark"] {
+  --normal-bg: #121212 !important;
+  --normal-border: #27272a !important;
+  --normal-text: #ffffff !important;
+}
+
+[data-sonner-toast] {
+  z-index: 100 !important;
+  background-color: #121212 !important;
+  border: 1px solid #27272a !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+  opacity: 1 !important;
+  min-height: 48px !important;
+  padding: 12px 16px !important;
+}
+
+/* Fix stacked toast visibility */
+[data-sonner-toast][data-mounted="true"] {
+  opacity: 1 !important;
+}
+
+[data-sonner-toast][data-expanded="false"] {
+  opacity: 1 !important;
+}
+
+/* Ensure all toasts in stack are visible */
+[data-sonner-toast][data-y-position] {
+  opacity: 1 !important;
+}
+
+/* Toast title styling */
+[data-sonner-toast] [data-title] {
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  font-size: 0.875rem !important;
+  opacity: 1 !important;
+  display: block !important;
+}
+
+/* Toast description styling */
+[data-sonner-toast] [data-description] {
+  color: #d4d4d8 !important;
+  font-size: 0.8125rem !important;
+  line-height: 1.4 !important;
+  margin-top: 0.25rem !important;
+  opacity: 1 !important;
+  display: block !important;
+}
+
+/* Toast close button - pinned inside the top-right corner.
+   Sonner defaults it to the top-LEFT, floating half outside the toast, where it
+   reads as a stray control detached from the message it closes. The library
+   drives that placement through custom properties, so the position is restated
+   here rather than only flipping the variables. */
+[data-sonner-toast] [data-close-button] {
+  left: unset !important;
+  right: 8px !important;
+  top: 8px !important;
+  transform: none !important;
+  background-color: transparent !important;
+  border: 1px solid #3f3f46 !important;
+  color: #a1a1aa !important;
+}
+
+/* Reserve that corner so the title and description never run under the button.
+   Scoped to styled toasts - `toast.custom` renders its own card and lays out
+   its own close control. */
+[data-sonner-toast][data-styled="true"] {
+  padding-right: 40px !important;
+}
+
+[data-sonner-toast] [data-close-button]:hover {
+  background-color: #27272a !important;
+  color: #ffffff !important;
+}
+
+/* Success toast styling */
+[data-sonner-toast][data-type="success"] {
+  border-left: 3px solid #10b981 !important;
+}
+
+[data-sonner-toast][data-type="success"] [data-icon] {
+  color: #10b981 !important;
+}
+
+/* Error toast styling */
+[data-sonner-toast][data-type="error"] {
+  border-left: 3px solid #ef4444 !important;
+}
+
+[data-sonner-toast][data-type="error"] [data-icon] {
+  color: #ef4444 !important;
+}
+
+/* Warning toast styling */
+[data-sonner-toast][data-type="warning"] {
+  border-left: 3px solid #f59e0b !important;
+}
+
+[data-sonner-toast][data-type="warning"] [data-icon] {
+  color: #f59e0b !important;
+}
+
+/* Info toast styling */
+[data-sonner-toast][data-type="info"] {
+  border-left: 3px solid #3b82f6 !important;
+}
+
+[data-sonner-toast][data-type="info"] [data-icon] {
+  color: #3b82f6 !important;
+}
+
+/* Loading toast styling */
+[data-sonner-toast][data-type="loading"] [data-icon] {
+  color: var(--primary) !important;
+}
+
+/* Ensure content visibility */
+[data-sonner-toast] [data-content] {
+  color: #ffffff !important;
+  opacity: 1 !important;
+}
+
+/* Fix empty white box issue - ensure all text elements have color */
+[data-sonner-toast] * {
+  color: inherit !important;
+  opacity: 1 !important;
+}
+
+/* Specifically target toast text content */
+[data-sonner-toast] [data-content] > div {
+  color: #ffffff !important;
+  opacity: 1 !important;
+}
+
+/* Ensure title and description are visible */
+[data-sonner-toast] [data-title],
+[data-sonner-toast] [data-description],
+[data-sonner-toast] [data-content] * {
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+[data-sonner-toast] svg {
+  fill: currentColor !important;
+  opacity: 1 !important;
+}
+
+/* Additional fix for toast content rendering */
+[data-sonner-toast] > div {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 12px !important;
+}
+
+/* Force text to be visible in all states */
+[data-sonner-toast] [data-title]:empty::before,
+[data-sonner-toast] [data-description]:empty::before {
+  content: none !important;
+}
+
+/* Prevent text color from being overridden */
+[data-sonner-toast] button,
+[data-sonner-toast] div,
+[data-sonner-toast] span,
+[data-sonner-toast] p {
+  color: inherit !important;
+}
+
+/* Ensure proper text rendering */
+[data-sonner-toast] [data-title] {
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+  text-rendering: optimizeLegibility !important;
+}
+
+[data-sonner-toast] [data-description] {
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+  text-rendering: optimizeLegibility !important;
+}

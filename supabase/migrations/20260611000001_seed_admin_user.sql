@@ -1,0 +1,41 @@
+-- ================================================
+-- Seed Admin User for Supabase Auth
+-- ================================================
+-- Purpose: Create admin user for dashboard authentication
+-- Email: admin@breakpointarena.com
+-- Password: Admin@123
+-- Session timeout: 12 hours
+-- ================================================
+
+-- NOTE: Direct INSERT into auth.users doesn't work reliably with Supabase Auth.
+-- Instead, use the seed script after migrations:
+--
+-- Run: npm run seed:admin
+-- Or: npx tsx scripts/seed-admin.ts
+--
+-- The script uses Supabase Admin API to properly create the user
+-- with email confirmation and correct password hashing.
+--
+-- This migration file is kept for documentation purposes.
+
+-- Update Supabase Auth configuration for 12-hour session timeout
+-- This sets the JWT expiry to 43200 seconds (12 hours)
+-- Note: This requires Supabase CLI to update auth config
+-- For now, we'll document this - actual config is in supabase/config.toml
+
+-- ================================================
+-- IMPORTANT: Update supabase/config.toml
+-- ================================================
+-- Add this to your config.toml if not already present:
+--
+-- [auth]
+-- site_url = "http://localhost:3000"
+-- additional_redirect_urls = ["http://localhost:3000"]
+-- jwt_expiry = 43200  # 12 hours in seconds
+-- enable_signup = false  # Disable public signups
+--
+-- [auth.email]
+-- enable_signup = false
+-- double_confirm_changes = true
+-- enable_confirmations = false
+-- ================================================

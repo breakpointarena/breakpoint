@@ -1,0 +1,41 @@
+-- ================================================
+-- NOBODY DELETES A CUSTOMER THROUGH THE REST API
+-- ================================================
+-- `20260530093229_add_customers_table.sql` created four policies on this table.
+-- `20260803100000_lock_down_booking_tables.sql` removed the public read, insert
+-- and update, and left this one standing:
+--
+--     CREATE POLICY "Allow admin delete customers"
+--       ON public.customers FOR DELETE TO authenticated USING (true);
+--
+-- The name says admin; the role says `authenticated`, which is whoever holds a
+-- Supabase Auth session. Sign-ups are open (`enable_signup = true`,
+-- `enable_confirmations = false` in supabase/config.toml) against an anon key
+-- that ships in the browser bundle, so in practice this reads: anyone may delete
+-- any customer. It is the same mistake as the membership policies closed in
+-- `20260826100000` - a policy named after the person it was meant for rather than
+-- scoped to them.
+--
+-- What a single DELETE takes with it, by foreign key:
+--
+--     subscriptions                  ON DELETE CASCADE    -- paid memberships, gone
+--     customer_subscriptions         ON DELETE CASCADE
+--     bookings                       ON DELETE SET NULL   -- orphaned, not removed
+--     subscription_purchases_legacy  ON DELETE SET NULL
+--
+-- So the reachable damage is not just the customer record: every membership they
+-- ever paid for is destroyed with it, and their bookings are detached from any
+-- identity - which takes the revenue reports' customer attribution with them.
+--
+-- SAFE FOR THE APP: nothing deletes a customer. There is no delete in
+-- `app/(admin)/admin/customers/actions.ts`, whose only export is
+-- `getLiveCustomerRegistryAction`, and no `.delete()` against `customers`
+-- anywhere in the codebase. No client component touches the table at all - the
+-- admin customers screen reads through that guarded server action on the service
+-- role. Should a delete ever be wanted, it belongs in a `requireStaff()` server
+-- action like every other admin operation, and the service-role policy below
+-- already permits it.
+
+DROP POLICY IF EXISTS "Allow admin delete customers" ON public.customers;
+
+COMMENT ON TABLE public.customers IS 'Customer identities. Written and deleted only by server actions on the service role; RLS grants anon nothing, and authenticated only the SELECT used by staff screens.';
