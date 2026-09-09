@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useTransition, Fragment } from "react";
+import { useState, useEffect, useMemo, useRef, useTransition, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,7 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { CheckoutModal } from "@/components/admin/bookings/CheckoutModal";
 import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, type BookingFilters } from "./actions";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
-import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2 } from "lucide-react";
+import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2, LogIn } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { useDebounce } from "@/lib/hooks/useDebounce";
@@ -28,6 +28,12 @@ import { CountUp } from "@/components/shared/CountUp";
 import { roundToTwo, formatCurrency } from "@/lib/currency";
 import { formatDbTime, formatDbTimeRange } from "@/lib/utils/timeSlots";
 import { BookingTimingCell } from "@/components/admin/bookings/SessionTimeline";
+import { TimeOfDayField } from "@/components/ui/time-of-day-field";
+import {
+  PROVISIONAL_SESSION_HOURS,
+  formatPlayedDuration,
+  resolvePlannedSession
+} from "@/lib/bookings/walkInSession";
 import {
   arenaDate,
   arenaToday,
@@ -72,6 +78,21 @@ export default function AdminBookingsPage() {
   const [selectedBooking, setSelectedBooking] = useState<any>(null);
   const [openFoodModal, setOpenFoodModal] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<any>(null);
+  /** The waiting walk-in about to be started, while the dialog is open. */
+  const [checkInTarget, setCheckInTarget] = useState<any>(null);
+  /** 24-hour `HH:MM` the customer says they will finish. Empty means they did not say. */
+  const [checkInPlannedEnd, setCheckInPlannedEnd] = useState("");
+  /**
+   * The entered finish, read the way the server will read it.
+   *
+   * Against now, because check-in from this screen starts the session now - the
+   * same function the action calls, so what the dialog says and what the claim
+   * does cannot drift apart.
+   */
+  const checkInPlannedEndCheck = useMemo(
+    () => (checkInPlannedEnd ? resolvePlannedSession(null, checkInPlannedEnd) : null),
+    [checkInPlannedEnd, checkInTarget]
+  );
   const [cancelReason, setCancelReason] = useState("");
   const [checkoutBookingId, setCheckoutBookingId] = useState<string | null>(null);
   const [openCheckoutModal, setOpenCheckoutModal] = useState(false);
@@ -450,23 +471,43 @@ export default function AdminBookingsPage() {
     });
   };
 
+  /**
+   * Start a waiting walk-in, optionally holding the station to a stated finish.
+   *
+   * Called from the dialog rather than from the button, because the customer is
+   * standing there and this is the moment they say how long they want. Without
+   * it the only way to record that was the New Walk-In form, so a booking taken
+   * earlier in the evening could never be given one at all.
+   */
+  const startWalkInSession = (bookingId: string, plannedEndClock: string | null) => {
+    startTransition(async () => {
+      const result = await checkInWalkInSession(bookingId, null, plannedEndClock);
+      if (result.success) {
+        toast.success("Checked in — playing now", {
+          description:
+            `Station ${result.stationNumber} · billing starts ` +
+            `${formatClockTime12h(result.checkedInAt!)}` +
+            (plannedEndClock && result.heldUntil
+              ? ` · held until ${formatClockTime12h(result.heldUntil)}`
+              : "")
+        });
+        setCheckInTarget(null);
+        setCheckInPlannedEnd("");
+        refreshAll();
+      } else {
+        toast.error("Check-in failed", { description: result.error });
+      }
+    });
+  };
+
   const handleCheckIn = async (bookingId: string, bookingNumber: string, booking: any) => {
     // A walk-in session has no slot to be early or late for: check-in is what
     // creates one, and the clock it starts is the clock the bill is read from.
+    // The dialog asks the one question worth asking at that moment - whether the
+    // customer has said when they are leaving - and starts the session either way.
     if (booking.billed_on_actual_time) {
-      startTransition(async () => {
-        const result = await checkInWalkInSession(bookingId);
-        if (result.success) {
-          toast.success("Checked in — playing now", {
-            description:
-              `Station ${result.stationNumber} · billing starts ` +
-              `${formatClockTime12h(result.checkedInAt!)}`
-          });
-          refreshAll();
-        } else {
-          toast.error("Check-in failed", { description: result.error });
-        }
-      });
+      setCheckInPlannedEnd("");
+      setCheckInTarget(booking);
       return;
     }
 
@@ -1719,6 +1760,115 @@ export default function AdminBookingsPage() {
                 <CheckCircle2 className="h-4 w-4 mr-2" />
               )}
               Mark as Paid
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Start a waiting walk-in.
+
+          The clock starts now either way; the only question is whether the
+          customer has said when they are leaving, which decides how long the
+          station is held and nothing about the money. */}
+      <Dialog
+        open={!!checkInTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCheckInTarget(null);
+            setCheckInPlannedEnd("");
+          }
+        }}
+      >
+        <DialogContent className="bg-[var(--background)] border-green-500/30 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-black uppercase text-white flex items-center gap-2">
+              <LogIn className="h-5 w-5 text-green-400" />
+              Check In
+            </DialogTitle>
+            <DialogDescription className="text-sm text-secondary-content">
+              The clock starts now. The bill is worked out at checkout from the time
+              actually played.
+            </DialogDescription>
+          </DialogHeader>
+
+          {checkInTarget && (
+            <div className="space-y-4">
+              <div className="bg-[var(--surface)] border border-[#27272a] rounded-lg p-4 space-y-1">
+                <p className="text-sm font-black text-primary font-mono">
+                  {checkInTarget.booking_number}
+                </p>
+                <p className="text-sm text-white">{checkInTarget.customer_name}</p>
+                <p className="text-label">
+                  {checkInTarget.walk_in_device_type_name || "Walk-in session"}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-label text-muted-content">
+                    Planned end <span className="text-muted-content/60">(optional)</span>
+                  </Label>
+                  {/* The selects cannot go back to "--" on their own once a value
+                      is set, so a time chosen by mistake needs a way off. */}
+                  {checkInPlannedEnd && (
+                    <button
+                      type="button"
+                      onClick={() => setCheckInPlannedEnd("")}
+                      className="text-[11px] font-black uppercase tracking-wide text-zinc-500 transition-colors hover:text-white"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <TimeOfDayField
+                  name="checkInPlannedEnd"
+                  label="Planned end"
+                  defaultValue={checkInPlannedEnd}
+                  onChange={setCheckInPlannedEnd}
+                />
+
+                {!checkInPlannedEnd ? (
+                  <p className="text-[11px] leading-relaxed text-muted-content">
+                    Leave blank if they have not said. The station is then held for the
+                    usual {PROVISIONAL_SESSION_HOURS} hours until they check out.
+                  </p>
+                ) : checkInPlannedEndCheck?.ok ? (
+                  <p className="text-[11px] font-bold text-emerald-400">
+                    Held until {formatDbTime(checkInPlannedEndCheck.session.end.clock)} ·{" "}
+                    {formatPlayedDuration(checkInPlannedEndCheck.session.plannedMinutes)}
+                  </p>
+                ) : (
+                  <p className="text-[11px] font-bold text-amber-500">
+                    {checkInPlannedEndCheck?.error}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex gap-2">
+            <Button
+              onClick={() => {
+                setCheckInTarget(null);
+                setCheckInPlannedEnd("");
+              }}
+              variant="ghost"
+              className="flex-1 border border-zinc-800 text-muted-content hover:text-white font-bold uppercase text-xs h-10 rounded-lg"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() =>
+                startWalkInSession(
+                  checkInTarget.id,
+                  checkInPlannedEndCheck?.ok ? checkInPlannedEndCheck.session.end.clock : null
+                )
+              }
+              disabled={isPending || (!!checkInPlannedEnd && !checkInPlannedEndCheck?.ok)}
+              className="flex-1 bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] font-black uppercase text-xs h-10 rounded-lg disabled:opacity-50"
+            >
+              {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Start Session"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -10,6 +10,7 @@ import {
   daysBetweenDates,
   formatClockTime12h,
 } from '@/lib/utils/dates'
+import { formatDbTime } from '@/lib/utils/timeSlots'
 
 /**
  * Pricing for a walk-in session, from the time actually played.
@@ -120,6 +121,12 @@ export interface SessionTimes {
   checkedInAt: string | null
   /** Formatted checkout time, or null while play is in progress. */
   completedAt: string | null
+  /**
+   * Formatted finish the customer named at check-in, while the session is still
+   * running. Null once they check out, because then there is a real second time
+   * to show and an expectation is no longer worth the room.
+   */
+  plannedEndAt: string | null
 }
 
 /**
@@ -139,6 +146,7 @@ export function sessionTimes(booking: {
   status?: string | null
   checked_in_at?: string | null
   completed_at?: string | null
+  walk_in_planned_end?: string | null
 }): SessionTimes | null {
   if (!booking.billed_on_actual_time) return null
 
@@ -147,6 +155,12 @@ export function sessionTimes(booking: {
   return {
     checkedInAt: booking.checked_in_at ? at(booking.checked_in_at) : null,
     completedAt: booking.completed_at ? at(booking.completed_at) : null,
+    // Dropped the moment a real checkout exists: the two would sit next to each
+    // other saying different things, and only one of them is what was billed.
+    plannedEndAt:
+      !booking.completed_at && booking.walk_in_planned_end
+        ? at(booking.walk_in_planned_end)
+        : null,
   }
 }
 
@@ -233,25 +247,12 @@ export function resolveBackdatedStart(
   clock24: string,
   now: Date = new Date()
 ): BackdatedStartResult {
-  const match = /^(\d{1,2}):([0-5]\d)$/.exec((clock24 ?? '').trim())
-  if (!match) {
+  const entered = minuteOfDay(clock24)
+  if (entered === null) {
     return { ok: false, error: 'Enter the time the customer started playing.' }
   }
 
-  const hour = Number(match[1])
-  const minute = Number(match[2])
-  if (hour > 23) {
-    return { ok: false, error: 'Enter the time the customer started playing.' }
-  }
-
-  const entered = hour * 60 + minute
-
-  const [nowHour, nowMinute] = arenaClockTime(now).split(':').map(Number)
-  const current = nowHour * 60 + nowMinute
-
-  // Later in the day than now means it has not happened yet today, so it was
-  // last night. Same arithmetic wraps a mistyped future time to ~24h old.
-  const minutesAgo = entered <= current ? current - entered : current - entered + 1440
+  const minutesAgo = minutesSince(entered, now)
 
   if (minutesAgo > MAX_BACKDATED_START_HOURS * 60) {
     return {
@@ -262,12 +263,214 @@ export function resolveBackdatedStart(
     }
   }
 
+  return { ok: true, start: { clock: clockOf(entered), minutesAgo } }
+}
+
+/** The minute of the day a 24-hour `HH:MM` names, or null if it is not one. */
+function minuteOfDay(clock24: string): number | null {
+  const match = /^(\d{1,2}):([0-5]\d)$/.exec((clock24 ?? '').trim())
+  if (!match) return null
+
+  const hour = Number(match[1])
+  if (hour > 23) return null
+
+  return hour * 60 + Number(match[2])
+}
+
+/**
+ * The inverse, padded: 545 -> "09:05".
+ *
+ * Padded because the same string is both what Postgres is handed as a TIME and
+ * what is echoed back to the desk, and "9:05" reads like a half-typed field.
+ */
+function clockOf(minutes: number): string {
+  const wrapped = ((Math.trunc(minutes) % 1440) + 1440) % 1440
+  const hour = Math.floor(wrapped / 60)
+  return `${String(hour).padStart(2, '0')}:${String(wrapped % 60).padStart(2, '0')}`
+}
+
+/** The minute of the day the arena clock has reached. */
+function arenaMinuteOfDay(now: Date): number {
+  const [hour, minute] = arenaClockTime(now).split(':').map(Number)
+  return hour * 60 + minute
+}
+
+/**
+ * How long before `now` a reading of the arena clock was.
+ *
+ * Later in the day than now means it has not happened yet today, so it was last
+ * night. The same arithmetic wraps a mistyped future time to ~24h old, which is
+ * what the ceiling above then refuses.
+ */
+function minutesSince(entered: number, now: Date): number {
+  const current = arenaMinuteOfDay(now)
+  return entered <= current ? current - entered : current - entered + 1440
+}
+
+/**
+ * How long a walk-in may be held for from its start.
+ *
+ * The same number as `MAX_LIVE_SESSION_HOURS`, and tied to it rather than picked:
+ * a planned end beyond the live window claims time the dashboard,
+ * `lib/devices/occupancy.ts` and the attention list have already stopped
+ * believing in, so the hold would outlast everything that reads it. It is also
+ * the AM/PM catch on this field - twelve hours is exactly the size of that slip,
+ * so "9:00 AM" typed for a 9:00 PM finish lands the far side of the ceiling.
+ */
+export const MAX_PLANNED_SESSION_HOURS = MAX_LIVE_SESSION_HOURS
+
+export interface PlannedSession {
+  start: BackdatedStart
+  /** The planned finish: a clock reading and how far ahead of now it is. */
+  end: { clock: string; minutesAhead: number }
+  /** Start to planned end, which is the window the station is held for. */
+  plannedMinutes: number
+}
+
+export type PlannedSessionResult =
+  | { ok: true; session: PlannedSession }
+  | { ok: false; error: string }
+
+/**
+ * When the customer says they are leaving.
+ *
+ * A walk-in has no chosen duration - that is the whole point of billing it on
+ * actual time - but the desk often knows roughly when it ends, because the
+ * customer just said so. Recorded, that turns the station's five-hour
+ * placeholder into the window somebody actually expects, which is what the floor
+ * plan and the slot row then show.
+ *
+ * It changes nothing about the money. The bill is still worked out at checkout
+ * from the two real timestamps, so a customer who stays past their planned end
+ * pays for the extra and one who leaves early does not pay for the rest. This
+ * reading is a statement of intent, not a contract - `PROVISIONAL_SESSION_HOURS`
+ * with a better number in it.
+ *
+ * Read forwards, where the start is read backwards: a reading at or before the
+ * start belongs to tomorrow, so a session running 11:50 PM to 12:30 AM needs no
+ * date on either field. That wrap is also what catches the AM/PM slip - "9:00
+ * AM" for a 9:00 PM finish comes out about twelve hours ahead, which the ceiling
+ * refuses - and what makes an end already in the past refuse itself, since it
+ * can only be read as tomorrow.
+ */
+export function resolvePlannedSession(
+  /** The session's start, or null when it begins now. */
+  startClock24: string | null,
+  endClock24: string,
+  now: Date = new Date()
+): PlannedSessionResult {
+  let start: BackdatedStart
+  if (startClock24) {
+    const resolved = resolveBackdatedStart(startClock24, now)
+    if (!resolved.ok) return resolved
+    start = resolved.start
+  } else {
+    // Check-in from the button: the session starts as it is pressed.
+    start = { clock: clockOf(arenaMinuteOfDay(now)), minutesAgo: 0 }
+  }
+
+  const entered = minuteOfDay(endClock24)
+  if (entered === null) {
+    return { ok: false, error: 'Enter the time the customer expects to finish.' }
+  }
+
+  const current = arenaMinuteOfDay(now)
+
+  // Ahead of now, and at least a minute of it: an end that has already passed is
+  // read as tomorrow, which the ceiling below then refuses.
+  const minutesAhead = entered > current ? entered - current : entered - current + 1440
+
+  const plannedMinutes = start.minutesAgo + minutesAhead
+
+  if (plannedMinutes > MAX_PLANNED_SESSION_HOURS * 60) {
+    return {
+      ok: false,
+      error:
+        `A session cannot be held for more than ${MAX_PLANNED_SESSION_HOURS} hours. ` +
+        `If they have already finished, check them out instead - and check the AM/PM.`,
+    }
+  }
+
   return {
     ok: true,
-    start: {
-      clock: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
-      minutesAgo,
+    session: {
+      start,
+      end: { clock: clockOf(entered), minutesAhead },
+      plannedMinutes,
     },
+  }
+}
+
+export interface SessionClaimWindow {
+  /** The arena calendar date the claim is filed under, as `slot_date`. */
+  slotDate: string
+  /** Minutes from midnight of `slotDate`. */
+  start: number
+  /** Minutes from midnight of `slotDate`, above 1440 when it runs past midnight. */
+  end: number
+}
+
+/**
+ * The window check-in is about to claim, for anything that wants to ask about it
+ * before it happens.
+ *
+ * The walk-in form warns the desk when the floor is full before it writes the
+ * booking, and that warning was asking a different question from the one the
+ * booking asks: always "is a station free for the next five hours", whatever the
+ * desk had actually entered. So a customer starting at seven and leaving at nine
+ * was refused on a station with a fixed booking at ten - the pre-flight saw an
+ * overlap the claim would never have made - and a backdated start was checked
+ * from now rather than from when the customer sat down, which is the overlap
+ * that genuinely matters.
+ *
+ * This is the same arithmetic `checkin_walkin_session` does in SQL, kept here so
+ * the two can be read against each other: the block runs from the start, for the
+ * planned window if one was named and `PROVISIONAL_SESSION_HOURS` if not, and it
+ * is dated by the day the session *starts* - which is not today's date for a
+ * session backdated across midnight.
+ *
+ * Unreadable clocks fall back to the plain "now, for the placeholder" window
+ * rather than refusing. This is the warning, not the guard: the form has already
+ * said what is wrong with the field, and the claim in SQL is what actually
+ * decides.
+ */
+export function sessionClaimWindow(
+  input: { startedClock?: string | null; plannedEndClock?: string | null },
+  now: Date = new Date()
+): SessionClaimWindow {
+  let minutesAgo = 0
+  let heldMinutes = PROVISIONAL_SESSION_HOURS * 60
+
+  /**
+   * The start stands on its own and the planned end refines it, rather than the
+   * two being alternatives.
+   *
+   * Written as a chain, a planned end that could not be read took the start down
+   * with it and this described a five-hour block from *now* - a different window
+   * from the one the claim would make, which is the exact failure this function
+   * exists to prevent. The form only ever sends a resolved pair, so it was not
+   * reachable from the screen; it was still the wrong shape.
+   */
+  if (input.startedClock) {
+    const started = resolveBackdatedStart(input.startedClock, now)
+    if (started.ok) minutesAgo = started.start.minutesAgo
+  }
+
+  if (input.plannedEndClock) {
+    const planned = resolvePlannedSession(input.startedClock ?? null, input.plannedEndClock, now)
+    if (planned.ok) {
+      minutesAgo = planned.session.start.minutesAgo
+      heldMinutes = planned.session.plannedMinutes
+    }
+  }
+
+  const startedAt = new Date(now.getTime() - minutesAgo * 60_000)
+  const start = arenaMinuteOfDay(startedAt)
+
+  return {
+    slotDate: arenaDate(startedAt),
+    start,
+    end: start + heldMinutes,
   }
 }
 
@@ -299,12 +502,42 @@ export function liveSessionEndMinutes(
     billedOnActualTime?: boolean | null
     status?: string | null
     checkedInAt?: string | null
+    /**
+     * The finish the customer named at check-in, as a timestamp, when they named
+     * one. Null is the ordinary session nobody has said anything about.
+     */
+    plannedEnd?: string | null
   },
-  slotDate: string
+  slotDate: string,
+  now: Date = new Date()
 ): number | null {
   if (!session.billedOnActualTime) return null
   if (session.status !== 'checked_in') return null
   if (!session.checkedInAt) return null
+
+  /**
+   * A stated finish that has not arrived yet is better information than the cap.
+   *
+   * The twelve hours below exist because a session with no stated end could be
+   * over in ten minutes or run all evening, and the row could not say which. When
+   * the customer has said, holding the station until the small hours blocks an
+   * evening of bookings on the strength of nothing - the arena saw exactly that:
+   * one walk-in, and the device type read fully booked for the rest of the day.
+   *
+   * Returning null leaves the row's own window standing, which for a session like
+   * this *is* the planned end. So the hours after it are sellable.
+   *
+   * Only while it is still ahead of us. At one minute past their stated finish,
+   * with no checkout, the customer is overrunning rather than gone - the cap
+   * comes back and the station is held again, which is the case
+   * `20260826130000` was written for.
+   */
+  if (session.plannedEnd) {
+    const plannedEnd = new Date(session.plannedEnd)
+    if (!Number.isNaN(plannedEnd.getTime()) && plannedEnd.getTime() > now.getTime()) {
+      return null
+    }
+  }
 
   const startedAt = new Date(session.checkedInAt)
   if (Number.isNaN(startedAt.getTime())) return null

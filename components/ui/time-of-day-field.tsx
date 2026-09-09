@@ -66,6 +66,18 @@ interface TimeOfDayFieldProps {
   required?: boolean
   /** Announced to screen readers, which cannot see the label beside the row. */
   label: string
+  /**
+   * Where a blank field starts from when the first select is touched, as 24-hour
+   * `HH:MM`.
+   *
+   * Choosing an hour has to produce a whole time - see `update` - so something
+   * has to answer for the other two selects before anybody has looked at them,
+   * and midnight is only the right answer for a rule being written from scratch.
+   * A field recording something that just happened wants to start near the time
+   * it happened, or the first click reads as 12-something AM and whatever is
+   * validating it complains about a value the user has not finished entering.
+   */
+  emptyBase?: string
   onChange?: (time24: string) => void
 }
 
@@ -78,6 +90,7 @@ export function TimeOfDayField({
   defaultValue,
   required,
   label,
+  emptyBase,
   onChange,
 }: TimeOfDayFieldProps) {
   const [parts, setParts] = useState<Parts | null>(() => toParts(defaultValue))
@@ -111,9 +124,11 @@ export function TimeOfDayField({
   }, [parts])
 
   const update = (change: Partial<Parts>) => {
-    // Nothing chosen yet: start from a whole hour in the morning rather than
-    // leaving the field half-filled and unsubmittable.
-    const base: Parts = parts ?? { hour: 12, minute: 0, meridiem: 'AM' }
+    // Nothing chosen yet: start from `emptyBase` if the caller named one, and
+    // otherwise from a whole hour in the morning - rather than leaving the field
+    // half-filled and unsubmittable.
+    const base: Parts =
+      parts ?? toParts(emptyBase) ?? { hour: 12, minute: 0, meridiem: 'AM' }
     setParts({ ...base, ...change })
   }
 

@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { liveSessionEndMinutes } from '@/lib/bookings/walkInSession'
+import { occupiedRangeFor, timeToMinutes } from '@/lib/bookings/slotAvailability'
 
 /**
  * Overlap-aware slot availability for flexible-duration bookings.
@@ -18,11 +18,12 @@ export interface MinuteRange {
   end: number
 }
 
-/** "HH:MM" or "HH:MM:SS" -> minutes since midnight. */
-export function timeToMinutes(time: string): number {
-  const [hours, minutes] = time.split(':').map(Number)
-  return hours * 60 + (minutes || 0)
-}
+/**
+ * Re-exported from `lib/bookings/slotAvailability`, where it sits beside the
+ * rest of the window arithmetic. Kept named here because half the codebase
+ * imports it from this module.
+ */
+export { timeToMinutes }
 
 /** Requested window, expressed as minutes from midnight of the booking date. */
 export function toRequestedRange(
@@ -65,6 +66,8 @@ interface BookedSlotRow {
     /** True for a walk-in session, whose slot end is a placeholder. */
     billed_on_actual_time: boolean | null
     checked_in_at: string | null
+    /** Set only when the customer named a finish; then the end is not a placeholder. */
+    walk_in_planned_end: string | null
   }
 }
 
@@ -93,7 +96,7 @@ async function fetchOccupiedRanges(
       slot_date,
       slot_start_time,
       slot_end_time,
-      bookings!inner(status, lock_expires_at, billed_on_actual_time, checked_in_at)
+      bookings!inner(status, lock_expires_at, billed_on_actual_time, checked_in_at, walk_in_planned_end)
     `
     )
     .in('device_id', deviceIds)
@@ -108,7 +111,7 @@ async function fetchOccupiedRanges(
 
   if (error) throw error
 
-  const now = Date.now()
+  const now = new Date()
 
   for (const row of (data || []) as unknown as BookedSlotRow[]) {
     const booking = row.bookings
@@ -118,58 +121,37 @@ async function fetchOccupiedRanges(
     // at the moment they tried to pay for it.
     if (excludeBookingId && row.booking_id === excludeBookingId) continue
 
-    // An expired lock no longer holds the slot.
-    if (
-      booking.status === 'locked' &&
-      booking.lock_expires_at &&
-      new Date(booking.lock_expires_at).getTime() <= now
-    ) {
-      continue
-    }
-
-    let start = timeToMinutes(row.slot_start_time)
-    let end = timeToMinutes(row.slot_end_time)
-
-    // Stored end times wrap at midnight; unwrap so the range stays contiguous.
-    if (end <= start) end += MINUTES_PER_DAY
-
-    // Rebase a neighbouring day's rows onto this date's timeline. YYYY-MM-DD
-    // compares chronologically as a string, so which side it falls on is just
-    // the comparison.
-    if (row.slot_date < slotDate) {
-      start -= MINUTES_PER_DAY
-      end -= MINUTES_PER_DAY
-      if (end <= 0) continue
-    } else if (row.slot_date > slotDate) {
-      start += MINUTES_PER_DAY
-      end += MINUTES_PER_DAY
-    }
-
     /**
-     * A walk-in that is still checked in holds its station until checkout, not
-     * until the placeholder window claimed at check-in runs out. Applied after
-     * the rebase above so both numbers are on the same timeline, and taken as
-     * the later of the two so this can only lengthen an occupancy.
+     * Expired holds, midnight, and how long a live walk-in keeps its station are
+     * all decided by `occupiedRangeFor`, which the customer's slot picker reads
+     * through as well.
      *
-     * `assign_device_slot` repeats this under its advisory lock and is the one
-     * that actually decides; keeping the two in step is what stops this check
-     * telling the desk a station is free that the claim will then refuse.
+     * The two queries stay separate - they ask about different things, one by
+     * device and one by type - but the arithmetic on a row must not, or the two
+     * screens answer the same question differently. `assign_device_slot` repeats
+     * it once more under its advisory lock and is the one that actually decides.
      */
-    const liveEnd = liveSessionEndMinutes(
+    const range = occupiedRangeFor(
       {
-        billedOnActualTime: booking.billed_on_actual_time,
+        slotDate: row.slot_date,
+        startTime: row.slot_start_time,
+        endTime: row.slot_end_time,
         status: booking.status,
+        lockExpiresAt: booking.lock_expires_at,
+        billedOnActualTime: booking.billed_on_actual_time,
         checkedInAt: booking.checked_in_at,
+        plannedEnd: booking.walk_in_planned_end,
       },
-      slotDate
+      slotDate,
+      now
     )
-    if (liveEnd !== null && liveEnd > end) end = liveEnd
+    if (!range) continue
 
     const existing = byDevice.get(row.device_id)
     if (existing) {
-      existing.push({ start, end })
+      existing.push(range)
     } else {
-      byDevice.set(row.device_id, [{ start, end }])
+      byDevice.set(row.device_id, [range])
     }
   }
 

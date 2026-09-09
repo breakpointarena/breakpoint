@@ -38,6 +38,10 @@ import {
   lookupWalkInCustomer,
   type WalkInDeviceAvailability
 } from "../actions";
+import {
+  CustomerSuggestions,
+  useCustomerSuggestions
+} from "@/components/admin/customers/CustomerSuggestions";
 import { TimeOfDayField } from "@/components/ui/time-of-day-field";
 import {
   formatDateForDB,
@@ -52,8 +56,10 @@ import {
   BOOKING_WINDOW_ERROR
 } from "@/lib/utils/dates";
 import {
+  PROVISIONAL_SESSION_HOURS,
   formatPlayedDuration,
-  resolveBackdatedStart
+  resolveBackdatedStart,
+  resolvePlannedSession
 } from "@/lib/bookings/walkInSession";
 import { allFilled, isPlausibleEmail } from "@/lib/utils/forms";
 import {
@@ -139,6 +145,25 @@ export default function WalkInBookingPage() {
   /** 24-hour `HH:MM`, as `TimeOfDayField` hands it over. */
   const [manualStart, setManualStart] = useState("");
 
+  /**
+   * When the customer says they are leaving, if they have said.
+   *
+   * Empty holds the station for `PROVISIONAL_SESSION_HOURS`, which is a
+   * placeholder nobody chose. A time here replaces it, so the slot row and the
+   * floor plan describe the window somebody actually expects.
+   *
+   * It settles no money. A walk-in is billed at checkout from the two real
+   * timestamps, so staying past this costs more and leaving before it costs
+   * less - it is an expectation, not a duration sold. A customer who wants to
+   * pay for a fixed window wants Advance Counter Booking, on the toggle above.
+   *
+   * Deliberately a field that may be left blank rather than a pair of options to
+   * choose between: leaving it alone is overwhelmingly the common case and needs
+   * no ceremony. Only shown once a start time has been entered, since that is
+   * the path that checks the customer in.
+   */
+  const [plannedEnd, setPlannedEnd] = useState("");
+
   // Player count
   const [playerCount, setPlayerCount] = useState(1);
 
@@ -151,6 +176,7 @@ export default function WalkInBookingPage() {
   const [showDetailErrors, setShowDetailErrors] = useState(false);
   const [showFullRegistrationFields, setShowFullRegistrationFields] = useState(false);
   const [checkingProfile, setCheckingProfile] = useState(false);
+
   const [activeSubscription, setActiveSubscription] = useState<any>(null);
 
   // Submission
@@ -245,6 +271,23 @@ export default function WalkInBookingPage() {
     [mode, startMode, manualStart, startClockTick]
   );
 
+  /**
+   * Both readings together, the way the server will read them.
+   *
+   * Checked as a pair rather than one field at a time, because the planned end
+   * is only meaningful against the start: "9:00 PM" is a perfectly ordinary time
+   * of day and a nonsense finish for a session that began at 10. Same function
+   * the action calls, on the same ticking clock as the start - which matters
+   * more here than anywhere, since a planned end quietly stops being in the
+   * future while the confirm step sits open.
+   */
+  const plannedSessionCheck = useMemo(
+    () => (mode === "session" && startMode === "manual" && plannedEnd
+      ? resolvePlannedSession(manualStart, plannedEnd, new Date(startClockTick))
+      : null),
+    [mode, startMode, manualStart, plannedEnd, startClockTick]
+  );
+
   useEffect(() => {
     loadDeviceTypes();
   }, []);
@@ -274,6 +317,10 @@ export default function WalkInBookingPage() {
    * minutes apart while staff take the customer's details, and the last station
    * can go in that time. Submitting re-checks again for the same reason - this
    * is the warning, not the guard.
+   *
+   * Re-read when the times change too, because they change the answer: a
+   * customer leaving at nine can have a station that is booked at ten, and until
+   * this asked about the window being claimed it was told the floor was full.
    */
   useEffect(() => {
     if (mode !== "session" || step !== 4 || !selectedDeviceType?.id) return;
@@ -281,7 +328,16 @@ export default function WalkInBookingPage() {
     let cancelled = false;
     setCheckingAvailability(true);
 
-    getWalkInDeviceAvailability(selectedDeviceType.id)
+    // A short wait before asking. The times are three selects, so changing one
+    // is really three changes in a second or so, and each of them costs the
+    // floor three round trips.
+    const timer = setTimeout(() => {
+    getWalkInDeviceAvailability(selectedDeviceType.id, {
+      startedClock: startMode === "manual" && manualStartCheck?.ok
+        ? manualStartCheck.start.clock
+        : null,
+      plannedEndClock: plannedSessionCheck?.ok ? plannedSessionCheck.session.end.clock : null
+    })
       .then((result) => {
         if (!cancelled) setDeviceAvailability(result.availability);
       })
@@ -291,11 +347,24 @@ export default function WalkInBookingPage() {
       .finally(() => {
         if (!cancelled) setCheckingAvailability(false);
       });
+    }, 300);
 
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [mode, step, selectedDeviceType?.id]);
+    // Keyed on the resolved clocks rather than the check objects, which are new
+    // on every tick of the minute clock and would re-read the floor twice a
+    // minute for as long as the step is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mode,
+    step,
+    selectedDeviceType?.id,
+    startMode,
+    manualStartCheck?.ok ? manualStartCheck.start.clock : null,
+    plannedSessionCheck?.ok ? plannedSessionCheck.session.end.clock : null
+  ]);
 
   const loadDeviceTypes = async () => {
     setLoadingDevices(true);
@@ -335,18 +404,18 @@ export default function WalkInBookingPage() {
     setStep(mode === "session" ? 3 : 2);
   };
 
-  const handleCustomerPhoneLookup = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    // Validate phone number: exactly 10 digits
-    const phoneDigits = customerPhone.trim();
-    if (!phoneDigits || !/^\d{10}$/.test(phoneDigits)) {
-      toast.error("Invalid Entry", { description: "Please enter a valid 10-digit mobile number." });
-      return;
-    }
-
+  /**
+   * Load a customer's profile onto the form and move on.
+   *
+   * The one path, whether the number was typed in full and verified or picked
+   * off the suggestions - so a suggestion cannot quietly load less than Verify
+   * does. The membership in particular is resolved here rather than carried on
+   * the suggestion: a discount is worth a round trip of its own, and a list of
+   * half-typed matches has no business carrying one.
+   */
+  const loadCustomerProfile = async (digits: string) => {
     setCheckingProfile(true);
-    const result = await lookupWalkInCustomer(customerPhone.trim());
+    const result = await lookupWalkInCustomer(digits);
 
     if (result.exists && result.customer) {
       setCustomerName(result.customer.name);
@@ -372,6 +441,37 @@ export default function WalkInBookingPage() {
       setShowFullRegistrationFields(true);
     }
     setCheckingProfile(false);
+  };
+
+  /**
+   * The matches offered while the number is typed.
+   *
+   * Picking one takes *its* number rather than the typed one - the entire point:
+   * the digits in the field are what somebody heard, the digits on the row are
+   * what is in the phone book, and a customer picked by name should not be looked
+   * up by the character that made the desk look twice. From there it is the same
+   * path Verify takes, so a suggestion cannot load less than Verify does.
+   */
+  const phoneSuggestions = useCustomerSuggestions({
+    phone: customerPhone,
+    enabled: step === 3 && !showFullRegistrationFields,
+    onPick: (suggestion) => {
+      setCustomerPhone(suggestion.phone);
+      loadCustomerProfile(suggestion.phone);
+    }
+  });
+
+  const handleCustomerPhoneLookup = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    // Validate phone number: exactly 10 digits
+    const digits = customerPhone.trim();
+    if (!digits || !/^\d{10}$/.test(digits)) {
+      toast.error("Invalid Entry", { description: "Please enter a valid 10-digit mobile number." });
+      return;
+    }
+
+    await loadCustomerProfile(digits);
   };
 
   const handleManualRegistrationSubmit = (e: React.FormEvent) => {
@@ -418,8 +518,20 @@ export default function WalkInBookingPage() {
       return;
     }
 
+    // Only when one was entered: a blank planned end is the ordinary open-ended
+    // session, not a mistake. It is also only ever wrong relative to the start,
+    // so this fires second and names the field the desk can actually fix.
+    if (startMode === "manual" && plannedEnd && !plannedSessionCheck?.ok) {
+      toast.error("Check the planned end", { description: plannedSessionCheck?.error });
+      return;
+    }
+
     const startedClock =
       startMode === "manual" && manualStartCheck?.ok ? manualStartCheck.start.clock : null;
+    const plannedEndClock =
+      startMode === "manual" && plannedSessionCheck?.ok
+        ? plannedSessionCheck.session.end.clock
+        : null;
 
     setSubmitting(true);
 
@@ -435,7 +547,10 @@ export default function WalkInBookingPage() {
      * losing this warning is a nuisance, refusing to book is a broken counter.
      */
     if (!options?.ignoreBusyFloor) {
-      const check = await getWalkInDeviceAvailability(selectedDeviceType.id);
+      const check = await getWalkInDeviceAvailability(selectedDeviceType.id, {
+        startedClock,
+        plannedEndClock
+      });
       setDeviceAvailability(check.availability);
 
       if (check.availability && check.availability.free === 0) {
@@ -453,7 +568,8 @@ export default function WalkInBookingPage() {
       deviceTypeId: selectedDeviceType.id,
       deviceTypeName: selectedDeviceType.display_name,
       playerCount,
-      startedClock
+      startedClock,
+      plannedEndClock
     });
 
     if (result.success) {
@@ -471,7 +587,10 @@ export default function WalkInBookingPage() {
         message:
           `${customerName.trim()} • #${result.bookingNumber} • ${selectedDeviceType.display_name} • ` +
           (result.checkedIn && result.checkedInAt
-            ? `playing since ${formatClockTime12h(result.checkedInAt)}`
+            ? `playing since ${formatClockTime12h(result.checkedInAt)}` +
+              (plannedEndClock && result.heldUntil
+                ? ` · until ${formatClockTime12h(result.heldUntil)}`
+                : "")
             : "awaiting check-in"),
         bookingId: result.bookingId || "",
         bookingNumber: result.bookingNumber || ""
@@ -836,15 +955,33 @@ export default function WalkInBookingPage() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {deviceTypes.map((deviceType) => {
-                  const isAvailable = (deviceType.available_devices_count || 0) > 0;
+                  const bookingNow = mode === "session";
+                  /**
+                   * How many of these the customer can actually have, which is a
+                   * different question in each mode.
+                   *
+                   * Seating somebody now needs a station free now. An Advance
+                   * Counter Booking is for a window later on, where a station in
+                   * use this minute is as available as any other - so counting
+                   * the busy one out showed "0 AVAILABLE" in red for a device
+                   * type the floor has all evening to honour, and the desk read
+                   * it as "this cannot be booked". Which station is free at the
+                   * hour they choose is the slot picker's question on the next
+                   * step.
+                   */
+                  const availableCount = bookingNow
+                    ? deviceType.available_devices_count || 0
+                    : deviceType.total_devices_count ?? deviceType.available_devices_count ?? 0;
+                  const isAvailable = availableCount > 0;
+                  const canPick = isAvailable || !bookingNow;
                   return (
                     <Card
                       key={deviceType.id}
-                      className={`bg-[var(--surface)] border p-4 cursor-pointer transition-all ${isAvailable
+                      className={`bg-[var(--surface)] border p-4 cursor-pointer transition-all ${canPick
                         ? "border-zinc-900 hover:border-primary"
                         : "border-zinc-900 opacity-50 cursor-not-allowed"
                         }`}
-                      onClick={() => isAvailable && handleSelectDeviceType(deviceType)}
+                      onClick={() => canPick && handleSelectDeviceType(deviceType)}
                     >
                       <div className="space-y-3">
                         <div className="flex justify-between items-start">
@@ -857,7 +994,7 @@ export default function WalkInBookingPage() {
                           </div>
                           <span className={`text-xs font-black px-2 py-1 rounded ${isAvailable ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
                             }`}>
-                            {deviceType.available_devices_count} AVAILABLE
+                            {availableCount} AVAILABLE
                           </span>
                         </div>
                         <div className="flex justify-between items-center">
@@ -1023,9 +1160,13 @@ export default function WalkInBookingPage() {
                         placeholder="Enter 10-digit number"
                         value={customerPhone}
                         onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, ""))}
+                        {...phoneSuggestions.inputProps}
                         className="bg-[var(--background)] border-zinc-900 h-12 pl-12 text-sm text-white font-mono tracking-wider focus-visible:ring-primary rounded-xl"
                       />
+
                     </div>
+
+                    <CustomerSuggestions state={phoneSuggestions} typedPhone={customerPhone} />
                   </div>
 
                   <Button type="submit" disabled={checkingProfile || !phoneComplete} className="w-full bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] font-black uppercase text-xs h-12 rounded-xl flex items-center justify-center gap-1.5 shadow-xl disabled:opacity-50 disabled:pointer-events-none">
@@ -1226,6 +1367,13 @@ export default function WalkInBookingPage() {
                             if (option.value === "manual" && !manualStart) {
                               setManualStart(arenaNowOnStep());
                             }
+                            // With the clock starting at check-in there is no
+                            // start for an end time to belong to, so the field
+                            // below goes away - and a time typed into it must
+                            // not survive out of sight and get posted anyway.
+                            if (option.value === "now") {
+                              setPlannedEnd("");
+                            }
                           }}
                           className={`text-left p-3 rounded-xl border-2 transition-all ${isSelected
                             ? "border-primary bg-primary/5"
@@ -1271,6 +1419,66 @@ export default function WalkInBookingPage() {
                 </div>
               )}
 
+              {/* When the customer says they are leaving. Optional, and it buys
+                  the floor an honest window instead of the five-hour placeholder
+                  - it decides nothing about the money. Only shown once a start
+                  time has been typed in, because that is the path that checks the
+                  customer in; a planned end on a booking still waiting for check-
+                  in would be a promise about a session that has not begun. */}
+              {mode === "session" && startMode === "manual" && (
+                <div className="space-y-3 rounded-xl border border-zinc-900 bg-[var(--background)]/40 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="block text-xs font-black uppercase tracking-wider text-muted-content">
+                      Planned End{" "}
+                      <span className="text-muted-content/60">(optional)</span>
+                    </Label>
+                    {/* The selects cannot be put back to "--" on their own - the
+                        placeholder is disabled once a value is set - so without
+                        this a time entered by mistake could not be taken off
+                        again without leaving the step. */}
+                    {plannedEnd && (
+                      <button
+                        type="button"
+                        onClick={() => setPlannedEnd("")}
+                        className="text-[11px] font-black uppercase tracking-wide text-zinc-500 transition-colors hover:text-white"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
+                  <TimeOfDayField
+                    name="walkInPlannedEnd"
+                    label="Planned end"
+                    defaultValue={plannedEnd}
+                    // Half-entered, this field reads as a real time to everything
+                    // downstream, so the first click has to land somewhere
+                    // sensible: the same half of the day the session started in,
+                    // rather than 12-something AM.
+                    emptyBase={manualStart || undefined}
+                    onChange={setPlannedEnd}
+                  />
+
+                  {!plannedEnd ? (
+                    <p className="text-[11px] leading-relaxed text-muted-content">
+                      When the customer says they are leaving, if they have said. The station is
+                      held that long instead of the {PROVISIONAL_SESSION_HOURS}-hour default. It
+                      does not fix the price — the bill is still worked out at checkout.
+                    </p>
+                  ) : plannedSessionCheck?.ok ? (
+                    <p className="text-[11px] font-bold text-emerald-400">
+                      Held until {formatDbTime(plannedSessionCheck.session.end.clock)} ·{" "}
+                      {formatPlayedDuration(plannedSessionCheck.session.plannedMinutes)} from{" "}
+                      {formatDbTime(plannedSessionCheck.session.start.clock)}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] font-bold text-amber-500">
+                      {plannedSessionCheck?.error}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* What creating this booking does, and just as importantly what it
                   does not do. Staff have to know the customer is not on a machine
                   yet and that no station is being held for them. */}
@@ -1309,7 +1517,26 @@ export default function WalkInBookingPage() {
                       not now.
                     </li>
                     <li>A station is claimed as this booking is created, so one has to be free.</li>
-                    <li>The bill is calculated at checkout from that time to when they leave.</li>
+                    {plannedSessionCheck?.ok ? (
+                      <li>
+                        It is held until{" "}
+                        <span className="font-bold">
+                          {formatDbTime(plannedSessionCheck.session.end.clock)}
+                        </span>{" "}
+                        — {formatPlayedDuration(plannedSessionCheck.session.plannedMinutes)} — which
+                        is the window the slot and the floor plan will show.
+                      </li>
+                    ) : (
+                      <li>
+                        With no planned end the station is held for{" "}
+                        {PROVISIONAL_SESSION_HOURS} hours, which is a placeholder rather than
+                        anything the customer said.
+                      </li>
+                    )}
+                    <li>
+                      The bill is calculated at checkout from that time to when they actually
+                      leave{plannedSessionCheck?.ok ? ", early or late" : ""}.
+                    </li>
                   </ul>
                 </div>
               )}
@@ -1463,12 +1690,16 @@ export default function WalkInBookingPage() {
                 </Button>
                 <Button
                   onClick={handleSubmit}
-                  // A start time that cannot be read has no sensible fallback -
-                  // billing from now would quietly charge the customer less than
-                  // they played - so the button waits rather than guessing.
+                  // A time that cannot be read has no sensible fallback - billing
+                  // from now, or to now, would quietly charge the customer for a
+                  // window nobody chose - so the button waits rather than guess.
                   disabled={
                     submitting ||
-                    (mode === "session" && startMode === "manual" && !manualStartCheck?.ok)
+                    (mode === "session" && startMode === "manual" && !manualStartCheck?.ok) ||
+                    (mode === "session" &&
+                      startMode === "manual" &&
+                      Boolean(plannedEnd) &&
+                      !plannedSessionCheck?.ok)
                   }
                   className="flex-1 bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] font-black uppercase h-12 rounded-xl text-xs shadow-xl transition-all active:scale-[0.99]"
                 >
@@ -1513,7 +1744,7 @@ export default function WalkInBookingPage() {
                     <>
                       A start time was entered, but the session can only begin on a station -
                       so {customerName.trim() || "the customer"} will be booked in waiting and
-                      the time typed in will not be used.
+                      the {plannedEnd ? "times" : "time"} typed in will not be used.
                     </>
                   ) : (
                     <>

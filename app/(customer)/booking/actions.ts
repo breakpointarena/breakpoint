@@ -65,11 +65,28 @@ export async function getDeviceTypesWithAvailability() {
           .eq("device_type_id", type.id)
           .eq("status", "available");
 
+        /**
+         * Free *right now*, which is all this number ever meant - a description
+         * of the floor, not a gate on the page. What can be booked for a given
+         * hour on a given date is the slot picker's question, and a walk-in
+         * running this evening says nothing about tomorrow, so the card opens
+         * whatever this comes to.
+         */
         const freeDevices = (devices || []).filter((device: any) => !occupied.has(device.id));
 
         return {
           ...type,
           available_devices_count: devError ? 0 : freeDevices.length,
+          /**
+           * Stations of this type in service, busy or not.
+           *
+           * The count above answers "can somebody sit down now", which is the
+           * wrong question on any screen that is choosing a window later on -
+           * there it reads as a refusal ("0 AVAILABLE") for a booking the floor
+           * has all evening to honour. Those screens show this instead and let
+           * the slot picker say which hours are free.
+           */
+          total_devices_count: devError ? 0 : (devices || []).length,
           image_url: (devices && devices.length > 0) ? devices[0].image_url : null
         };
       })

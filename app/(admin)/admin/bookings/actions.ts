@@ -19,15 +19,24 @@ import {
 } from "@/lib/subscriptions/discount";
 import {
   MAX_BACKDATED_START_HOURS,
+  MAX_PLANNED_SESSION_HOURS,
   PROVISIONAL_SESSION_HOURS,
   formatPlayedDuration,
   priceSession,
   resolveBackdatedStart,
+  resolvePlannedSession,
+  sessionClaimWindow,
   toClockTime,
   toSlotDate
 } from "@/lib/bookings/walkInSession";
 import { arenaDate, arenaToday } from "@/lib/utils/dates";
 import { needsAttention } from "@/lib/bookings/attention";
+import {
+  CUSTOMER_SUGGESTION_LIMIT,
+  CUSTOMER_SUGGESTION_MIN_DIGITS,
+  phoneDigits,
+  type CustomerSuggestion
+} from "@/lib/customers/suggestions";
 import { requireStaff } from "@/lib/auth/require-admin";
 import {
   countAvailableDevicesForRange,
@@ -178,6 +187,7 @@ const BOOKING_LIST_SELECT = `
         completed_at,
         lock_expires_at,
         billed_on_actual_time,
+        walk_in_planned_end,
         walk_in_device_type_name,
         walk_in_player_count,
         booking_device_slots(
@@ -1511,6 +1521,52 @@ export async function lookupWalkInCustomer(phone: string) {
   }
 }
 
+/**
+ * Customers whose number starts with what has been typed so far.
+ *
+ * The counterpart to `lookupWalkInCustomer`, which needs all ten digits and an
+ * exact hit. This is what stops a returning customer being registered twice
+ * because one digit was misheard: the desk sees the name against the number
+ * before it commits to it, and picks the row rather than retyping it.
+ *
+ * Staff-gated like the exact lookup, and for the same reason - there is no OTP
+ * for somebody standing at the counter. It returns a name and a number and
+ * nothing else: enough to tell two matches apart, and no reason for a half-typed
+ * prefix to hand back dates of birth and email addresses.
+ */
+export async function searchWalkInCustomers(phone: string) {
+  await requireStaff();
+
+  try {
+    const digits = phoneDigits(phone);
+
+    // Below the floor this answers "nothing", not "everybody". A prefix that
+    // short matches an arbitrary handful of a phone book thousands long, and a
+    // list like that is worse than none because staff would read it.
+    if (digits.length < CUSTOMER_SUGGESTION_MIN_DIGITS) {
+      return { success: true, customers: [] as CustomerSuggestion[] };
+    }
+
+    // A prefix, because the number is being typed left to right. `digits` is
+    // stripped to digits, so there is no wildcard left in it to escape.
+    const { data, error } = await supabaseAdmin
+      .from("customers")
+      .select("id, name, phone")
+      .like("phone", `${digits}%`)
+      .order("phone", { ascending: true })
+      .limit(CUSTOMER_SUGGESTION_LIMIT);
+
+    if (error) throw error;
+
+    return { success: true, customers: (data || []) as CustomerSuggestion[] };
+  } catch (err: any) {
+    console.error("Walk-in customer suggestion error:", err);
+    // A failed suggestion is not a failed booking. The desk types the number and
+    // presses Verify exactly as it did before this existed.
+    return { success: false, error: err.message, customers: [] as CustomerSuggestion[] };
+  }
+}
+
 export interface WalkInDeviceAvailability {
   /** Stations of this type on the floor and not in maintenance. */
   total: number;
@@ -1540,7 +1596,17 @@ export interface WalkInDeviceAvailability {
  * same provisional block check-in would ask for, which means a station booked in
  * advance for later this evening is correctly counted as not free.
  */
-export async function getWalkInDeviceAvailability(deviceTypeId: string): Promise<{
+export async function getWalkInDeviceAvailability(
+  deviceTypeId: string,
+  /**
+   * The times the desk has entered, so this asks about the window the booking
+   * will actually claim rather than about a five-hour block from now.
+   *
+   * Omitted - a device type picked before anybody has typed a time - falls back
+   * to exactly that block, which is what check-in claims when nothing is said.
+   */
+  window?: { startedClock?: string | null; plannedEndClock?: string | null }
+): Promise<{
   success: boolean;
   error?: string;
   availability: WalkInDeviceAvailability | null;
@@ -1552,13 +1618,15 @@ export async function getWalkInDeviceAvailability(deviceTypeId: string): Promise
       return { success: false, error: "No device type given.", availability: null };
     }
 
-    const now = new Date();
-    const slotDate = toSlotDate(now);
-    const startMinutes = timeToMinutes(toClockTime(now));
+    // The same arithmetic `checkin_walkin_session` does, so a station this calls
+    // busy is a station the claim would have refused. A planned end shortens the
+    // block; a backdated start moves it earlier, and past midnight it moves the
+    // date with it.
+    const claim = sessionClaimWindow(window ?? {});
 
-    const free = await countAvailableDevicesForRange(deviceTypeId, slotDate, {
-      start: startMinutes,
-      end: startMinutes + PROVISIONAL_SESSION_HOURS * 60
+    const free = await countAvailableDevicesForRange(deviceTypeId, claim.slotDate, {
+      start: claim.start,
+      end: claim.end
     });
 
     const { data: devices, error: devicesError } = await supabaseAdmin
@@ -1627,12 +1695,37 @@ export async function createWalkInSession(payload: {
    * booking waiting for check-in, with no time and no station, as before.
    */
   startedClock?: string | null;
+  /**
+   * 24-hour `HH:MM` the customer expects to finish, when they have said. The
+   * station is held for that window instead of the five-hour placeholder, and
+   * the session keeps running: nothing here is billed, because the bill is still
+   * worked out at checkout from the time actually played.
+   *
+   * Only meaningful alongside `startedClock`, which is the only path on this
+   * form that checks the customer in.
+   */
+  plannedEndClock?: string | null;
 }) {
   await requireStaff();
 
   // Read before anything is written. A time the desk has to go back and correct
   // should not leave an empty booking behind for somebody to cancel.
-  if (payload.startedClock) {
+  if (payload.plannedEndClock) {
+    /**
+     * A planned end with no start would be a promise about a session that has
+     * not begun. The booking would sit waiting for check-in, and by the time
+     * somebody pressed the button the time typed here could be hours past.
+     */
+    if (!payload.startedClock) {
+      return {
+        success: false,
+        error: "A planned end needs a start time, so the session begins as it is saved."
+      };
+    }
+
+    const planned = resolvePlannedSession(payload.startedClock, payload.plannedEndClock);
+    if (!planned.ok) return { success: false, error: planned.error };
+  } else if (payload.startedClock) {
     const resolved = resolveBackdatedStart(payload.startedClock);
     if (!resolved.ok) return { success: false, error: resolved.error };
   }
@@ -1700,13 +1793,19 @@ export async function createWalkInSession(payload: {
     let checkInError: string | null = null;
     let stationNumber: string | null = null;
     let checkedInAt: string | null = null;
+    let heldUntil: string | null = null;
 
     if (payload.startedClock) {
-      const checkIn = await checkInWalkInSession(booking.id, payload.startedClock);
+      const checkIn = await checkInWalkInSession(
+        booking.id,
+        payload.startedClock,
+        payload.plannedEndClock
+      );
       if (checkIn.success) {
         checkedIn = true;
         stationNumber = checkIn.stationNumber ?? null;
         checkedInAt = checkIn.checkedInAt ?? null;
+        heldUntil = checkIn.heldUntil ?? null;
       } else {
         checkInError = checkIn.error ?? null;
       }
@@ -1719,7 +1818,8 @@ export async function createWalkInSession(payload: {
       checkedIn,
       checkedInAt,
       stationNumber,
-      checkInError
+      checkInError,
+      heldUntil
     };
   } catch (err: any) {
     console.error("Create walk-in session error:", err);
@@ -1746,12 +1846,29 @@ export async function createWalkInSession(payload: {
 export async function checkInWalkInSession(
   bookingId: string,
   /** 24-hour `HH:MM` play actually started at. Omitted or null means now. */
-  startedClock?: string | null
+  startedClock?: string | null,
+  /**
+   * 24-hour `HH:MM` the customer expects to finish. Omitted or null holds the
+   * station for `PROVISIONAL_SESSION_HOURS`, which is what every existing caller
+   * wants. It decides how long the station is claimed for and nothing else - the
+   * bill still comes from checkout.
+   */
+  plannedEndClock?: string | null
 ) {
   await requireStaff();
 
   let startedFrom: string | null = null;
-  if (startedClock) {
+  let plannedEnd: string | null = null;
+
+  if (plannedEndClock) {
+    // Both readings at once, because the planned end is only meaningful against
+    // the start: "9:00 PM" is a fine time of day and a nonsense finish for a
+    // session that began at 10.
+    const planned = resolvePlannedSession(startedClock ?? null, plannedEndClock);
+    if (!planned.ok) return { success: false, error: planned.error };
+    if (startedClock) startedFrom = planned.session.start.clock;
+    plannedEnd = planned.session.end.clock;
+  } else if (startedClock) {
     const resolved = resolveBackdatedStart(startedClock);
     if (!resolved.ok) return { success: false, error: resolved.error };
     startedFrom = resolved.start.clock;
@@ -1801,7 +1918,9 @@ export async function checkInWalkInSession(
       p_extra_player_charge: Number(deviceType.extra_player_charge || 0),
       p_provisional_hours: PROVISIONAL_SESSION_HOURS,
       p_started_clock: startedFrom,
-      p_max_backdate_hours: MAX_BACKDATED_START_HOURS
+      p_max_backdate_hours: MAX_BACKDATED_START_HOURS,
+      p_planned_end: plannedEnd,
+      p_max_session_hours: MAX_PLANNED_SESSION_HOURS
     });
 
     if (error) throw error;
@@ -1810,6 +1929,7 @@ export async function checkInWalkInSession(
       started_at: string;
       device_id: string;
       station_number: string;
+      held_until: string;
     }>) || [];
 
     if (started.length === 0) {
@@ -1824,10 +1944,74 @@ export async function checkInWalkInSession(
     return {
       success: true,
       checkedInAt: started[0].started_at,
-      stationNumber: started[0].station_number
+      stationNumber: started[0].station_number,
+      heldUntil: started[0].held_until
     };
   } catch (err: any) {
     console.error("Check-in walk-in session error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Change when a live walk-in is expected to finish, or take the plan off.
+ *
+ * Customers change their minds - they order food, they win a frame, they stay
+ * another hour - and until this existed the only way to alter the hold was to
+ * check them out. It matters because of what the planned end now does: the
+ * station goes back on sale the moment the stated finish passes, so a customer
+ * who said "nine" and meant "ten" would spend an hour looking free while sitting
+ * at it.
+ *
+ * The check that makes this safe is in SQL, not here. Between the plan being set
+ * and being extended, the hours it freed may already have been sold, so
+ * `set_walkin_planned_end` re-tests the new window against the station under the
+ * same advisory lock `assign_device_slot` takes. What is checked up here is only
+ * the shape of the reading, so the desk gets a sentence rather than a Postgres
+ * exception.
+ */
+export async function setWalkInPlannedEnd(
+  bookingId: string,
+  /** 24-hour `HH:MM` the customer now expects to finish, or null to remove it. */
+  plannedEndClock: string | null
+) {
+  await requireStaff();
+
+  if (plannedEndClock) {
+    // Read against now rather than against the session's start, which this has
+    // not loaded: a changed finish can only ever point forwards, so "now" is the
+    // right floor for it. SQL applies the stricter test - within
+    // MAX_PLANNED_SESSION_HOURS of the *start* - once it has the row.
+    const planned = resolvePlannedSession(null, plannedEndClock);
+    if (!planned.ok) return { success: false, error: planned.error };
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin.rpc("set_walkin_planned_end", {
+      p_booking_id: bookingId,
+      p_planned_end: plannedEndClock,
+      p_max_session_hours: MAX_PLANNED_SESSION_HOURS,
+      p_provisional_hours: PROVISIONAL_SESSION_HOURS
+    });
+
+    if (error) throw error;
+
+    const changed = (data as Array<{ held_until: string; station_number: string }>) || [];
+
+    if (changed.length === 0) {
+      return {
+        success: false,
+        error: "That booking is not a session in progress, so it has nothing to hold."
+      };
+    }
+
+    return {
+      success: true,
+      heldUntil: changed[0].held_until,
+      stationNumber: changed[0].station_number
+    };
+  } catch (err: any) {
+    console.error("Set walk-in planned end error:", err);
     return { success: false, error: err.message };
   }
 }
@@ -1841,6 +2025,11 @@ export async function checkInWalkInSession(
  * the placeholder window claimed at check-in to the window actually played, and
  * the price is computed with the same helpers the customer flow uses, so an hour
  * costs the same whoever booked it.
+ *
+ * A planned end on the booking changes nothing here. It was a statement of when
+ * the customer expected to leave, written onto the slot row so the floor knew
+ * what to expect; what they are billed for is the time between these two
+ * timestamps, whether they left early or sat on past it.
  */
 export async function checkOutWalkInSession(bookingId: string) {
   await requireStaff();

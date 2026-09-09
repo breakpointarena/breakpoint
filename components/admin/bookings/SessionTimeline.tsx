@@ -19,6 +19,15 @@ export interface SessionTimes {
   createdAt: string | null;
   checkedInAt: string | null;
   completedAt: string | null;
+  /**
+   * When the customer said they would finish, if they said - not when they did.
+   *
+   * Labelled "Till" everywhere rather than "Out", because it has not happened:
+   * "Out" is a timestamp the database wrote at checkout and half the screens
+   * price against it, and a time somebody promised at the counter must never be
+   * read as one of those.
+   */
+  plannedEndAt?: string | null;
 }
 
 const timeOnly = (value: string) => formatClockTime12h(value);
@@ -76,6 +85,7 @@ export function SessionTimesCell({
     status?: string | null;
     checked_in_at?: string | null;
     completed_at?: string | null;
+    walk_in_planned_end?: string | null;
   };
 }) {
   const times = sessionTimes(booking);
@@ -88,8 +98,12 @@ export function SessionTimesCell({
   return (
     <span className="flex flex-col gap-0.5">
       <span className="text-green-400 font-semibold">In: {times.checkedInAt}</span>
-      {times.completedAt && (
+      {times.completedAt ? (
         <span className="text-blue-400 font-semibold">Out: {times.completedAt}</span>
+      ) : (
+        times.plannedEndAt && (
+          <span className="text-blue-300/70 font-semibold">Till: {times.plannedEndAt}</span>
+        )
       )}
     </span>
   );
@@ -107,7 +121,8 @@ export function SessionSummaryLine({
   status,
   createdAt,
   checkedInAt,
-  completedAt
+  completedAt,
+  plannedEndAt
 }: SessionTimes & { status: string }) {
   if (status === "confirmed") {
     return (
@@ -128,6 +143,11 @@ export function SessionSummaryLine({
           Playing <SessionTimer checkedInAt={checkedInAt} />
         </span>
         <span className="text-green-400 font-semibold">In: {timeOnly(checkedInAt)}</span>
+        {/* Only when the customer named one. "Till" and the paler blue keep it
+            apart from the "Out:" below, which is a checkout that happened. */}
+        {plannedEndAt && (
+          <span className="text-blue-300/70 font-semibold">Till: {timeOnly(plannedEndAt)}</span>
+        )}
       </span>
     );
   }
@@ -183,6 +203,7 @@ export function BookingTimingCell({
     created_at?: string | null;
     checked_in_at?: string | null;
     completed_at?: string | null;
+    walk_in_planned_end?: string | null;
   };
   slot?: { slot_start_time?: string | null; slot_end_time?: string | null } | null;
 }) {
@@ -193,6 +214,7 @@ export function BookingTimingCell({
         createdAt={booking.created_at || null}
         checkedInAt={booking.checked_in_at || null}
         completedAt={booking.completed_at || null}
+        plannedEndAt={booking.walk_in_planned_end || null}
       />
     );
   }
@@ -222,6 +244,7 @@ export function SessionTimeline({
   createdAt,
   checkedInAt,
   completedAt,
+  plannedEndAt,
   totalAmount
 }: SessionTimes & { status: string; totalAmount?: number | null }) {
   const steps: Array<{
@@ -268,6 +291,19 @@ export function SessionTimeline({
       note: "Bill is calculated at checkout",
       tone: "text-green-400"
     });
+
+    // What the customer said at the counter, which is why it is a step of its
+    // own and not folded into the line above: the station is held to it, and
+    // nothing about the bill is.
+    if (plannedEndAt) {
+      steps.push({
+        icon: <Clock className="h-3.5 w-3.5" />,
+        label: "Expected to finish",
+        value: timeOnly(plannedEndAt),
+        note: "Station held until then; billing still runs to checkout",
+        tone: "text-blue-300"
+      });
+    }
   }
 
   if (completedAt) {

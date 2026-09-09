@@ -238,6 +238,10 @@ export default function DevicePage({ initialDevices }: DevicePageProps = {}) {
                 }, {})
               ).map((sameTypeDevices: any[], index) => {
                 const totalCount = sameTypeDevices.length;
+                // Free right now, which is what the pill on the card reports.
+                // It is not a gate: the button below opens the slot picker
+                // whatever the floor is doing this minute, because the customer
+                // may well be booking tomorrow.
                 const availableCount = sameTypeDevices.filter(d => d.effective_status === 'available').length;
                 // Prefer a free unit's photo/specs for the card; falls back to
                 // whichever unit is first when every station of this type is busy.

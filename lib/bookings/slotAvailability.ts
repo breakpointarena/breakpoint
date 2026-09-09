@@ -13,6 +13,8 @@
  * only decides what to offer.
  */
 
+import { liveSessionEndMinutes } from '@/lib/bookings/walkInSession'
+
 export const SLOT_INTERVAL_MINUTES = 30
 export const MINUTES_PER_DAY = 24 * 60
 
@@ -38,6 +40,100 @@ export interface DeviceTypeOccupancy {
   /** Stations of this type in service, whether or not they are busy. */
   totalDevices: number
   occupied: OccupiedRange[]
+}
+
+/**
+ * One booked row, in the shape both occupancy builders can hand over.
+ *
+ * `lib/payments/availability.ts` (what the desk's checks read) and
+ * `lib/bookings/deviceTypeOccupancy.ts` (what the customer's slot picker reads)
+ * are separate queries against the same table, and they used to do this
+ * arithmetic separately too - which is how the picker ended up without the
+ * live-session rule for months, offering stations `assign_device_slot` would
+ * then refuse. The queries stay apart; the rule does not.
+ */
+export interface BookedRow {
+  /** The row's own date, `YYYY-MM-DD`. */
+  slotDate: string
+  /** `HH:MM` or `HH:MM:SS`. */
+  startTime: string
+  endTime: string
+  status: string
+  lockExpiresAt: string | null
+  /** True for a walk-in session, whose slot end may be a placeholder. */
+  billedOnActualTime: boolean | null
+  checkedInAt: string | null
+  /** Set only when the customer named a finish, which makes it not a placeholder. */
+  plannedEnd: string | null
+}
+
+/** "HH:MM" or "HH:MM:SS" -> minutes since midnight. */
+export function timeToMinutes(time: string): number {
+  const [hours, minutes] = time.split(':').map(Number)
+  return hours * 60 + (minutes || 0)
+}
+
+/**
+ * What one row occupies on `slotDate`'s timeline, or null if it occupies nothing
+ * there.
+ *
+ * The three rules that make a window, in one place:
+ *
+ *  - **Midnight.** An end at or before its start has wrapped, so it belongs to
+ *    the next day; a neighbouring date's row is rebased onto this one's timeline,
+ *    which is what lets every caller compare with a plain `<`.
+ *  - **Expired holds.** A `locked` booking past its expiry is holding nothing.
+ *  - **Live walk-ins.** A checked-in session holds its station until checkout,
+ *    capped at `MAX_LIVE_SESSION_HOURS` - unless the customer named a finish
+ *    that has not arrived, in which case the row's own window is the truth and
+ *    the hours after it are free. `liveSessionEndMinutes` owns that decision and
+ *    `assign_device_slot` repeats it in SQL.
+ */
+export function occupiedRangeFor(
+  row: BookedRow,
+  slotDate: string,
+  now: Date = new Date()
+): { start: number; end: number } | null {
+  if (
+    row.status === 'locked' &&
+    row.lockExpiresAt &&
+    new Date(row.lockExpiresAt).getTime() <= now.getTime()
+  ) {
+    return null
+  }
+
+  let start = timeToMinutes(row.startTime)
+  let end = timeToMinutes(row.endTime)
+
+  if (end <= start) end += MINUTES_PER_DAY
+
+  // YYYY-MM-DD compares chronologically as a string, so which side of the date
+  // a row falls on is just the comparison.
+  if (row.slotDate < slotDate) {
+    start -= MINUTES_PER_DAY
+    end -= MINUTES_PER_DAY
+  } else if (row.slotDate > slotDate) {
+    start += MINUTES_PER_DAY
+    end += MINUTES_PER_DAY
+  }
+
+  const liveEnd = liveSessionEndMinutes(
+    {
+      billedOnActualTime: row.billedOnActualTime,
+      status: row.status,
+      checkedInAt: row.checkedInAt,
+      plannedEnd: row.plannedEnd,
+    },
+    slotDate,
+    now
+  )
+  // Only ever lengthens: a live session cannot hold less than its row says.
+  if (liveEnd !== null && liveEnd > end) end = liveEnd
+
+  // Yesterday's booking that finished before midnight cannot touch today.
+  if (end <= 0) return null
+
+  return { start, end }
 }
 
 /** Is at least one station of this type free for the whole window? */

@@ -1,9 +1,9 @@
 import 'server-only'
 
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { shiftDate, timeToMinutes } from '@/lib/payments/availability'
+import { shiftDate } from '@/lib/payments/availability'
 import {
-  MINUTES_PER_DAY,
+  occupiedRangeFor,
   type DeviceTypeOccupancy,
   type OccupiedRange
 } from '@/lib/bookings/slotAvailability'
@@ -16,7 +16,15 @@ interface SlotRow {
   slot_date: string
   slot_start_time: string
   slot_end_time: string
-  bookings: { status: string; lock_expires_at: string | null }
+  bookings: {
+    status: string
+    lock_expires_at: string | null
+    /** True for a walk-in session, whose slot end may be a placeholder. */
+    billed_on_actual_time: boolean | null
+    checked_in_at: string | null
+    /** Set only when the customer named a finish; then it is not a placeholder. */
+    walk_in_planned_end: string | null
+  }
 }
 
 /**
@@ -66,7 +74,13 @@ export async function fetchDeviceTypeOccupancy(
         slot_end_time,
         slot_date,
         device:devices!inner(device_type_id, status),
-        bookings!inner(status, lock_expires_at)
+        bookings!inner(
+          status,
+          lock_expires_at,
+          billed_on_actual_time,
+          checked_in_at,
+          walk_in_planned_end
+        )
       `
       )
       .eq('device.device_type_id', deviceTypeId)
@@ -83,7 +97,7 @@ export async function fetchDeviceTypeOccupancy(
   const totalDevices = deviceCount.count || 0
   if (totalDevices === 0) return { totalDevices: 0, occupied: [] }
 
-  const now = Date.now()
+  const now = new Date()
   const deviceIndex = new Map<string, number>()
   const occupied: OccupiedRange[] = []
 
@@ -92,33 +106,32 @@ export async function fetchDeviceTypeOccupancy(
     if (excludeBookingId && row.booking_id === excludeBookingId) continue
 
     const booking = row.bookings
-    // An expired lock no longer holds the slot.
-    if (
-      booking.status === 'locked' &&
-      booking.lock_expires_at &&
-      new Date(booking.lock_expires_at).getTime() <= now
-    ) {
-      continue
-    }
 
-    let start = timeToMinutes(row.slot_start_time)
-    let end = timeToMinutes(row.slot_end_time)
-
-    // An end at or before its start has wrapped past midnight; unwrap it so the
-    // range stays contiguous, then rebase the neighbouring days onto this
-    // date's timeline.
-    if (end <= start) end += MINUTES_PER_DAY
-
-    if (row.slot_date === dayBefore) {
-      start -= MINUTES_PER_DAY
-      end -= MINUTES_PER_DAY
-    } else if (row.slot_date === dayAfter) {
-      start += MINUTES_PER_DAY
-      end += MINUTES_PER_DAY
-    }
-
-    // Yesterday's bookings that finished before midnight cannot touch today.
-    if (end <= 0) continue
+    /**
+     * The window is worked out by `occupiedRangeFor`, which the desk's own
+     * checks use as well.
+     *
+     * This module used to do the arithmetic itself and, in doing so, never had
+     * the live-session rule `lib/payments/availability.ts` was given in
+     * `20260826130000` - so between the fifth and twelfth hour of an open-ended
+     * walk-in the picker offered a station `assign_device_slot` would then
+     * refuse, and the customer's slot failed under them at payment.
+     */
+    const range = occupiedRangeFor(
+      {
+        slotDate: row.slot_date,
+        startTime: row.slot_start_time,
+        endTime: row.slot_end_time,
+        status: booking.status,
+        lockExpiresAt: booking.lock_expires_at,
+        billedOnActualTime: booking.billed_on_actual_time,
+        checkedInAt: booking.checked_in_at,
+        plannedEnd: booking.walk_in_planned_end,
+      },
+      dateString,
+      now
+    )
+    if (!range) continue
 
     let index = deviceIndex.get(row.device_id)
     if (index === undefined) {
@@ -126,7 +139,7 @@ export async function fetchDeviceTypeOccupancy(
       deviceIndex.set(row.device_id, index)
     }
 
-    occupied.push({ device: index, start, end })
+    occupied.push({ device: index, start: range.start, end: range.end })
   }
 
   return { totalDevices, occupied }

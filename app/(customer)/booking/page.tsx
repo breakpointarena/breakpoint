@@ -130,9 +130,15 @@ export default function GamingStationPage() {
                     </div>
                   )}
 
-                  <span className={`absolute top-2 right-2 md:top-4 md:right-4 backdrop-blur-md border text-xs font-black uppercase tracking-wider px-2 py-1 rounded-md shadow-2xl z-30 ${isAvail ? "bg-black/90 border-green-500/30 text-green-400" : "bg-black/95 border-red-500/30 text-red-500"
+                  {/* What the floor looks like this minute, and nothing more.
+                      "Fully booked" was a verdict on the whole day drawn from
+                      one customer sitting down, and it used to close the card
+                      with it - including for dates the session cannot touch. */}
+                  <span className={`absolute top-2 right-2 md:top-4 md:right-4 backdrop-blur-md border text-xs font-black uppercase tracking-wider px-2 py-1 rounded-md shadow-2xl z-30 ${isAvail
+                    ? "bg-black/90 border-green-500/30 text-green-400"
+                    : "bg-black/95 border-amber-500/40 text-amber-400"
                     }`}>
-                    {isAvail ? `${deviceType.available_devices_count} AVAILABLE` : "FULLY BOOKED"}
+                    {isAvail ? `${deviceType.available_devices_count} AVAILABLE NOW` : "IN USE RIGHT NOW"}
                   </span>
                 </div>
 
@@ -163,19 +169,19 @@ export default function GamingStationPage() {
                   </div>
 
                   <div className="pt-2">
-                    {isAvail ? (
-                      <Button
-                        onClick={() => handleSelectAndProceed(deviceType)}
-                        variant="gradient"
-                        className="w-full text-xs font-black uppercase py-5 rounded-lg transition-all active:scale-[0.99]"
-                      >
-                        SELECT {deviceType.display_name.toUpperCase()}
-                      </Button>
-                    ) : (
-                      <Button disabled className="w-full text-xs font-black uppercase py-5 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-lg cursor-not-allowed">
-                        FULLY BOOKED
-                      </Button>
-                    )}
+                    {/* Always open. Which hours are free is a question about a
+                        date and a duration, and the slot picker behind this
+                        button is what answers it - a station in use this evening
+                        has nothing to say about tomorrow, or about ten o'clock
+                        tonight once the customer on it has said they are leaving
+                        at nine. */}
+                    <Button
+                      onClick={() => handleSelectAndProceed(deviceType)}
+                      variant="gradient"
+                      className="w-full text-xs font-black uppercase py-5 rounded-lg transition-all active:scale-[0.99]"
+                    >
+                      SELECT {deviceType.display_name.toUpperCase()}
+                    </Button>
                   </div>
                 </div>
               </Card>

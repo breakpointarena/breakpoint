@@ -14,7 +14,7 @@ import { BookingStatusBadge } from "./BookingStatusBadge";
 import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, updatePlayerCount } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount } from "@/app/(admin)/admin/bookings/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { Label } from "@/components/ui/label";
 import { QRCodeSVG } from "qrcode.react";
@@ -34,7 +34,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatDbTimeRange } from "@/lib/utils/timeSlots";
+import { formatDbTime, formatDbTimeRange } from "@/lib/utils/timeSlots";
+import { arenaClockTime, formatClockTime12h } from "@/lib/utils/dates";
+import { TimeOfDayField } from "@/components/ui/time-of-day-field";
+import { resolvePlannedSession } from "@/lib/bookings/walkInSession";
 
 interface BookingDetailModalProps {
   bookingId: string | null;
@@ -78,6 +81,52 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
    * page, which is a cold load in a fresh tab.
    */
   const [hasLoaded, setHasLoaded] = useState(false);
+  /** Open while the desk is changing when the customer expects to finish. */
+  const [editingPlannedEnd, setEditingPlannedEnd] = useState(false);
+  /** 24-hour `HH:MM` being typed. Empty means "take the plan off". */
+  const [plannedEndDraft, setPlannedEndDraft] = useState("");
+  const [savingPlannedEnd, setSavingPlannedEnd] = useState(false);
+
+  /**
+   * The draft, read the way the server will read it: forwards from now, since a
+   * finish that has already passed is a checkout rather than a plan.
+   */
+  const plannedEndDraftCheck = useMemo(
+    () => (plannedEndDraft ? resolvePlannedSession(null, plannedEndDraft) : null),
+    [plannedEndDraft]
+  );
+
+  /**
+   * Save the new finish, or remove it.
+   *
+   * The refusal that matters comes from the database: the hours this session
+   * freed may already have been sold, and `set_walkin_planned_end` re-tests the
+   * window against the station before it moves anything.
+   */
+  const handleSavePlannedEnd = async () => {
+    if (!booking?.id) return;
+
+    setSavingPlannedEnd(true);
+    const result = await setWalkInPlannedEnd(
+      booking.id,
+      plannedEndDraftCheck?.ok ? plannedEndDraftCheck.session.end.clock : null
+    );
+    setSavingPlannedEnd(false);
+
+    if (!result.success) {
+      toast.error("Could not change the finish time", { description: result.error });
+      return;
+    }
+
+    toast.success(
+      plannedEndDraft
+        ? `Held until ${formatClockTime12h(result.heldUntil!)}`
+        : "Finish time removed - held until checkout"
+    );
+    setEditingPlannedEnd(false);
+    setPlannedEndDraft("");
+    await loadBookingDetails();
+  };
 
   useEffect(() => {
     if (open && bookingId) {
@@ -794,8 +843,108 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   createdAt={booking.created_at}
                   checkedInAt={booking.checked_in_at}
                   completedAt={booking.completed_at}
+                  plannedEndAt={booking.walk_in_planned_end}
                   totalAmount={booking.total_amount}
                 />
+              )}
+
+              {/* Changing when they are expected to finish.
+
+                  Customers stay longer, and the planned end is not a note - the
+                  station goes back on sale the moment it passes, so one that is
+                  wrong shows a machine as free while somebody is sitting at it.
+                  Only offered while the session is running; after checkout there
+                  are two real times and nothing left to plan. */}
+              {isSession && booking.status === "checked_in" && (
+                <Card className="bg-[var(--surface)] border border-[#27272a] p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-black uppercase tracking-wider text-muted-content">
+                      Expected finish
+                    </p>
+                    {booking.walk_in_planned_end && !editingPlannedEnd && (
+                      <span className="text-sm font-black text-blue-300">
+                        {formatClockTime12h(booking.walk_in_planned_end)}
+                      </span>
+                    )}
+                  </div>
+
+                  {!editingPlannedEnd ? (
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs leading-relaxed text-muted-content">
+                        {booking.walk_in_planned_end
+                          ? "The station is held until then, and free to book afterwards."
+                          : "Nobody has said. The station is held until checkout."}
+                      </p>
+                      <Button
+                        onClick={() => {
+                          setPlannedEndDraft(
+                            booking.walk_in_planned_end
+                              ? arenaClockTime(new Date(booking.walk_in_planned_end)).slice(0, 5)
+                              : ""
+                          );
+                          setEditingPlannedEnd(true);
+                        }}
+                        variant="ghost"
+                        className="border border-zinc-800 text-xs font-black uppercase text-zinc-300 hover:text-white h-9 px-4 rounded-lg"
+                      >
+                        {booking.walk_in_planned_end ? "Change" : "Set"}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <TimeOfDayField
+                        name="plannedEndDraft"
+                        label="Expected finish"
+                        defaultValue={plannedEndDraft}
+                        onChange={setPlannedEndDraft}
+                      />
+
+                      {!plannedEndDraft ? (
+                        <p className="text-[11px] leading-relaxed text-muted-content">
+                          Save with this blank to take the plan off and hold the station
+                          until checkout.
+                        </p>
+                      ) : plannedEndDraftCheck?.ok ? (
+                        <p className="text-[11px] font-bold text-emerald-400">
+                          Held until {formatDbTime(plannedEndDraftCheck.session.end.clock)}
+                        </p>
+                      ) : (
+                        <p className="text-[11px] font-bold text-amber-500">
+                          {plannedEndDraftCheck?.error}
+                        </p>
+                      )}
+
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={() => {
+                            setEditingPlannedEnd(false);
+                            setPlannedEndDraft("");
+                          }}
+                          variant="ghost"
+                          className="flex-1 border border-zinc-800 text-xs font-black uppercase text-muted-content hover:text-white h-9 rounded-lg"
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={handleSavePlannedEnd}
+                          disabled={
+                            savingPlannedEnd ||
+                            (!!plannedEndDraft && !plannedEndDraftCheck?.ok)
+                          }
+                          className="flex-1 bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] text-xs font-black uppercase h-9 rounded-lg disabled:opacity-50"
+                        >
+                          {savingPlannedEnd ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : plannedEndDraft ? (
+                            "Save"
+                          ) : (
+                            "Remove"
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </Card>
               )}
 
               {/* Action Buttons */}

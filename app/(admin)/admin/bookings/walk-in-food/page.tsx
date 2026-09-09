@@ -26,6 +26,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { createFoodOnlyWalkInBooking, lookupWalkInCustomer } from "../actions";
+import {
+  CustomerSuggestions,
+  useCustomerSuggestions
+} from "@/components/admin/customers/CustomerSuggestions";
 import { formatDateForDB, handleDobInput, isValidDob, DOB_ERROR } from "@/lib/utils/dates";
 import { allFilled, isPlausibleEmail } from "@/lib/utils/forms";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
@@ -128,14 +132,35 @@ export default function WalkInFoodOnlyPage() {
     isValidDob(customerDob) &&
     isPlausibleEmail(customerEmail);
 
-  const handlePhoneLookup = async () => {
-    if (customerPhone.length < 10) {
-      toast.error("Please enter a valid 10-digit phone number");
-      return;
+  /**
+   * Matching profiles, offered while the number is typed.
+   *
+   * The same reason as the device walk-in: a misheard digit finds nobody, opens
+   * the registration form, and signs a returning customer up a second time -
+   * under a number one character out from the one their history is filed under.
+   * A food order is the shorter of the two flows and the one most likely to be
+   * typed in a hurry, so it needs this more, not less.
+   */
+  const phoneSuggestions = useCustomerSuggestions({
+    phone: customerPhone,
+    enabled: step === 1,
+    onPick: (suggestion) => {
+      // Its number, not the typed one - that is the point of picking a name.
+      setCustomerPhone(suggestion.phone);
+      loadCustomerProfile(suggestion.phone);
     }
+  });
 
+  /**
+   * Load a profile onto the form and move on to the food.
+   *
+   * One path, whether the number was typed in full and looked up or picked off
+   * the suggestions, so a suggestion cannot load less than Lookup does - the
+   * membership included, which is what pays for itself on a food bill.
+   */
+  const loadCustomerProfile = async (digits: string) => {
     setCheckingProfile(true);
-    const result = await lookupWalkInCustomer(customerPhone);
+    const result = await lookupWalkInCustomer(digits);
 
     if (result.exists && result.customer) {
       // Customer exists
@@ -160,6 +185,15 @@ export default function WalkInFoodOnlyPage() {
     }
 
     setCheckingProfile(false);
+  };
+
+  const handlePhoneLookup = async () => {
+    if (customerPhone.length < 10) {
+      toast.error("Please enter a valid 10-digit phone number");
+      return;
+    }
+
+    await loadCustomerProfile(customerPhone);
   };
 
   const handleRegisterAndProceed = () => {
@@ -350,7 +384,7 @@ export default function WalkInFoodOnlyPage() {
             <h2 className="text-lg font-bold text-white mb-4">Customer Information</h2>
 
             <div className="space-y-4">
-              <div>
+              <div className="space-y-2">
                 <Label className="text-zinc-400">Phone Number <span className="text-red-500">*</span></Label>
                 <div className="flex gap-2">
                   <Input
@@ -360,6 +394,7 @@ export default function WalkInFoodOnlyPage() {
                     placeholder="10-digit mobile number"
                     className="bg-zinc-950 border-zinc-800 text-white"
                     maxLength={10}
+                    {...phoneSuggestions.inputProps}
                   />
                   <Button
                     onClick={handlePhoneLookup}
@@ -371,6 +406,11 @@ export default function WalkInFoodOnlyPage() {
                     Lookup
                   </Button>
                 </div>
+
+                {/* Under the row, not over it: the Lookup button sits right
+                    beside the field here, and a list floating between the two
+                    would put other people's numbers under a thumb aiming at it. */}
+                <CustomerSuggestions state={phoneSuggestions} typedPhone={customerPhone} />
               </div>
 
               {showFullRegistrationFields && (

@@ -132,7 +132,10 @@ export function StationCard({ station, motionProps }: { station: Station; motion
                             e.stopPropagation()
                             handleClick()
                         }}
-                        disabled={!avail || isLoading}
+                        // Never gated on the floor being free this minute: the
+                        // slot picker behind this decides what is bookable, for
+                        // tonight and for every date after it.
+                        disabled={isLoading}
                         className={`w-full py-2.5 min-[581px]:py-3 rounded-xl font-black text-[12px] min-[581px]:text-[13px] tracking-widest uppercase transition-colors duration-200 flex items-center justify-center gap-2 ${avail
                             ? 'bg-gradient-primary text-[var(--button-text)] hover:bg-gradient-primary-hover active:scale-95'
                             : 'bg-white/6 text-white/25 border border-white/10 cursor-not-allowed'
@@ -145,7 +148,7 @@ export function StationCard({ station, motionProps }: { station: Station; motion
                                 Loading...
                             </>
                         ) : (
-                            avail ? 'Book slot' : 'Fully Booked'
+                            'Book slot'
                         )}
                     </button>
                 </div>
