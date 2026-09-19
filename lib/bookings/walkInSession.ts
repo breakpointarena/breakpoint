@@ -474,6 +474,86 @@ export function sessionClaimWindow(
   }
 }
 
+/**
+ * A checkout time the desk typed, checked against the session it would close.
+ *
+ * Checkout used to be the database clock and nothing else, which is right up
+ * until it is not: the customer leaves at nine, the desk is busy, and the
+ * session is closed at half past eleven. Those two and a half hours are billed
+ * to somebody who was not in the building, and there was no way to say so
+ * without editing the row by hand.
+ *
+ * So the time is now stated rather than observed, and the two questions worth
+ * asking of it are the ones a clock could never get wrong.
+ *
+ * Deliberately no limit on how far back it may go. The sessions that need this
+ * most are the forgotten ones - checked in on Friday, noticed on Monday - and a
+ * ceiling would lock out exactly the case the feature exists for. The floor is
+ * the session's own start, which is not a policy but arithmetic: a session
+ * cannot end before it began, and a negative duration would price as a negative
+ * bill.
+ *
+ * Compared as arena wall-clock strings rather than instants, the same way
+ * `bookingAttention` does it: `YYYY-MM-DD HH:MM:SS` sorts chronologically as
+ * text, both sides are read on the same clock, and no host offset can get in.
+ */
+export type CheckoutTimeResult =
+  | { ok: true; date: string; clock: string }
+  | { ok: false; error: string }
+
+export function resolveCheckoutTime(
+  input: {
+    /** `YYYY-MM-DD`, on the arena's calendar. */
+    date: string
+    /** `HH:MM` or `HH:MM:SS`, 24-hour, on the arena's clock. */
+    clock: string
+    /** When the session started, as the timestamp the database holds. */
+    checkedInAt: string | null | undefined
+  },
+  now: Date = new Date()
+): CheckoutTimeResult {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) {
+    return { ok: false, error: 'Choose the date the customer left.' }
+  }
+
+  const clock = /^\d{2}:\d{2}(:\d{2})?$/.test(input.clock)
+    ? (input.clock.length === 5 ? `${input.clock}:00` : input.clock)
+    : null
+  if (!clock) {
+    return { ok: false, error: 'Choose the time the customer left.' }
+  }
+
+  const entered = `${input.date} ${clock}`
+
+  if (!input.checkedInAt) {
+    return { ok: false, error: 'That session has no check-in time to measure from.' }
+  }
+  const started = new Date(input.checkedInAt)
+  if (Number.isNaN(started.getTime())) {
+    return { ok: false, error: 'That session has no readable check-in time.' }
+  }
+
+  const startedStamp = `${arenaDate(started)} ${arenaClockTime(started)}`
+  if (entered <= startedStamp) {
+    return {
+      ok: false,
+      error:
+        `The session started at ${formatClockTime12h(input.checkedInAt)} on ` +
+        `${arenaDate(started)}. Checkout has to be after that.`,
+    }
+  }
+
+  const nowStamp = `${arenaDate(now)} ${arenaClockTime(now)}`
+  if (entered > nowStamp) {
+    // Refused rather than clamped: picking tomorrow off a date picker is a
+    // common slip, and silently billing it as "now" would hide the mistake
+    // behind a plausible-looking total.
+    return { ok: false, error: 'Checkout cannot be in the future. Check the date and AM/PM.' }
+  }
+
+  return { ok: true, date: input.date, clock }
+}
+
 /** Minutes in a day, for expressing a window against a slot date's timeline. */
 const MINUTES_PER_DAY = 24 * 60
 

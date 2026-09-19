@@ -18,6 +18,7 @@ import { BookingDetailModal } from "@/components/admin/bookings/BookingDetailMod
 import { RevealAmount } from "@/components/admin/dashboard/RevealAmount";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { CheckoutModal } from "@/components/admin/bookings/CheckoutModal";
+import { CheckOutSessionDialog, type CheckOutTarget } from "@/components/admin/bookings/CheckOutSessionDialog";
 import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, type BookingFilters } from "./actions";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2, LogIn } from "lucide-react";
@@ -543,20 +544,40 @@ export default function AdminBookingsPage() {
     });
   };
 
+  /** The waiting session whose checkout dialog is open. */
+  const [checkOutTarget, setCheckOutTarget] = useState<CheckOutTarget | null>(null);
+
+  const confirmWalkInCheckOut = (statedEnd?: { date: string; clock: string }) => {
+    const target = checkOutTarget;
+    if (!target) return;
+
+    startTransition(async () => {
+      const result = await checkOutWalkInSession(target.id, statedEnd);
+      if (result.success) {
+        setCheckOutTarget(null);
+        toast.success(`Checked out — ${result.durationLabel} played`, {
+          description: `Billed ₹${Number(result.totalAmount).toFixed(2)}. Settle payment from Checkout & Billing.`
+        });
+        refreshAll();
+      } else {
+        toast.error("Check-out failed", { description: result.error });
+      }
+    });
+  };
+
   const handleCheckOut = async (bookingId: string, bookingNumber: string, booking: any) => {
     // A session has no scheduled end to be early for. Checking out is what fixes
     // the end time and, with it, the price.
     if (booking.billed_on_actual_time) {
-      startTransition(async () => {
-        const result = await checkOutWalkInSession(bookingId);
-        if (result.success) {
-          toast.success(`Checked out — ${result.durationLabel} played`, {
-            description: `Billed ₹${Number(result.totalAmount).toFixed(2)}. Settle payment from Checkout & Billing.`
-          });
-          refreshAll();
-        } else {
-          toast.error("Check-out failed", { description: result.error });
-        }
+      // Ask when they left first. The bill is the window between check-in and
+      // checkout, so the moment of the button press is a price - and the desk
+      // is not always free at the moment the customer walks out.
+      setCheckOutTarget({
+        id: bookingId,
+        booking_number: bookingNumber,
+        customer_name: booking.customer_name,
+        checked_in_at: booking.checked_in_at,
+        deviceLabel: booking.walk_in_device_type_name
       });
       return;
     }
@@ -1970,6 +1991,15 @@ export default function AdminBookingsPage() {
         onSuccess={() => {
           refreshAll();
         }}
+      />
+
+      {/* Close a running session at the time the customer actually left. */}
+      <CheckOutSessionDialog
+        open={checkOutTarget !== null}
+        onOpenChange={(next) => { if (!next) setCheckOutTarget(null); }}
+        loading={isPending}
+        target={checkOutTarget}
+        onConfirm={confirmWalkInCheckOut}
       />
     </div>
   );

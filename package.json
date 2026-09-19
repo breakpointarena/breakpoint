@@ -24,6 +24,7 @@
     "test:players": "tsx scripts/verify-player-charges.ts",
     "test:walkin": "tsx scripts/verify-walkin-session.ts",
     "test:walkin-start": "tsx scripts/verify-walkin-manual-start.ts",
+    "test:checkout-time": "tsx scripts/verify-walkin-checkout-time.ts",
     "test:midnight": "tsx scripts/verify-midnight-booking.ts",
     "test:notifications": "tsx scripts/verify-notifications.ts",
     "check:guards": "tsx scripts/check-admin-guards.ts",
