@@ -142,7 +142,7 @@ export default function WalkInFoodOnlyPage() {
    * typed in a hurry, so it needs this more, not less.
    */
   const phoneSuggestions = useCustomerSuggestions({
-    phone: customerPhone,
+    query: customerPhone,
     enabled: step === 1,
     onPick: (suggestion) => {
       // Its number, not the typed one - that is the point of picking a name.
