@@ -14,6 +14,7 @@ import { BookingStatusBadge } from "./BookingStatusBadge";
 import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
+import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
 import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount } from "@/app/(admin)/admin/bookings/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { Label } from "@/components/ui/label";
@@ -65,6 +66,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [booking, setBooking] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [checkOutOpen, setCheckOutOpen] = useState(false);
   const [addFoodModalOpen, setAddFoodModalOpen] = useState(false);
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [selectedFoodItems, setSelectedFoodItems] = useState<Record<string, number>>({});
@@ -224,11 +226,24 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setActionLoading(false);
   };
 
-  const handleSessionCheckOut = async () => {
+  /**
+   * Ask when the customer left before closing the session.
+   *
+   * The bill is the window between check-in and checkout, so the moment of the
+   * button press is a price. Confirming without touching the field keeps the
+   * old behaviour exactly: the database clock decides.
+   */
+  const handleSessionCheckOut = () => {
+    if (!bookingId) return;
+    setCheckOutOpen(true);
+  };
+
+  const confirmSessionCheckOut = async (statedEnd?: { date: string; clock: string }) => {
     if (!bookingId) return;
     setActionLoading(true);
-    const result = await checkOutWalkInSession(bookingId);
+    const result = await checkOutWalkInSession(bookingId, statedEnd);
     if (result.success) {
+      setCheckOutOpen(false);
       toast.success(`Checked out — ${result.durationLabel} played`, {
         description: `Billed ₹${Number(result.totalAmount).toFixed(2)} for the time actually played.`
       });
@@ -1252,6 +1267,23 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         </AlertDialogContent>
       </AlertDialog>
 
+      <CheckOutSessionDialog
+        open={checkOutOpen}
+        onOpenChange={setCheckOutOpen}
+        loading={actionLoading}
+        target={
+          booking
+            ? {
+                id: booking.id,
+                booking_number: booking.booking_number,
+                customer_name: booking.customer_name,
+                checked_in_at: booking.checked_in_at,
+                deviceLabel: booking.walk_in_device_type_name,
+              }
+            : null
+        }
+        onConfirm={confirmSessionCheckOut}
+      />
     </>
   );
 }
