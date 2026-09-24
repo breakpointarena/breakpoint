@@ -123,11 +123,18 @@ export default function AdminBookingsPage() {
   // Initialize payment split when modal opens
   useEffect(() => {
     if (pendingPaymentModal.open && pendingPaymentModal.balanceDue > 0) {
-      // Default to full amount in cash
+      /**
+       * The whole balance on UPI, because that is how nearly everybody pays.
+       *
+       * The figure is prefilled on whichever method is most likely so the desk
+       * can read it, agree, and press the button. Putting it on cash meant the
+       * common case was the one that needed editing - and a split typed under
+       * pressure is where a payment gets recorded against the wrong method.
+       */
       setPaymentSplit({
-        cashAmount: pendingPaymentModal.balanceDue,
+        cashAmount: 0,
         cardAmount: 0,
-        upiAmount: 0
+        upiAmount: pendingPaymentModal.balanceDue
       });
     }
   }, [pendingPaymentModal.open, pendingPaymentModal.balanceDue]);
@@ -707,9 +714,11 @@ export default function AdminBookingsPage() {
       if (result.success) {
         // Build payment description
         const methods = [];
+        // Same order as the fields, so the confirmation reads the way the
+        // desk just filled it in.
+        if (paymentSplit.upiAmount > 0) methods.push(`UPI: ₹${paymentSplit.upiAmount}`);
         if (paymentSplit.cashAmount > 0) methods.push(`Cash: ₹${paymentSplit.cashAmount}`);
         if (paymentSplit.cardAmount > 0) methods.push(`Card: ₹${paymentSplit.cardAmount}`);
-        if (paymentSplit.upiAmount > 0) methods.push(`UPI: ₹${paymentSplit.upiAmount}`);
 
         toast.success("Payment marked as paid", {
           description: methods.join(', ')
@@ -1684,6 +1693,23 @@ export default function AdminBookingsPage() {
                 Split Payment Across Methods
               </Label>
 
+              {/* UPI Amount */}
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">📱</span>
+                <div className="flex-1">
+                  <Label className="text-xs text-zinc-400 uppercase">UPI</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={paymentSplit.upiAmount || ''}
+                    onChange={(e) => setPaymentSplit({ ...paymentSplit, upiAmount: parseFloat(e.target.value) || 0 })}
+                    className="bg-zinc-800 border-zinc-700 text-white h-9 text-sm"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
               {/* Cash Amount */}
               <div className="flex items-center gap-2">
                 <span className="text-2xl">💵</span>
@@ -1718,23 +1744,6 @@ export default function AdminBookingsPage() {
                 </div>
               </div>
 
-              {/* UPI Amount */}
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">📱</span>
-                <div className="flex-1">
-                  <Label className="text-xs text-zinc-400 uppercase">UPI</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={paymentSplit.upiAmount || ''}
-                    onChange={(e) => setPaymentSplit({ ...paymentSplit, upiAmount: parseFloat(e.target.value) || 0 })}
-                    className="bg-zinc-800 border-zinc-700 text-white h-9 text-sm"
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
-
               {/* Total Validator */}
               <div className="pt-2 border-t border-zinc-800">
                 <div className="flex justify-between items-center">
@@ -1756,6 +1765,15 @@ export default function AdminBookingsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
+                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue })}
+                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                >
+                  All UPI
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
                   onClick={() => setPaymentSplit({ cashAmount: pendingPaymentModal.balanceDue, cardAmount: 0, upiAmount: 0 })}
                   className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
                 >
@@ -1769,15 +1787,6 @@ export default function AdminBookingsPage() {
                   className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
                 >
                   All Card
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue })}
-                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
-                >
-                  All UPI
                 </Button>
               </div>
             </div>
