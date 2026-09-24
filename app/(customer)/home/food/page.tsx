@@ -2,7 +2,8 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, useInView, AnimatePresence, Variants } from 'framer-motion';
-import { Loader2 } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
+import Link from 'next/link';
 import { FoodCard } from '@/components/customer/home/food/FoodCard';
 import { getMenuItems } from './action';
 import { SkeletonGrid } from '@/components/shared/SkeletonCard';
@@ -35,6 +36,21 @@ const skewInVariants: Variants = {
 /** What `getMenuItems` hands back. */
 type MenuResult = { success: boolean; menuItems?: any[]; error?: string };
 
+/**
+ * How many dishes the landing page shows before handing over to the menu.
+ *
+ * The arena's kitchen lists a hundred items. All of them rendered here, under a
+ * section that is itself halfway down the page, and the footer ended up a long
+ * way past anything anybody was looking for - the grid alone ran to some
+ * twenty-five rows on a phone.
+ *
+ * Ten is two rows on a phone and a little over two on a laptop: enough to show
+ * the kitchen is worth a look, short enough that the rest of the page is still
+ * reachable by scrolling rather than by patience. The full list is one tap away
+ * and always was.
+ */
+const HOMEPAGE_PREVIEW_COUNT = 10;
+
 interface FoodCollectionProps {
   /**
    * Seeded by the landing page, which reads the menu on the server so the
@@ -45,6 +61,11 @@ interface FoodCollectionProps {
    * there are no props and it fetches for itself exactly as it did before.
    */
   initialMenu?: MenuResult;
+  /**
+   * Show a short preview and a way through to the rest, rather than the whole
+   * kitchen. Set by the landing page; the standalone route shows everything.
+   */
+  preview?: boolean;
 }
 
 /**
@@ -87,7 +108,7 @@ function mapMenu(res: MenuResult | undefined): { items: Food[]; filters: FilterO
 }
 
 // --- Main ---
-export default function FoodCollection({ initialMenu }: FoodCollectionProps = {}) {
+export default function FoodCollection({ initialMenu, preview = false }: FoodCollectionProps = {}) {
   const seeded = useMemo(() => mapMenu(initialMenu), [initialMenu]);
 
   const [activeFilter, setActiveFilter] = useState('all');
@@ -138,6 +159,16 @@ export default function FoodCollection({ initialMenu }: FoodCollectionProps = {}
   const filtered = activeFilter === 'all'
     ? foodItems
     : foodItems.filter(f => f.categories.includes(activeFilter));
+
+  /**
+   * Cut after filtering, not before.
+   *
+   * The other way round, the filters would be sorting ten arbitrary dishes
+   * rather than the menu - pick "Desserts" and you would get whichever of the
+   * first ten happened to be one, which reads as a kitchen that has run out.
+   */
+  const shown = preview ? filtered.slice(0, HOMEPAGE_PREVIEW_COUNT) : filtered;
+  const hiddenCount = filtered.length - shown.length;
 
   return (
     <section
@@ -224,7 +255,7 @@ export default function FoodCollection({ initialMenu }: FoodCollectionProps = {}
           // Grid
           <motion.div layout className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 lg:gap-6 gap-3.5">
             <AnimatePresence mode="popLayout">
-              {filtered.map((food, i) => (
+              {shown.map((food, i) => (
                 <FoodCard
                   key={food.id}
                   food={food}
@@ -233,6 +264,36 @@ export default function FoodCollection({ initialMenu }: FoodCollectionProps = {}
                 />
               ))}
             </AnimatePresence>
+          </motion.div>
+        )}
+
+        {/*
+          * Only when something is actually being held back.
+          *
+          * A filter narrow enough to fit inside the preview has nothing more to
+          * explore, and a button saying so would be offering a page the reader
+          * is already looking at the whole of.
+          */}
+        {preview && hiddenCount > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.4 }}
+            className="mt-10 flex justify-center"
+          >
+            <Link
+              href="/food"
+              className="group inline-flex items-center gap-2 rounded-full border border-primary/40 bg-[#121212]/70 px-7 py-3.5 text-sm font-black uppercase tracking-wider text-primary backdrop-blur-sm transition-colors hover:border-primary hover:bg-primary hover:text-black"
+            >
+              Explore all
+              {/* The count is the argument for tapping it. "Explore all" alone
+                  could be five more dishes or ninety. */}
+              <span className="font-mono text-xs opacity-80 group-hover:opacity-100">
+                +{hiddenCount}
+              </span>
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </Link>
           </motion.div>
         )}
 
