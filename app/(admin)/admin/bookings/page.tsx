@@ -37,6 +37,7 @@ import {
 } from "@/lib/bookings/walkInSession";
 import {
   arenaDate,
+  arenaDateOffset,
   arenaToday,
   formatClockTime12h,
   formatLocalDate,
@@ -169,7 +170,7 @@ export default function AdminBookingsPage() {
     if (dateFrom && next < dateFrom) setDateFrom(next);
   };
 
-  const setQuickDateRange = (preset: "today" | "future" | "7days" | "30days" | "month" | "90days" | "all") => {
+  const setQuickDateRange = (preset: "today" | "yesterday" | "future" | "7days" | "30days" | "month" | "90days" | "all") => {
     const now = new Date();
     // The arena's today, not the browser's. These presets are compared against
     // dates the server derives in Asia/Kolkata, so a staff laptop on any other
@@ -183,6 +184,25 @@ export default function AdminBookingsPage() {
         setDateFrom(todayStr);
         setDateTo(todayStr);
         break;
+      case "yesterday": {
+        /**
+         * The single day before today, on the arena's calendar.
+         *
+         * `arenaDateOffset` rather than a `Date` with a day taken off it: the
+         * others here subtract days from an instant in the *host's* zone, which
+         * is right until a laptop somewhere with daylight saving crosses a
+         * boundary and the subtraction moves by an hour. Near arena midnight an
+         * hour is a different date, and this preset is exactly one date wide.
+         *
+         * Last night's late sessions land here rather than under "Today" -
+         * anything that ran past midnight is filed on the day it started, which
+         * is the day the desk remembers it by.
+         */
+        const yesterday = arenaDateOffset(-1, now);
+        setDateFrom(yesterday);
+        setDateTo(yesterday);
+        break;
+      }
       case "future": {
         // Tomorrow onwards, with no upper bound - a booking three months out
         // still belongs here. Every other preset looks backwards, so a future
@@ -898,6 +918,7 @@ export default function AdminBookingsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 md:flex md:flex-wrap gap-2">
             {([
               { id: "today", label: "Today" },
+              { id: "yesterday", label: "Yesterday" },
               { id: "future", label: "Future" },
               { id: "7days", label: "Last 7 Days" },
               { id: "30days", label: "Last 30 Days" },
