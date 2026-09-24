@@ -27,8 +27,26 @@ import { formatDbTime } from '@/lib/utils/timeSlots'
  * the next half hour - 2h45m is charged as 2.75 hours.
  */
 
-/** The station is held for this long from check-in while play is in progress. */
-export const PROVISIONAL_SESSION_HOURS = 5
+/**
+ * The block a walk-in claims on its station at check-in, before anybody knows
+ * how long they will stay.
+ *
+ * Two hours, not five. Five was generous enough that a customer who played
+ * forty minutes and left kept their station off the board for the rest of the
+ * evening unless somebody remembered to check them out - and on a floor of
+ * eight devices that is an eighth of the arena, sold to nobody.
+ *
+ * Shortening it is safe because it is not what protects a live session. A
+ * customer still playing at the two hour mark keeps their station: occupancy
+ * holds anything checked in and not checked out for `MAX_LIVE_SESSION_HOURS`,
+ * whatever this row happens to say. That is what 20260826130000 exists for, and
+ * it is the reason this number can be sized for the common session rather than
+ * the longest imaginable one.
+ *
+ * A customer who says how long they want is better served than either: naming a
+ * finish holds the station for exactly that, and frees the hours after it.
+ */
+export const PROVISIONAL_SESSION_HOURS = 2
 
 /**
  * How long after check-in a session is still believed to be live.
