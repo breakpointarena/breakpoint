@@ -1,5 +1,4 @@
 {
   "buildCommand": "npm run build",
-  "installCommand": "npm install --legacy-peer-deps",
-  "regions": ["bom1"]
+  "installCommand": "npm install --legacy-peer-deps"
 }
