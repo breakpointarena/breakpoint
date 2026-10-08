@@ -783,7 +783,6 @@ export default function AdminBookingsPage() {
       totalAmount,
       totalDevice,
       totalFood,
-      hasLiveSession: sorted.some((b) => liveEstimates.has(b.id) && liveEstimates.get(b.id) !== null),
       hasBackToBack,
       earliestBooking: sorted[0] // Now returns most recent booking (sorted desc)
     };
@@ -1292,9 +1291,6 @@ export default function AdminBookingsPage() {
                         </td>
                         <td className="py-4 px-4">
                           <p className="text-sm font-black text-date-visible">₹{formatCurrency(group.totalAmount)}</p>
-                          {group.hasLiveSession && (
-                            <p className="text-min text-green-400 mt-0.5">Includes live session amount</p>
-                          )}
                           {isSingleBooking && (
                             <div className="flex flex-col gap-0.5 mt-1">
                               <p className="text-min text-secondary-content">
@@ -1473,7 +1469,6 @@ export default function AdminBookingsPage() {
                             </td>
                             <td className="py-3 px-4">
                               <p className="text-sm font-black text-data-visible">₹{formatCurrency(liveEstimate?.totalAmount ?? booking.total_amount)}</p>
-                              {liveEstimate && <p className="text-min text-green-400">Live amount</p>}
                               <div className="flex flex-col gap-0.5 mt-1">
                                 <p className="text-min text-secondary-content">
                                   Games: ₹{formatCurrency(Math.max(0, (liveEstimate?.deviceSubtotal ?? Number(booking.device_subtotal || 0)) - (Number(booking.subscription_discount || 0) + Number(booking.promo_discount || 0) + Number(booking.happy_hour_discount || 0))))}

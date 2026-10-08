@@ -202,7 +202,7 @@ export function BookingsGrid({
                     <IndianRupee className="h-4 w-4 text-primary" />
                   </div>
                   <div className="flex-1">
-                    <p className="text-xs text-primary/70">{liveEstimate ? "Live Amount" : "Total Amount"}</p>
+                    <p className="text-xs text-primary/70">Total Amount</p>
                     <p className="text-lg font-black text-primary">
                       ₹{formatCurrency(displayedAmount)}
                     </p>
