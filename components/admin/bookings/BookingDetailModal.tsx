@@ -207,6 +207,10 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
 
   /** True for a walk-in whose bill comes from the clock, not from a chosen slot. */
   const isSession = booking?.billed_on_actual_time === true;
+  const canEditBilling = !!booking &&
+    booking.status !== "cancelled" &&
+    booking.payment_status !== "paid" &&
+    booking.payment_status !== "refunded";
 
   const handleSessionCheckIn = async () => {
     if (!bookingId) return;
@@ -486,7 +490,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                        * session - so there is nothing to recompute here.
                        */
                       const extraPlayersCharge = Number(slot.extra_players_total || 0);
-                      const canEdit = booking.status !== "cancelled" && booking.status !== "completed";
+                      const canEdit = canEditBilling;
 
                       return (
                         <div key={slot.id} className="bg-[var(--surface)] border border-[#27272a] rounded-lg p-4 space-y-3">
@@ -570,7 +574,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                     <UtensilsCrossed className="h-5 w-5 text-primary" />
                     Food & Beverage Orders
                   </h3>
-                  {booking.status !== "cancelled" && booking.status !== "completed" && (
+                  {canEditBilling && (
                     <Button
                       onClick={() => setAddFoodModalOpen(true)}
                       size="sm"
@@ -595,7 +599,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                             <p className="text-min text-muted-content uppercase mt-1">{item.status}</p>
                           </div>
                           {/* Only unpaid food an admin added can be taken back off */}
-                          {item.removable && booking.status !== "cancelled" && booking.status !== "completed" && (
+                          {item.removable && canEditBilling && (
                             <Button
                               size="sm"
                               variant="ghost"

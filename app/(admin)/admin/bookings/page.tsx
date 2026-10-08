@@ -1352,7 +1352,12 @@ export default function AdminBookingsPage() {
                                   <Ban className="h-4 w-4" />
                                 </Button>
                               )}
-                              {(firstBooking.status === "confirmed" || firstBooking.status === "checked_in") && (
+                              {firstBooking.status !== "cancelled" &&
+                                firstBooking.payment_status !== "paid" &&
+                                firstBooking.payment_status !== "refunded" &&
+                                (firstBooking.status === "confirmed" ||
+                                  firstBooking.status === "checked_in" ||
+                                  firstBooking.status === "completed") && (
                                 <Button
                                   size="sm"
                                   variant="ghost"
@@ -1511,7 +1516,12 @@ export default function AdminBookingsPage() {
                                     <LogOut className="h-4 w-4" />
                                   </Button>
                                 )}
-                                {(booking.status === "confirmed" || booking.status === "checked_in") && (
+                                {booking.status !== "cancelled" &&
+                                  booking.payment_status !== "paid" &&
+                                  booking.payment_status !== "refunded" &&
+                                  (booking.status === "confirmed" ||
+                                    booking.status === "checked_in" ||
+                                    booking.status === "completed") && (
                                   <Button
                                     size="sm"
                                     variant="ghost"

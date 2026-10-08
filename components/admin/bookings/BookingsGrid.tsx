@@ -61,6 +61,10 @@ export function BookingsGrid({
           const isSession = booking.billed_on_actual_time === true;
           const awaitingCheckIn = isSession && booking.status === "confirmed";
           const isPlaying = isSession && booking.status === "checked_in";
+          const canEditBilling =
+            booking.status !== "cancelled" &&
+            booking.payment_status !== "paid" &&
+            booking.payment_status !== "refunded";
 
           return (
             <Card
@@ -260,13 +264,10 @@ export function BookingsGrid({
                       <LogOut className="h-4 w-4" />
                     </Button>
                   )}
-                  {/* Food can only be added while the booking is live. A food-only
-                      order has no session to be live for, so it stays open on its
-                      own - but not once it has been called off or closed, which is
-                      how a cancelled food order kept offering this button. */}
-                  {booking.status !== "cancelled" &&
-                    booking.status !== "completed" &&
-                    (isFoodOnly || booking.status === "confirmed" || booking.status === "checked_in") && (
+                  {/* Keep billing edits available after checkout while money is
+                      still owed. Cancelled and fully settled bookings are closed. */}
+                  {canEditBilling &&
+                    (isFoodOnly || booking.status === "confirmed" || booking.status === "checked_in" || booking.status === "completed") && (
                     <Button
                       size="sm"
                       variant="ghost"

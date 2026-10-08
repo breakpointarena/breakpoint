@@ -910,21 +910,32 @@ export async function addFoodToBooking(
   await requireStaff();
 
   try {
-    // The booking has to be one food can still be served against. Hiding the
-    // button is not the same as refusing the call: the grid went on offering
-    // Add Food on a cancelled food-only order, and nothing here said no.
+    // Keep the server guard in step with the UI: checked-out bookings remain
+    // editable until fully paid, while cancelled and settled bookings are closed.
     const { data: subject, error: subjectError } = await supabaseAdmin
       .from("bookings")
-      .select("status")
+      .select("status, payment_status, amount_paid, total_amount, billed_on_actual_time, completed_at")
       .eq("id", bookingId)
       .maybeSingle();
 
     if (subjectError) throw subjectError;
     if (!subject) return { success: false, error: "Booking not found." };
-    if (subject.status === "cancelled" || subject.status === "completed") {
+    const subjectPaymentStatus = derivePaymentStatus(
+      Number(subject.total_amount || 0),
+      Number(subject.amount_paid || 0),
+      subject.payment_status,
+      subject.billed_on_actual_time === true && !subject.completed_at
+    );
+    if (
+      subject.status === "cancelled" ||
+      subjectPaymentStatus === "paid" ||
+      subjectPaymentStatus === "refunded"
+    ) {
       return {
         success: false,
-        error: `This booking is ${subject.status}. Food can no longer be added.`
+        error: subject.status === "cancelled"
+          ? "This booking is cancelled. Food can no longer be added."
+          : "This booking is fully settled. Food can no longer be added."
       };
     }
 
@@ -1112,17 +1123,29 @@ export async function removeFoodItemFromBooking(bookingId: string, foodItemId: s
     const { data: booking, error: bookingError } = await supabaseAdmin
       .from("bookings")
       .select(
-        "status, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, amount_paid"
+        "status, payment_status, total_amount, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, amount_paid, billed_on_actual_time, completed_at"
       )
       .eq("id", bookingId)
       .single();
 
     if (bookingError) throw bookingError;
 
-    if (booking.status === "cancelled" || booking.status === "completed") {
+    const bookingPaymentStatus = derivePaymentStatus(
+      Number(booking.total_amount || 0),
+      Number(booking.amount_paid || 0),
+      booking.payment_status,
+      booking.billed_on_actual_time === true && !booking.completed_at
+    );
+    if (
+      booking.status === "cancelled" ||
+      bookingPaymentStatus === "paid" ||
+      bookingPaymentStatus === "refunded"
+    ) {
       return {
         success: false,
-        error: `This booking is ${booking.status}. Food can no longer be changed.`
+        error: booking.status === "cancelled"
+          ? "This booking is cancelled. Food can no longer be changed."
+          : "This booking is fully settled. Food can no longer be changed."
       };
     }
 
@@ -2361,11 +2384,30 @@ export async function updatePlayerCount(slotId: string, newPlayerCount: number, 
     // Get current slot details and booking info
     const { data: slot, error: slotError } = await supabaseAdmin
       .from("booking_device_slots")
-      .select("*, bookings!inner(id, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, billed_on_actual_time, completed_at)")
+      .select("*, bookings!inner(id, status, payment_status, total_amount, amount_paid, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, billed_on_actual_time, completed_at)")
       .eq("id", slotId)
       .single();
 
     if (slotError || !slot) throw slotError || new Error("Slot not found");
+
+    const bookingPaymentStatus = derivePaymentStatus(
+      Number(slot.bookings.total_amount || 0),
+      Number(slot.bookings.amount_paid || 0),
+      slot.bookings.payment_status,
+      slot.bookings.billed_on_actual_time === true && !slot.bookings.completed_at
+    );
+    if (
+      slot.bookings.status === "cancelled" ||
+      bookingPaymentStatus === "paid" ||
+      bookingPaymentStatus === "refunded"
+    ) {
+      return {
+        success: false,
+        error: slot.bookings.status === "cancelled"
+          ? "This booking is cancelled. Player count can no longer be changed."
+          : "This booking is fully settled. Player count can no longer be changed."
+      };
+    }
 
     /**
      * A session in progress has no bill to adjust.
@@ -2436,6 +2478,10 @@ export async function updatePlayerCount(slotId: string, newPlayerCount: number, 
       .update({
         device_subtotal: newDeviceSubtotal,
         total_amount: newTotalAmount,
+        payment_status: settlementStatus({
+          amountPaid: Number(slot.bookings.amount_paid || 0),
+          total: newTotalAmount
+        }),
         updated_at: new Date().toISOString()
       })
       .eq("id", slot.bookings.id);
