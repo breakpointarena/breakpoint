@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAppDispatch } from '@/lib/redux/hooks';
 import { setDeviceType, setPricing, resetBooking } from '@/lib/redux/slices/bookingSlice';
 import { Loader2 } from 'lucide-react';
+import { deviceRateLabel } from '@/lib/payments/deviceRateLabel';
 
 export function StationCard({ station, motionProps }: { station: Station; motionProps: object }) {
     const avail = station.isAvailable
@@ -91,10 +92,7 @@ export function StationCard({ station, motionProps }: { station: Station; motion
                             className="text-white font-black text-xl min-[581px]:text-2xl leading-none"
                             style={{ fontFamily: "'Rajdhani', sans-serif" }}
                         >
-                            ₹{station.regular_hourly_rate}
-                        </span>
-                        <span className="text-white/65 text-[11px] font-semibold uppercase tracking-widest">
-                            / hr
+                            {deviceRateLabel(station.name, Number(station.regular_hourly_rate) || 0)}
                         </span>
                     </div>
 

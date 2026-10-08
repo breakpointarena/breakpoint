@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Users, Sparkles } from 'lucide-react';
 import { getDeviceTypesWithAvailability } from "./actions";
 import Link from "next/link";
+import { deviceRateLabel } from "@/lib/payments/deviceRateLabel";
 
 export default function GamingStationPage() {
   const router = useRouter();
@@ -155,8 +156,7 @@ export default function GamingStationPage() {
                         </p>
                       </div>
                       <div className="text-right flex-shrink-0 flex items-baseline gap-1 mt-1">
-                        <span className="text-lg font-black text-primary">₹{Number(deviceType.regular_hourly_rate)}</span>
-                        <span className="text-xs text-zinc-300 font-bold">/hr</span>
+                        <span className="text-lg font-black text-primary">{deviceRateLabel(deviceType.display_name, Number(deviceType.regular_hourly_rate) || 0)}</span>
                       </div>
                     </div>
 
