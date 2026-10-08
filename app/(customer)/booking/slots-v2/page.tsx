@@ -33,7 +33,6 @@ import { availableStartMinutes, type DeviceTypeOccupancy } from "@/lib/bookings/
 import { useHappyHours } from "@/lib/hooks/useHappyHours";
 import { formatCurrency } from "@/lib/currency";
 import { extraPlayersCharge, perExtraPlayerCharge } from "@/lib/payments/money";
-import { deviceRateLabel } from "@/lib/payments/deviceRateLabel";
 
 export default function FlexibleSlotBookingPage() {
   const router = useRouter();
@@ -537,7 +536,7 @@ export default function FlexibleSlotBookingPage() {
               </div>
               <div className="min-w-0 flex-1">
                 <h4 className="font-black text-xs sm:text-sm min-w-0 text-white uppercase break-words leading-tight">{hydrated ? (deviceTypeName || "Gaming Device") : pending("w-28")}</h4>
-                <p className="text-zinc-400 text-xs font-bold mt-0.5"><span className="text-primary font-black">{hydrated ? deviceRateLabel(deviceTypeName || "", hourlyRate || 0) : pending("w-24")}</span></p>
+                <p className="text-zinc-400 text-xs font-bold mt-0.5"><span className="text-primary font-black">{hydrated ? `₹${hourlyRate || 0}` : pending("w-10")}</span> / hour</p>
               </div>
             </div>
             <Button variant="gradient" onClick={() => router.push("/booking")} className="text-black font-black text-xs uppercase h-7 px-3 flex-shrink-0">

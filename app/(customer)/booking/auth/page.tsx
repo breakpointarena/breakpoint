@@ -27,7 +27,6 @@ import { formatDateForDB, formatDateForDisplay, handleDobInput, isValidDob, DOB_
 import { allFilled, isPlausibleEmail } from "@/lib/utils/forms";
 import { deviceCharge, extraPlayersCharge, perExtraPlayerCharge, round2 } from "@/lib/payments/money";
 import OTPVerification from "@/components/auth/OTPVerification";
-import { deviceRateLabel } from "@/lib/payments/deviceRateLabel";
 
 type Step = "phone" | "otp" | "details" | "summary" | "success";
 
@@ -965,7 +964,7 @@ export default function CustomerDetailsPage() {
                 return (
                   <>
                     <div className="flex justify-between">
-                      <span className="text-zinc-400">Device Booking ({durationInHours}h × {deviceRateLabel(deviceTypeName || "", hourlyRate || 0)}):</span>
+                      <span className="text-zinc-400">Device Booking ({durationInHours}h × ₹{hourlyRate}):</span>
                       <span className="text-white">₹{deviceCharges.toFixed(2)}</span>
                     </div>
 

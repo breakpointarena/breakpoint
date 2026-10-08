@@ -16,7 +16,6 @@ import {
   isDateWithinBookingWindow,
   BOOKING_WINDOW_ERROR
 } from "@/lib/utils/dates";
-import { deviceRateLabel } from "@/lib/payments/deviceRateLabel";
 
 const staticDaylightSchedulesMatrix = [
   { id: "s1", label: "10:00 AM - 11:00 AM", start: "10:00 AM", end: "11:00 AM", tier: "Morning Slots" },
@@ -152,7 +151,7 @@ export default function SlotBookingPage() {
           <div className="bg-[#111] border border-zinc-900 rounded-xl p-4 flex items-center justify-between shadow-md">
             <div className="flex items-center gap-3 min-w-0">
               <div className="p-2.5 bg-zinc-950 border border-zinc-800 text-primary rounded-lg"><Clock className="h-4 w-4"/></div>
-              <div className="min-w-0"><h4 className="font-black text-xs sm:text-sm text-white uppercase truncate">{deviceTypeName || "PLAYSTATION 5 - STATION #2"}</h4><p className="text-zinc-400 text-xs font-bold mt-0.5">{deviceRateLabel(deviceTypeName || "", hourlyRate || 300)}</p></div>
+              <div className="min-w-0"><h4 className="font-black text-xs sm:text-sm text-white uppercase truncate">{deviceTypeName || "PLAYSTATION 5 - STATION #2"}</h4><p className="text-zinc-400 text-xs font-bold mt-0.5">₹ {hourlyRate || 300}/hour</p></div>
             </div>
             <Button onClick={() => router.push("/booking")} variant="outline" className="border-zinc-800 text-xs uppercase h-8 px-3 text-zinc-400">Change</Button>
           </div>
