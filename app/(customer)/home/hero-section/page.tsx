@@ -181,7 +181,7 @@ export default function HeroCarousel() {
                   onClick={() => router.push('/booking')}
                   className="w-fit bg-gradient-primary text-[var(--button-text)] font-black px-10 py-4 rounded-xl uppercase tracking-widest text-sm transition-all duration-300 hover:scale-[1.02]"
                 >
-                  Book Slot
+                  Book Your Slot
                 </button>
               </motion.div>
             </motion.div>
@@ -223,7 +223,7 @@ export default function HeroCarousel() {
                 onClick={() => router.push('/booking')}
                 className="w-full bg-gradient-primary text-[var(--button-text)] font-black px-6 py-3 rounded-xl uppercase tracking-widest text-xs transition-all duration-300 active:scale-[0.98]"
               >
-                Book Slot
+                Book Your Slot
               </button>
             </motion.div>
           </div>
