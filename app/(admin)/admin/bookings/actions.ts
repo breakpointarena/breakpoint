@@ -30,6 +30,11 @@ import {
   toSlotDate
 } from "@/lib/bookings/walkInSession";
 import { arenaDate, arenaToday } from "@/lib/utils/dates";
+import {
+  effectivePaidAt,
+  mergeBookingRows,
+  revenueWindowStart,
+} from "@/lib/reports/revenueWindow";
 import { needsAttention } from "@/lib/bookings/attention";
 import {
   CUSTOMER_SUGGESTION_LIMIT,
@@ -816,20 +821,57 @@ export async function getBookingStats(
         )
       : (allStatuses || []);
 
-    // Calculate today's revenue
+    // Read bookings paid inside the revenue window. A booking can be created
+    // earlier and paid today, so created_at is not the date revenue belongs to.
     const today = arenaToday();
-    const { data: todayBookings, error: revenueError } = await supabaseAdmin
-      .from("bookings")
-      .select("total_amount")
-      .gte("created_at", today)
-      .in("status", ["confirmed", "checked_in", "completed"]);
+    const revenueWindow = revenueWindowStart(today);
+    const revenueColumns = `
+      id,
+      amount_paid,
+      payment_status,
+      status,
+      created_at,
+      updated_at,
+      payment_groups(paid_at)
+    `;
+    const [
+      { data: touchedInWindow, error: touchedError },
+      { data: settledInWindow, error: settledError },
+    ] = await Promise.all([
+      supabaseAdmin
+        .from("bookings")
+        .select(revenueColumns)
+        .in("payment_status", ["paid", "partial"])
+        .neq("status", "cancelled")
+        .gte("updated_at", revenueWindow),
+      supabaseAdmin
+        .from("bookings")
+        .select(`
+          id,
+          amount_paid,
+          payment_status,
+          status,
+          created_at,
+          updated_at,
+          payment_groups!inner(paid_at)
+        `)
+        .in("payment_status", ["paid", "partial"])
+        .neq("status", "cancelled")
+        .gte("payment_groups.paid_at", revenueWindow),
+    ]);
 
-    if (revenueError) throw revenueError;
+    if (touchedError) throw touchedError;
+    if (settledError) throw settledError;
 
-    const todayRevenue = (todayBookings || []).reduce(
-      (sum: number, b: any) => sum + Number(b.total_amount || 0),
-      0
+    const paidBookings = mergeBookingRows(
+      touchedInWindow as { id: string }[] | null,
+      settledInWindow as { id: string }[] | null
     );
+    const todayRevenue = (paidBookings as any[]).reduce((sum, booking) => {
+      const paidAt = effectivePaidAt(booking);
+      if (!paidAt || paidAt.split("T")[0] !== today) return sum;
+      return sum + Number(booking.amount_paid || 0);
+    }, 0);
 
     // Group by status
     const grouped = (statusCounts || []).reduce((acc: any, item: any) => {
