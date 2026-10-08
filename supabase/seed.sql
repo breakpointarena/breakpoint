@@ -15,7 +15,7 @@ INSERT INTO public.device_types (name, display_name, regular_hourly_rate, includ
   ('medium_snooker', 'Medium Snooker Table', 299.00, 4, 8, 79.00, 'Medium size snooker table - great for smaller groups with up to 4 players included', 2),
   ('american_pool', 'American Pool Table', 249.00, 4, 8, 49.00, 'American pool table - classic billiards experience with up to 4 players included', 3),
   ('ps5', 'PS5 Console', 200.00, 1, 4, 150.00, 'PlayStation 5 gaming console - latest games and titles, 1 player included, ₹150 per additional controller', 4),
-  ('other', 'Board Games', 200.00, 1, 4, 100.00, 'Board games and tabletop activities', 5);
+  ('other', 'FI Simulator', 200.00, 1, 4, 100.00, 'FI simulator experience', 5);
 
 -- ================================================
 -- 2. SAMPLE DEVICES (One for each type)
@@ -43,7 +43,7 @@ BEGIN
     (v_medium_snooker_id, 'MS-001', 'available', 'Medium size snooker table perfect for casual play. Includes all accessories. Up to 8 players (4 included in base rate).'),
     (v_american_pool_id, 'AP-001', 'available', 'Professional American pool table with aramith balls. Includes cues and chalk. Up to 8 players (4 included in base rate).'),
     (v_ps5_id, 'PS5-001', 'available', 'PlayStation 5 console with DualSense controller, 4K gaming, and latest game library. Up to 4 players (₹150 per additional controller).'),
-    (v_other_id, 'BG-001', 'available', 'Board games and tabletop entertainment. Contact staff for details.');
+    (v_other_id, 'BG-001', 'available', 'FI simulator experience. Contact staff for details.');
 END $$;
 
 -- ================================================
