@@ -9,6 +9,7 @@ import { PaymentStatusBadge } from "./PaymentStatusBadge";
 import { Calendar, Clock, MapPin, IndianRupee, Phone, User, Eye, UserCheck, LogOut, UtensilsCrossed, CreditCard, Link2, Ban, Undo2 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { formatClockTime12h } from "@/lib/utils/dates";
+import { liveSessionEstimate } from "@/lib/bookings/liveSessionAmount";
 
 interface BookingsGridProps {
   customerGroups: Array<{
@@ -34,6 +35,7 @@ interface BookingsGridProps {
   onMarkRefunded?: (booking: any) => void;
   needsRefund?: (booking: any) => boolean;
   isPending: boolean;
+  liveNow: number;
 }
 
 export function BookingsGrid({
@@ -47,7 +49,8 @@ export function BookingsGrid({
   canCancel,
   onMarkRefunded,
   needsRefund,
-  isPending
+  isPending,
+  liveNow
 }: BookingsGridProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -61,6 +64,8 @@ export function BookingsGrid({
           const isSession = booking.billed_on_actual_time === true;
           const awaitingCheckIn = isSession && booking.status === "confirmed";
           const isPlaying = isSession && booking.status === "checked_in";
+          const liveEstimate = liveSessionEstimate(booking, new Date(liveNow));
+          const displayedAmount = liveEstimate?.totalAmount ?? Number(booking.total_amount || 0);
           const canEditBilling =
             booking.status !== "cancelled" &&
             booking.payment_status !== "paid" &&
@@ -197,9 +202,9 @@ export function BookingsGrid({
                     <IndianRupee className="h-4 w-4 text-primary" />
                   </div>
                   <div className="flex-1">
-                    <p className="text-xs text-primary/70">Total Amount</p>
+                    <p className="text-xs text-primary/70">{liveEstimate ? "Live Amount" : "Total Amount"}</p>
                     <p className="text-lg font-black text-primary">
-                      ₹{formatCurrency(booking.total_amount)}
+                      ₹{formatCurrency(displayedAmount)}
                     </p>
                   </div>
                   <PaymentStatusBadge
@@ -207,7 +212,9 @@ export function BookingsGrid({
                     bookingStatus={booking.status}
                     size="sm"
                     amountPaid={booking.amount_paid}
-                    balanceDue={booking.balance_due}
+                    balanceDue={liveEstimate
+                      ? Math.max(0, displayedAmount - Number(booking.amount_paid || 0))
+                      : booking.balance_due}
                   />
                 </div>
               </div>

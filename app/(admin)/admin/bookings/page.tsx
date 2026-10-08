@@ -26,6 +26,7 @@ import { format } from "date-fns";
 import { useDebounce } from "@/lib/hooks/useDebounce";
 import { CountUp } from "@/components/shared/CountUp";
 import { roundToTwo, formatCurrency } from "@/lib/currency";
+import { liveSessionEstimate } from "@/lib/bookings/liveSessionAmount";
 import { formatDbTime, formatDbTimeRange } from "@/lib/utils/timeSlots";
 import { BookingTimingCell } from "@/components/admin/bookings/SessionTimeline";
 import { TimeOfDayField } from "@/components/ui/time-of-day-field";
@@ -48,6 +49,7 @@ export default function AdminBookingsPage() {
   const router = useRouter();
   const { addNotification } = useNotifications();
   const [bookings, setBookings] = useState<any[]>([]);
+  const [liveNow, setLiveNow] = useState(() => Date.now());
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -82,6 +84,11 @@ export default function AdminBookingsPage() {
   const [checkInTarget, setCheckInTarget] = useState<any>(null);
   /** 24-hour `HH:MM` the customer says they will finish. Empty means they did not say. */
   const [checkInPlannedEnd, setCheckInPlannedEnd] = useState("");
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setLiveNow(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
   /**
    * The entered finish, read the way the server will read it.
    *
@@ -716,6 +723,11 @@ export default function AdminBookingsPage() {
     return new Date(booking.created_at).getTime();
   };
 
+  const liveClock = new Date(liveNow);
+  const liveEstimates = new Map(
+    bookings.map((booking) => [booking.id, liveSessionEstimate(booking, liveClock)])
+  );
+
   // Group bookings by customer
   const groupedBookings = bookings.reduce((groups, booking) => {
     const key = booking.customer_phone;
@@ -732,10 +744,13 @@ export default function AdminBookingsPage() {
       (a, b) => getBookingTime(b) - getBookingTime(a) // Most recent slot first
     );
 
-    const totalAmount = roundToTwo(sorted.reduce((sum, b) => sum + Number(b.total_amount || 0), 0));
+    const totalAmount = roundToTwo(sorted.reduce(
+      (sum, b) => sum + (liveEstimates.get(b.id)?.totalAmount ?? Number(b.total_amount || 0)),
+      0
+    ));
     // Calculate actual revenue after discounts (including happy hour)
     const totalDevice = roundToTwo(sorted.reduce((sum, b) => {
-      const deviceSubtotal = Number(b.device_subtotal || 0);
+      const deviceSubtotal = liveEstimates.get(b.id)?.deviceSubtotal ?? Number(b.device_subtotal || 0);
       const discount = Number(b.subscription_discount || 0) + Number(b.promo_discount || 0) + Number(b.happy_hour_discount || 0);
       return sum + Math.max(0, deviceSubtotal - discount);
     }, 0));
@@ -768,6 +783,7 @@ export default function AdminBookingsPage() {
       totalAmount,
       totalDevice,
       totalFood,
+      hasLiveSession: sorted.some((b) => liveEstimates.has(b.id) && liveEstimates.get(b.id) !== null),
       hasBackToBack,
       earliestBooking: sorted[0] // Now returns most recent booking (sorted desc)
     };
@@ -1119,6 +1135,7 @@ export default function AdminBookingsPage() {
           }}
           onCheckoutBilling={handleCheckoutBillingClick}
           isPending={isPending}
+                  liveNow={liveNow}
         />
       ) : (
         <Card className="bg-[var(--surface)] border-[#27272a] overflow-hidden">
@@ -1158,6 +1175,7 @@ export default function AdminBookingsPage() {
                   const isSingleBooking = group.count === 1;
                   const firstBooking = group.earliestBooking;
                   const firstSlot = firstBooking.booking_device_slots?.[0];
+                  const firstLiveEstimate = liveEstimates.get(firstBooking.id);
 
                   return (
                     <Fragment key={`group-${group.phone}`}>
@@ -1274,6 +1292,9 @@ export default function AdminBookingsPage() {
                         </td>
                         <td className="py-4 px-4">
                           <p className="text-sm font-black text-date-visible">₹{formatCurrency(group.totalAmount)}</p>
+                          {group.hasLiveSession && (
+                            <p className="text-min text-green-400 mt-0.5">Includes live session amount</p>
+                          )}
                           {isSingleBooking && (
                             <div className="flex flex-col gap-0.5 mt-1">
                               <p className="text-min text-secondary-content">
@@ -1294,7 +1315,9 @@ export default function AdminBookingsPage() {
                               bookingStatus={firstBooking.status}
                               size="md"
                               amountPaid={firstBooking.amount_paid}
-                              balanceDue={firstBooking.balance_due}
+                              balanceDue={firstLiveEstimate
+                                ? Math.max(0, firstLiveEstimate.totalAmount - Number(firstBooking.amount_paid || 0))
+                                : firstBooking.balance_due}
                             />
                           ) : (
                             <p className="text-sm-readable text-secondary-content italic">-</p>
@@ -1414,6 +1437,7 @@ export default function AdminBookingsPage() {
                       {/* Child Rows - Individual Bookings (when expanded) */}
                       {!isSingleBooking && isExpanded && group.bookings.map((booking, index) => {
                         const deviceSlot = booking.booking_device_slots?.[0];
+                        const liveEstimate = liveEstimates.get(booking.id);
                         return (
                           <tr key={booking.id} className="bg-[var(--background)] hover:bg-[var(--surface)] transition-colors border-l-4 border-l-primary/30">
                             <td className="py-3 px-4 pl-12">
@@ -1448,10 +1472,11 @@ export default function AdminBookingsPage() {
                               </p>
                             </td>
                             <td className="py-3 px-4">
-                              <p className="text-sm font-black text-data-visible">₹{formatCurrency(booking.total_amount)}</p>
+                              <p className="text-sm font-black text-data-visible">₹{formatCurrency(liveEstimate?.totalAmount ?? booking.total_amount)}</p>
+                              {liveEstimate && <p className="text-min text-green-400">Live amount</p>}
                               <div className="flex flex-col gap-0.5 mt-1">
                                 <p className="text-min text-secondary-content">
-                                  Games: ₹{formatCurrency(Math.max(0, Number(booking.device_subtotal || 0) - (Number(booking.subscription_discount || 0) + Number(booking.promo_discount || 0) + Number(booking.happy_hour_discount || 0))))}
+                                  Games: ₹{formatCurrency(Math.max(0, (liveEstimate?.deviceSubtotal ?? Number(booking.device_subtotal || 0)) - (Number(booking.subscription_discount || 0) + Number(booking.promo_discount || 0) + Number(booking.happy_hour_discount || 0))))}
                                 </p>
                                 {booking.food_subtotal > 0 && (
                                   <p className="text-min text-secondary-content">
@@ -1466,7 +1491,9 @@ export default function AdminBookingsPage() {
                                 bookingStatus={booking.status}
                                 size="md"
                                 amountPaid={booking.amount_paid}
-                                balanceDue={booking.balance_due}
+                                balanceDue={liveEstimate
+                                  ? Math.max(0, liveEstimate.totalAmount - Number(booking.amount_paid || 0))
+                                  : booking.balance_due}
                               />
                             </td>
                             <td className="py-3 px-4">
