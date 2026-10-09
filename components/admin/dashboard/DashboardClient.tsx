@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +28,8 @@ import { AvailableDevicesModal } from "@/components/admin/dashboard/AvailableDev
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { CountUp, CurrencyCountUp } from "@/components/shared/CountUp";
 import { RevealAmount } from "@/components/admin/dashboard/RevealAmount";
+
+const NewWalkInModal = dynamic(() => import("@/components/admin/bookings/walk-in/NewWalkInModal"), { ssr: false });
 
 export type DashboardInitialData = {
   stats: any;
@@ -57,6 +60,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
   const [upcomingDetails, setUpcomingDetails] = useState<any[]>([]);
   const [devicesModalOpen, setDevicesModalOpen] = useState(false);
   const [devicesDetails, setDevicesDetails] = useState<any[]>([]);
+  const [walkInOpen, setWalkInOpen] = useState(false);
 
   /**
    * A booking opened in another tab can be checked out, marked paid or have food
@@ -226,7 +230,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
             Refresh
           </Button>
           <Button
-            onClick={() => router.push("/admin/bookings/walk-in")}
+            onClick={() => setWalkInOpen(true)}
             className="bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] font-black uppercase text-xs h-10 px-6"
           >
             <PlusCircle className="h-4 w-4 mr-2 stroke-[3]" />
@@ -234,6 +238,8 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
           </Button>
         </div>
       </div>
+
+      <NewWalkInModal open={walkInOpen} onOpenChange={setWalkInOpen} onSuccess={() => loadDashboardData(true)} />
 
       {/* Key Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">

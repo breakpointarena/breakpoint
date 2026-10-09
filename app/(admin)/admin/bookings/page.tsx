@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useTransition, Fragment } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -44,10 +45,14 @@ import {
   validateReportDateRange
 } from "@/lib/utils/dates";
 
+const NewWalkInModal = dynamic(() => import("@/components/admin/bookings/walk-in/NewWalkInModal"), { ssr: false });
+
 export default function AdminBookingsPage() {
   const router = useRouter();
   const { addNotification } = useNotifications();
   const [bookings, setBookings] = useState<any[]>([]);
+  const [walkInOpen, setWalkInOpen] = useState(false);
+  const [walkInKind, setWalkInKind] = useState<"session" | "advance" | "food">("session");
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -66,6 +71,18 @@ export default function AdminBookingsPage() {
    * triggers and pays for the reads once.
    */
   const lastResyncRef = useRef(0);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("new") !== "walk-in") return;
+    const requestedKind = params.get("kind");
+    setWalkInKind(requestedKind === "device" ? "session" : requestedKind === "food" ? "food" : "session");
+    setWalkInOpen(true);
+    params.delete("new");
+    params.delete("kind");
+    const remainingQuery = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${remainingQuery ? `?${remainingQuery}` : ""}`);
+  }, []);
 
   /** The attention tab is a cross-status view, not one of the status filters. */
   const isAttentionTab = activeStatusFilter === "attention";
@@ -806,7 +823,7 @@ export default function AdminBookingsPage() {
             Refresh
           </Button>
           <Button
-            onClick={() => router.push("/admin/bookings/walk-in")}
+            onClick={() => { setWalkInKind("session"); setWalkInOpen(true); }}
             className="bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] font-black uppercase text-xs h-10 px-6"
           >
             <PlusCircle className="h-4 w-4 mr-2 stroke-[3]" />
@@ -1970,6 +1987,12 @@ export default function AdminBookingsPage() {
         onSuccess={() => {
           refreshAll();
         }}
+      />
+      <NewWalkInModal
+        open={walkInOpen}
+        initialKind={walkInKind}
+        onOpenChange={setWalkInOpen}
+        onSuccess={() => refreshAll()}
       />
     </div>
   );
