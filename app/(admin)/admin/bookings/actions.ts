@@ -18,6 +18,7 @@ import {
   resolveActiveMembership
 } from "@/lib/subscriptions/discount";
 import {
+  resolveCheckoutTime,
   MAX_BACKDATED_START_HOURS,
   MAX_PLANNED_SESSION_HOURS,
   PROVISIONAL_SESSION_HOURS,
@@ -37,8 +38,10 @@ import {
 } from "@/lib/reports/revenueWindow";
 import { needsAttention } from "@/lib/bookings/attention";
 import {
+  CUSTOMER_NAME_MIN_CHARS,
   CUSTOMER_SUGGESTION_LIMIT,
   CUSTOMER_SUGGESTION_MIN_DIGITS,
+  nameQuery,
   phoneDigits,
   type CustomerSuggestion
 } from "@/lib/customers/suggestions";
@@ -1599,6 +1602,53 @@ export async function lookupWalkInCustomer(phone: string) {
  * nothing else: enough to tell two matches apart, and no reason for a half-typed
  * prefix to hand back dates of birth and email addresses.
  */
+/**
+ * The same suggestions, found by name instead of by number.
+ *
+ * Staff know regulars by name long before they know their number, and the
+ * customer standing at the counter will say "Sreejith" before they recite ten
+ * digits. Without this the desk either asks for a number it does not need or
+ * types a fresh profile for somebody already in the book - the duplicate the
+ * phone suggestions exist to prevent, arriving through the other door.
+ *
+ * Matches anywhere in the name, not just the front. Half these rows are two
+ * words ("Santu pramanik", "kumar export") and the half a person remembers is
+ * as often the second as the first, so a prefix-only search would answer
+ * "nobody" to a name that is plainly there.
+ */
+export async function searchWalkInCustomersByName(name: string) {
+  await requireStaff();
+
+  try {
+    const query = nameQuery(name);
+
+    // Same floor as the phone search, for the same reason: two letters match a
+    // large arbitrary slice of the phone book, which is worse than no list at
+    // all because the desk would read it.
+    if (query.length < CUSTOMER_NAME_MIN_CHARS) {
+      return { success: true, customers: [] as CustomerSuggestion[] };
+    }
+
+    // `nameQuery` has already taken the wildcards out, so the only thing these
+    // per-cent signs can mean is "anywhere in the name".
+    const { data, error } = await supabaseAdmin
+      .from("customers")
+      .select("id, name, phone")
+      .ilike("name", `%${query}%`)
+      .order("name", { ascending: true })
+      .limit(CUSTOMER_SUGGESTION_LIMIT);
+
+    if (error) throw error;
+
+    return { success: true, customers: (data || []) as CustomerSuggestion[] };
+  } catch (err: any) {
+    console.error("Walk-in customer name suggestion error:", err);
+    // A failed suggestion is not a failed booking, exactly as above: the desk
+    // falls back to the number, which is the path that existed before this did.
+    return { success: false, error: err.message, customers: [] as CustomerSuggestion[] };
+  }
+}
+
 export async function searchWalkInCustomers(phone: string) {
   await requireStaff();
 
@@ -2096,12 +2146,45 @@ export async function setWalkInPlannedEnd(
  * what to expect; what they are billed for is the time between these two
  * timestamps, whether they left early or sat on past it.
  */
-export async function checkOutWalkInSession(bookingId: string) {
+export async function checkOutWalkInSession(
+  bookingId: string,
+  /**
+   * When the customer actually left, on the arena's clock.
+   *
+   * Omitted, the database clock decides exactly as it always did - so the
+   * ordinary checkout is unchanged and this argument is only ever the answer to
+   * "they left earlier than this".
+   *
+   * Sent as a date and a clock rather than an instant on purpose: the browser
+   * would otherwise be converting to UTC with its own idea of the offset, and a
+   * desk on a laptop whose zone is wrong would silently bill the wrong window.
+   * The conversion happens in SQL, against a named zone.
+   */
+  statedEnd?: { date: string; clock: string }
+) {
   await requireStaff();
 
   try {
+    if (statedEnd) {
+      // Checked here as well as in the database, because this is a public
+      // endpoint and `statedEnd` is whatever the caller sent. The database
+      // repeats it; neither copy is the only one.
+      const { data: session } = await supabaseAdmin
+        .from("bookings")
+        .select("checked_in_at")
+        .eq("id", bookingId)
+        .maybeSingle();
+
+      const resolved = resolveCheckoutTime(
+        { date: statedEnd.date, clock: statedEnd.clock, checkedInAt: session?.checked_in_at }
+      );
+      if (!resolved.ok) return { success: false, error: resolved.error };
+    }
+
     const { data, error } = await supabaseAdmin.rpc("checkout_walkin_session", {
-      p_booking_id: bookingId
+      p_booking_id: bookingId,
+      p_completed_date: statedEnd?.date ?? null,
+      p_completed_clock: statedEnd?.clock ?? null
     });
 
     if (error) throw error;

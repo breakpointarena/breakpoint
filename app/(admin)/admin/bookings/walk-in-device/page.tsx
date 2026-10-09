@@ -42,6 +42,7 @@ import {
   CustomerSuggestions,
   useCustomerSuggestions
 } from "@/components/admin/customers/CustomerSuggestions";
+import { CUSTOMER_NAME_MIN_CHARS } from "@/lib/customers/suggestions";
 import { TimeOfDayField } from "@/components/ui/time-of-day-field";
 import {
   formatDateForDB,
@@ -170,6 +171,15 @@ export default function WalkInBookingPage() {
   // Customer details flow states
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerName, setCustomerName] = useState("");
+  /**
+   * The name being searched for, which is not the customer's name.
+   *
+   * `customerName` is what the booking will be filed under; this is only the
+   * half-typed thing the desk is looking somebody up by. Keeping them apart is
+   * what lets an abandoned search be thrown away without touching a name that
+   * has already been loaded or typed.
+   */
+  const [nameSearch, setNameSearch] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
   const [customerDob, setCustomerDob] = useState("");
   /** Set once Continue has been pressed, so empty required fields can speak up too. */
@@ -453,9 +463,29 @@ export default function WalkInBookingPage() {
    * path Verify takes, so a suggestion cannot load less than Verify does.
    */
   const phoneSuggestions = useCustomerSuggestions({
-    phone: customerPhone,
+    query: customerPhone,
     enabled: step === 3 && !showFullRegistrationFields,
     onPick: (suggestion) => {
+      setCustomerPhone(suggestion.phone);
+      loadCustomerProfile(suggestion.phone);
+    }
+  });
+
+  /**
+   * The same matches, found by name.
+   *
+   * Picking one takes its *number* and goes down the same path a picked phone
+   * suggestion does, so what gets loaded cannot depend on which field the desk
+   * happened to use. The search text is dropped on the way through: it has done
+   * its job, and leaving it in the box would put a stale name above a profile
+   * that is already loaded.
+   */
+  const nameSuggestions = useCustomerSuggestions({
+    query: nameSearch,
+    kind: "name",
+    enabled: step === 3 && !showFullRegistrationFields,
+    onPick: (suggestion) => {
+      setNameSearch("");
       setCustomerPhone(suggestion.phone);
       loadCustomerProfile(suggestion.phone);
     }
@@ -1142,7 +1172,40 @@ export default function WalkInBookingPage() {
               <Card className="bg-[var(--surface)] border border-zinc-900 p-6 space-y-6 rounded-2xl shadow-2xl animate-in fade-in duration-200">
                 <div className="border-b border-zinc-900 pb-4 space-y-1">
                   <h3 className="text-lg font-black uppercase text-white tracking-tight">WALK-IN PROFILE IDENTIFICATION</h3>
-                  <p className="text-xs text-secondary-content font-medium">Verify the customer's mobile number to load profiles automatically.</p>
+                  <p className="text-xs text-secondary-content font-medium">Find the customer by name, or verify their mobile number, to load their profile automatically.</p>
+                </div>
+
+                {/*
+                  * Deliberately outside the form below.
+                  *
+                  * Inside it, an Enter with no row highlighted would submit the
+                  * phone lookup - so searching for a name and pressing Enter
+                  * would run a lookup on whatever was in the *other* field.
+                  * Out here Enter has nothing to submit, and the hook handles
+                  * the case where a row is highlighted.
+                  */}
+                <div className="space-y-2">
+                  <Label htmlFor="name-search" className="text-xs font-black text-muted-content uppercase tracking-wider flex items-center gap-1.5">
+                    <User className="h-3.5 w-3.5 text-muted-content" /> Find by name
+                    <span className="text-[10px] font-bold text-zinc-700 normal-case tracking-normal">for customers who have been before</span>
+                  </Label>
+                  <Input
+                    id="name-search"
+                    type="text"
+                    placeholder={`Type ${CUSTOMER_NAME_MIN_CHARS} letters or more`}
+                    value={nameSearch}
+                    onChange={(e) => setNameSearch(e.target.value)}
+                    {...nameSuggestions.inputProps}
+                    className="bg-[var(--background)] border-zinc-900 h-12 px-3 text-sm text-white focus-visible:ring-primary rounded-xl"
+                  />
+
+                  <CustomerSuggestions state={nameSuggestions} typedName={nameSearch} />
+                </div>
+
+                <div className="flex items-center gap-3 select-none">
+                  <span className="h-px flex-1 bg-zinc-900" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-700">or use the number</span>
+                  <span className="h-px flex-1 bg-zinc-900" />
                 </div>
 
                 <form onSubmit={handleCustomerPhoneLookup} className="space-y-4">

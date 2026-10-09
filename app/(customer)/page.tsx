@@ -49,7 +49,7 @@ export default async function LandingPage() {
 
       <HeroCarousel />
       <DevicePage initialDevices={devices} />
-      <FoodMenu initialMenu={menu} />
+      <FoodMenu initialMenu={menu} preview />
       <div className="relative py-12 md:py-16 overflow-hidden bg-black/60 border-y border-zinc-900/40">
         <div
           className="absolute inset-0 z-0 opacity-80"

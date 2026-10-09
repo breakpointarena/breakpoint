@@ -50,3 +50,40 @@ export interface CustomerSuggestion {
 export function phoneDigits(value: string | null | undefined): string {
   return String(value ?? '').replace(/\D/g, '').slice(-10)
 }
+
+/**
+ * Letters before a name is searched for.
+ *
+ * Three, where the phone number above wants four, because the two are not the
+ * same kind of guess. Four digits of a ten-digit number narrows a phone book to
+ * a handful; three letters of a name is already "sree" or "pra" - enough of a
+ * word to mean somebody, and the shortest thing a person at a counter will type
+ * before they expect to see a result.
+ */
+export const CUSTOMER_NAME_MIN_CHARS = 3
+
+/**
+ * A typed name, reduced to something safe to put inside a `LIKE` pattern.
+ *
+ * The phone search above could hand its input straight to the database because
+ * stripping it to digits left nothing a pattern could read. A name cannot do
+ * that - it is free text, and `%` and `_` are wildcards. A desk that typed `%`
+ * would match the entire phone book; `_` would quietly widen every search by one
+ * character.
+ *
+ * They are removed rather than escaped on purpose. Escaping means agreeing with
+ * the driver about the escape character, and PostgREST, supabase-js and SQL do
+ * not obviously agree; removing them needs no such agreement and costs nothing,
+ * because neither character belongs in anybody's name. Apostrophes, hyphens and
+ * full stops are left exactly as they are - O'Brien and Jean-Luc are names, not
+ * wildcards, and they are already parameterised against injection.
+ *
+ * Inner runs of whitespace collapse so that "santu  pramanik" finds the row
+ * stored as "Santu pramanik".
+ */
+export function nameQuery(value: string | null | undefined): string {
+  return String(value ?? '')
+    .replace(/[%_\\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}

@@ -18,6 +18,7 @@ import { BookingDetailModal } from "@/components/admin/bookings/BookingDetailMod
 import { RevealAmount } from "@/components/admin/dashboard/RevealAmount";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { CheckoutModal } from "@/components/admin/bookings/CheckoutModal";
+import { CheckOutSessionDialog, type CheckOutTarget } from "@/components/admin/bookings/CheckOutSessionDialog";
 import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, type BookingFilters } from "./actions";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2, LogIn } from "lucide-react";
@@ -37,6 +38,7 @@ import {
 } from "@/lib/bookings/walkInSession";
 import {
   arenaDate,
+  arenaDateOffset,
   arenaToday,
   formatClockTime12h,
   formatLocalDate,
@@ -128,11 +130,18 @@ export default function AdminBookingsPage() {
   // Initialize payment split when modal opens
   useEffect(() => {
     if (pendingPaymentModal.open && pendingPaymentModal.balanceDue > 0) {
-      // Default to full amount in cash
+      /**
+       * The whole balance on UPI, because that is how nearly everybody pays.
+       *
+       * The figure is prefilled on whichever method is most likely so the desk
+       * can read it, agree, and press the button. Putting it on cash meant the
+       * common case was the one that needed editing - and a split typed under
+       * pressure is where a payment gets recorded against the wrong method.
+       */
       setPaymentSplit({
-        cashAmount: pendingPaymentModal.balanceDue,
+        cashAmount: 0,
         cardAmount: 0,
-        upiAmount: 0
+        upiAmount: pendingPaymentModal.balanceDue
       });
     }
   }, [pendingPaymentModal.open, pendingPaymentModal.balanceDue]);
@@ -175,7 +184,7 @@ export default function AdminBookingsPage() {
     if (dateFrom && next < dateFrom) setDateFrom(next);
   };
 
-  const setQuickDateRange = (preset: "today" | "future" | "7days" | "30days" | "month" | "90days" | "all") => {
+  const setQuickDateRange = (preset: "today" | "yesterday" | "future" | "7days" | "30days" | "month" | "90days" | "all") => {
     const now = new Date();
     // The arena's today, not the browser's. These presets are compared against
     // dates the server derives in Asia/Kolkata, so a staff laptop on any other
@@ -189,6 +198,25 @@ export default function AdminBookingsPage() {
         setDateFrom(todayStr);
         setDateTo(todayStr);
         break;
+      case "yesterday": {
+        /**
+         * The single day before today, on the arena's calendar.
+         *
+         * `arenaDateOffset` rather than a `Date` with a day taken off it: the
+         * others here subtract days from an instant in the *host's* zone, which
+         * is right until a laptop somewhere with daylight saving crosses a
+         * boundary and the subtraction moves by an hour. Near arena midnight an
+         * hour is a different date, and this preset is exactly one date wide.
+         *
+         * Last night's late sessions land here rather than under "Today" -
+         * anything that ran past midnight is filed on the day it started, which
+         * is the day the desk remembers it by.
+         */
+        const yesterday = arenaDateOffset(-1, now);
+        setDateFrom(yesterday);
+        setDateTo(yesterday);
+        break;
+      }
       case "future": {
         // Tomorrow onwards, with no upper bound - a booking three months out
         // still belongs here. Every other preset looks backwards, so a future
@@ -550,20 +578,40 @@ export default function AdminBookingsPage() {
     });
   };
 
+  /** The waiting session whose checkout dialog is open. */
+  const [checkOutTarget, setCheckOutTarget] = useState<CheckOutTarget | null>(null);
+
+  const confirmWalkInCheckOut = (statedEnd?: { date: string; clock: string }) => {
+    const target = checkOutTarget;
+    if (!target) return;
+
+    startTransition(async () => {
+      const result = await checkOutWalkInSession(target.id, statedEnd);
+      if (result.success) {
+        setCheckOutTarget(null);
+        toast.success(`Checked out — ${result.durationLabel} played`, {
+          description: `Billed ₹${Number(result.totalAmount).toFixed(2)}. Settle payment from Checkout & Billing.`
+        });
+        refreshAll();
+      } else {
+        toast.error("Check-out failed", { description: result.error });
+      }
+    });
+  };
+
   const handleCheckOut = async (bookingId: string, bookingNumber: string, booking: any) => {
     // A session has no scheduled end to be early for. Checking out is what fixes
     // the end time and, with it, the price.
     if (booking.billed_on_actual_time) {
-      startTransition(async () => {
-        const result = await checkOutWalkInSession(bookingId);
-        if (result.success) {
-          toast.success(`Checked out — ${result.durationLabel} played`, {
-            description: `Billed ₹${Number(result.totalAmount).toFixed(2)}. Settle payment from Checkout & Billing.`
-          });
-          refreshAll();
-        } else {
-          toast.error("Check-out failed", { description: result.error });
-        }
+      // Ask when they left first. The bill is the window between check-in and
+      // checkout, so the moment of the button press is a price - and the desk
+      // is not always free at the moment the customer walks out.
+      setCheckOutTarget({
+        id: bookingId,
+        booking_number: bookingNumber,
+        customer_name: booking.customer_name,
+        checked_in_at: booking.checked_in_at,
+        deviceLabel: booking.walk_in_device_type_name
       });
       return;
     }
@@ -673,9 +721,11 @@ export default function AdminBookingsPage() {
       if (result.success) {
         // Build payment description
         const methods = [];
+        // Same order as the fields, so the confirmation reads the way the
+        // desk just filled it in.
+        if (paymentSplit.upiAmount > 0) methods.push(`UPI: ₹${paymentSplit.upiAmount}`);
         if (paymentSplit.cashAmount > 0) methods.push(`Cash: ₹${paymentSplit.cashAmount}`);
         if (paymentSplit.cardAmount > 0) methods.push(`Card: ₹${paymentSplit.cardAmount}`);
-        if (paymentSplit.upiAmount > 0) methods.push(`UPI: ₹${paymentSplit.upiAmount}`);
 
         toast.success("Payment marked as paid", {
           description: methods.join(', ')
@@ -892,6 +942,7 @@ export default function AdminBookingsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 md:flex md:flex-wrap gap-2">
             {([
               { id: "today", label: "Today" },
+              { id: "yesterday", label: "Yesterday" },
               { id: "future", label: "Future" },
               { id: "7days", label: "Last 7 Days" },
               { id: "30days", label: "Last 30 Days" },
@@ -1674,6 +1725,23 @@ export default function AdminBookingsPage() {
                 Split Payment Across Methods
               </Label>
 
+              {/* UPI Amount */}
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">📱</span>
+                <div className="flex-1">
+                  <Label className="text-xs text-zinc-400 uppercase">UPI</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={paymentSplit.upiAmount || ''}
+                    onChange={(e) => setPaymentSplit({ ...paymentSplit, upiAmount: parseFloat(e.target.value) || 0 })}
+                    className="bg-zinc-800 border-zinc-700 text-white h-9 text-sm"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
               {/* Cash Amount */}
               <div className="flex items-center gap-2">
                 <span className="text-2xl">💵</span>
@@ -1708,23 +1776,6 @@ export default function AdminBookingsPage() {
                 </div>
               </div>
 
-              {/* UPI Amount */}
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">📱</span>
-                <div className="flex-1">
-                  <Label className="text-xs text-zinc-400 uppercase">UPI</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={paymentSplit.upiAmount || ''}
-                    onChange={(e) => setPaymentSplit({ ...paymentSplit, upiAmount: parseFloat(e.target.value) || 0 })}
-                    className="bg-zinc-800 border-zinc-700 text-white h-9 text-sm"
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
-
               {/* Total Validator */}
               <div className="pt-2 border-t border-zinc-800">
                 <div className="flex justify-between items-center">
@@ -1746,6 +1797,15 @@ export default function AdminBookingsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
+                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue })}
+                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                >
+                  All UPI
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
                   onClick={() => setPaymentSplit({ cashAmount: pendingPaymentModal.balanceDue, cardAmount: 0, upiAmount: 0 })}
                   className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
                 >
@@ -1759,15 +1819,6 @@ export default function AdminBookingsPage() {
                   className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
                 >
                   All Card
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue })}
-                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
-                >
-                  All UPI
                 </Button>
               </div>
             </div>
@@ -2002,6 +2053,15 @@ export default function AdminBookingsPage() {
         onSuccess={() => {
           refreshAll();
         }}
+      />
+
+      {/* Close a running session at the time the customer actually left. */}
+      <CheckOutSessionDialog
+        open={checkOutTarget !== null}
+        onOpenChange={(next) => { if (!next) setCheckOutTarget(null); }}
+        loading={isPending}
+        target={checkOutTarget}
+        onConfirm={confirmWalkInCheckOut}
       />
     </div>
   );

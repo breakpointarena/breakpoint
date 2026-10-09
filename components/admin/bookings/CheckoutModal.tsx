@@ -23,7 +23,15 @@ export function CheckoutModal({ bookingId, isOpen, onClose, onSuccess }: Checkou
   const [billing, setBilling] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'upi'>('cash');
+  /**
+   * UPI first, because that is how nearly everybody pays.
+   *
+   * Matches the order and the default on the pending-payment dialog. Two
+   * payment screens that disagree about which method is likeliest is how a
+   * payment ends up recorded against the wrong one - the desk learns the shape
+   * of one of them and taps through the other on muscle memory.
+   */
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'upi'>('upi');
 
   useEffect(() => {
     if (isOpen && bookingId) {
@@ -299,14 +307,14 @@ export function CheckoutModal({ bookingId, isOpen, onClose, onSuccess }: Checkou
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="bg-zinc-900 border-zinc-700">
+                        <SelectItem value="upi" className="text-white hover:bg-zinc-800">
+                          📱 UPI
+                        </SelectItem>
                         <SelectItem value="cash" className="text-white hover:bg-zinc-800">
                           💵 Cash
                         </SelectItem>
                         <SelectItem value="card" className="text-white hover:bg-zinc-800">
                           💳 Card
-                        </SelectItem>
-                        <SelectItem value="upi" className="text-white hover:bg-zinc-800">
-                          📱 UPI
                         </SelectItem>
                       </SelectContent>
                     </Select>

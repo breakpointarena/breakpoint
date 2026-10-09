@@ -14,6 +14,7 @@ import { BookingStatusBadge } from "./BookingStatusBadge";
 import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
+import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
 import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount } from "@/app/(admin)/admin/bookings/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { Label } from "@/components/ui/label";
@@ -65,6 +66,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [booking, setBooking] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [checkOutOpen, setCheckOutOpen] = useState(false);
   const [addFoodModalOpen, setAddFoodModalOpen] = useState(false);
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [selectedFoodItems, setSelectedFoodItems] = useState<Record<string, number>>({});
@@ -228,11 +230,24 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setActionLoading(false);
   };
 
-  const handleSessionCheckOut = async () => {
+  /**
+   * Ask when the customer left before closing the session.
+   *
+   * The bill is the window between check-in and checkout, so the moment of the
+   * button press is a price. Confirming without touching the field keeps the
+   * old behaviour exactly: the database clock decides.
+   */
+  const handleSessionCheckOut = () => {
+    if (!bookingId) return;
+    setCheckOutOpen(true);
+  };
+
+  const confirmSessionCheckOut = async (statedEnd?: { date: string; clock: string }) => {
     if (!bookingId) return;
     setActionLoading(true);
-    const result = await checkOutWalkInSession(bookingId);
+    const result = await checkOutWalkInSession(bookingId, statedEnd);
     if (result.success) {
+      setCheckOutOpen(false);
       toast.success(`Checked out — ${result.durationLabel} played`, {
         description: `Billed ₹${Number(result.totalAmount).toFixed(2)} for the time actually played.`
       });
@@ -1060,15 +1075,23 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
           }
         }
       }}>
-        <DialogContent className="bg-[var(--surface)] border-[#27272a] text-white max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
+        {/*
+          * Header, search/filter and the Add Items footer stay put; only the
+          * item list scrolls. The menu runs to dozens of rows across three
+          * categories, and with the whole dialog as one scroll region the
+          * button that actually adds the order was the thing pushed off the
+          * bottom of the screen - reachable, but only after scrolling past
+          * everything it acts on.
+          */}
+        <DialogContent className="bg-[var(--surface)] border-[#27272a] text-white max-w-2xl max-h-[90vh] p-0 overflow-hidden flex flex-col">
+          <DialogHeader className="p-6 pb-4 flex-shrink-0">
             <DialogTitle className="text-xl font-black uppercase tracking-tight">
               Add Food & Beverages
             </DialogTitle>
           </DialogHeader>
 
           {/* Search and Filter Controls */}
-          <div className="space-y-3 mt-4 pb-4 border-b border-[#27272a]">
+          <div className="space-y-3 px-6 pb-4 border-b border-[#27272a] flex-shrink-0">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-content" />
               <Input
@@ -1098,7 +1121,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
             </div>
           </div>
 
-          <div className="space-y-4 mt-4">
+          <div className="flex-1 overflow-y-auto px-6">
+          <div className="space-y-4 py-4">
             {["Snacks", "Drinks", "Meals"].map((category) => {
               // Filter by selected category and search query
               const categoryItems = menuItems.filter((item) => {
@@ -1190,8 +1214,12 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 </p>
               )}
           </div>
+          </div>
 
-          <div className="flex justify-end gap-2 pt-4 border-t border-[#27272a] mt-4">
+          {/* Footer stays fixed at the bottom of the panel, not the bottom of
+              the item list - visible the instant a quantity is picked, on any
+              screen, without scrolling past the menu to reach it. */}
+          <div className="flex justify-end gap-2 px-6 py-4 border-t border-[#27272a] flex-shrink-0">
             <Button
               variant="ghost"
               onClick={() => {
@@ -1256,6 +1284,23 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         </AlertDialogContent>
       </AlertDialog>
 
+      <CheckOutSessionDialog
+        open={checkOutOpen}
+        onOpenChange={setCheckOutOpen}
+        loading={actionLoading}
+        target={
+          booking
+            ? {
+                id: booking.id,
+                booking_number: booking.booking_number,
+                customer_name: booking.customer_name,
+                checked_in_at: booking.checked_in_at,
+                deviceLabel: booking.walk_in_device_type_name,
+              }
+            : null
+        }
+        onConfirm={confirmSessionCheckOut}
+      />
     </>
   );
 }

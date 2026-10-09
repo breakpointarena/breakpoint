@@ -2,12 +2,48 @@
 
 import { useEffect, useId, useState } from 'react'
 import { ShieldCheck } from 'lucide-react'
-import { searchWalkInCustomers } from '@/app/(admin)/admin/bookings/actions'
 import {
+  searchWalkInCustomers,
+  searchWalkInCustomersByName,
+} from '@/app/(admin)/admin/bookings/actions'
+import {
+  CUSTOMER_NAME_MIN_CHARS,
   CUSTOMER_SUGGESTION_MIN_DIGITS,
+  nameQuery,
   phoneDigits,
   type CustomerSuggestion,
 } from '@/lib/customers/suggestions'
+
+/**
+ * Which of the two things the desk is typing.
+ *
+ * The behaviour below is identical either way - debounce, arrows, the panel,
+ * what picking a row does - and only the question changes: how much has to be
+ * typed before it is worth asking, how the text is cleaned, and which lookup
+ * answers it. So the two live as one hook with this to tell them apart, rather
+ * than as two that would drift.
+ */
+export type CustomerSearchKind = 'phone' | 'name'
+
+const SEARCH: Record<
+  CustomerSearchKind,
+  {
+    minLength: number
+    normalise: (value: string) => string
+    lookup: (query: string) => Promise<{ customers?: CustomerSuggestion[] | null }>
+  }
+> = {
+  phone: {
+    minLength: CUSTOMER_SUGGESTION_MIN_DIGITS,
+    normalise: phoneDigits,
+    lookup: searchWalkInCustomers,
+  },
+  name: {
+    minLength: CUSTOMER_NAME_MIN_CHARS,
+    normalise: nameQuery,
+    lookup: searchWalkInCustomersByName,
+  },
+}
 
 /**
  * Existing customers, offered while the desk types a phone number.
@@ -47,11 +83,14 @@ export interface CustomerSuggestionsState {
 }
 
 export function useCustomerSuggestions({
-  phone,
+  query,
+  kind = 'phone',
   enabled = true,
   onPick,
 }: {
-  phone: string
+  /** Whatever is in the field: digits for a phone, free text for a name. */
+  query: string
+  kind?: CustomerSearchKind
   /** False while another step owns the screen, e.g. the registration fields. */
   enabled?: boolean
   onPick: (suggestion: CustomerSuggestion) => void
@@ -76,8 +115,9 @@ export function useCustomerSuggestions({
   useEffect(() => {
     if (!enabled) return
 
-    const digits = phoneDigits(phone)
-    if (digits.length < CUSTOMER_SUGGESTION_MIN_DIGITS) {
+    const search = SEARCH[kind]
+    const cleaned = search.normalise(query)
+    if (cleaned.length < search.minLength) {
       setSuggestions([])
       setHighlighted(-1)
       return
@@ -85,7 +125,7 @@ export function useCustomerSuggestions({
 
     let stale = false
     const timer = setTimeout(async () => {
-      const result = await searchWalkInCustomers(digits)
+      const result = await search.lookup(cleaned)
       if (stale) return
 
       setSuggestions(result.customers || [])
@@ -97,7 +137,7 @@ export function useCustomerSuggestions({
       stale = true
       clearTimeout(timer)
     }
-  }, [phone, enabled])
+  }, [query, kind, enabled])
 
   const pick = (suggestion: CustomerSuggestion) => {
     setSuggestions([])
@@ -166,6 +206,28 @@ export function useCustomerSuggestions({
 }
 
 /**
+ * `name` with the searched-for letters in primary, the rest as it was.
+ *
+ * Case-insensitive because the search is: "sree" has to light up the "Sree" in
+ * "Sreejith R", or the emphasis would land on the rows that happen to be typed
+ * the way the desk types.
+ */
+function highlight(name: string, typed: string): React.ReactNode {
+  if (!typed) return name
+
+  const at = name.toLowerCase().indexOf(typed.toLowerCase())
+  if (at < 0) return name
+
+  return (
+    <>
+      {name.slice(0, at)}
+      <span className="text-primary">{name.slice(at, at + typed.length)}</span>
+      {name.slice(at + typed.length)}
+    </>
+  )
+}
+
+/**
  * The matches, as a panel under the field rather than a dropdown over it.
  *
  * Floating, the list sat in the gap between the number and the button next to it
@@ -176,15 +238,19 @@ export function useCustomerSuggestions({
  */
 export function CustomerSuggestions({
   state,
-  typedPhone,
+  typedPhone = '',
+  typedName = '',
 }: {
   state: CustomerSuggestionsState
-  /** What is in the field, so the digits that matched can be dimmed. */
-  typedPhone: string
+  /** What is in the phone field, so the digits that matched can be dimmed. */
+  typedPhone?: string
+  /** What is in the name field, so the letters that matched can be picked out. */
+  typedName?: string
 }) {
   if (!state.open || state.suggestions.length === 0) return null
 
   const matched = phoneDigits(typedPhone).length
+  const typed = nameQuery(typedName)
 
   return (
     <div className="space-y-2 rounded-xl border border-primary/30 bg-[var(--background)] p-3 animate-in fade-in slide-in-from-top-1 duration-150">
@@ -218,7 +284,10 @@ export function CustomerSuggestions({
             >
               <span className="min-w-0">
                 <span className="block truncate text-sm font-black text-white">
-                  {suggestion.name || 'Unnamed customer'}
+                  {/* The letters that matched, picked out of the name. Six
+                      similar names under a three-letter search are hard to tell
+                      apart at a glance otherwise. */}
+                  {highlight(suggestion.name || 'Unnamed customer', typed)}
                 </span>
                 <span className="mt-0.5 block font-mono text-xs tracking-wider text-secondary-content">
                   {/* The digits already typed are the ones that matched; what
