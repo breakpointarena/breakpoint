@@ -11,6 +11,7 @@ import { decideCheckout, type CheckoutDecision } from "@/lib/bookings/checkoutGu
 import { extraPlayersCharge, perExtraPlayerCharge } from "@/lib/payments/money";
 import { settlementStatus } from "@/lib/payments/paymentStatus";
 import { roundToTwo } from "@/lib/currency";
+import { calculateSharedPlayShares } from "@/lib/bookings/sharedPlay";
 import { resolveHappyHour } from "@/lib/payments/happyHour";
 import { formatDbTime } from "@/lib/utils/timeSlots";
 import {
@@ -394,6 +395,18 @@ export async function getBookingDetails(bookingId: string) {
       .single();
 
     if (error) throw error;
+
+    if (data.shared_play_enabled || data.status === "checked_in") {
+      const { data: participants, error: participantError } = await supabaseAdmin
+        .from("shared_play_participants")
+        .select("id, name, billed_amount, shared_play_periods(id, started_at, ended_at, amount)")
+        .eq("booking_id", bookingId)
+        .order("created_at", { ascending: true });
+      if (participantError) throw participantError;
+      data.shared_play_participants = participants || [];
+    } else {
+      data.shared_play_participants = [];
+    }
 
     // Also fetch line items to check what's unpaid
     const { data: lineItems, error: lineItemsError } = await supabaseAdmin
@@ -794,10 +807,168 @@ export async function checkOutBooking(bookingId: string) {
       return { success: false, error: "This booking changed while you were working on it. Refresh and try again." };
     }
 
+    try {
+      await saveSharedPlayShares(bookingId, new Date(data.completed_at || now));
+    } catch (shareError) {
+      // Checkout already committed. Keep the successful checkout response intact
+      // and leave the participant breakdown available for staff to refresh.
+      console.error("Could not save shared-play split after checkout:", shareError);
+    }
+
     return { success: true, booking: data };
   } catch (err: any) {
     console.error("Check-out booking error:", err);
     return { success: false, error: err.message };
+  }
+}
+
+/** Save participant names and timestamp the people currently at the board. */
+export async function setSharedPlayParticipants(
+  bookingId: string,
+  enabled: boolean,
+  rosterNames: string[],
+  activeNames: string[]
+) {
+  await requireStaff();
+  try {
+    const normalize = (names: string[]) => [...new Map(
+      names.map((name) => [name.trim().toLocaleLowerCase(), name.trim()])
+    ).values()].filter(Boolean);
+    const roster = normalize(rosterNames);
+    const active = normalize(activeNames);
+    const { error } = await supabaseAdmin.rpc("set_shared_play_participants", {
+      p_booking_id: bookingId,
+      p_enabled: enabled,
+      p_roster_names: roster,
+      p_active_names: active
+    });
+    if (error) throw error;
+    return { success: true };
+  } catch (err: any) {
+    console.error("Update shared play participants error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/** Apply interval extra-player charges and save the per-person split at checkout. */
+async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
+  const { data: booking, error: bookingError } = await supabaseAdmin
+    .from("bookings")
+    .select("shared_play_enabled, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, total_amount, amount_paid, payment_status, booking_device_slots(id, hourly_rate, included_players, extra_player_charge, duration_hours, slot_total, extra_players_total)")
+    .eq("id", bookingId)
+    .maybeSingle();
+  if (bookingError) throw bookingError;
+  if (!booking?.shared_play_enabled) return;
+
+  const slot = booking.booking_device_slots?.[0];
+  if (!slot) return;
+  const { data: participants, error: participantsError } = await supabaseAdmin
+    .from("shared_play_participants")
+    .select("id")
+    .eq("booking_id", bookingId);
+  if (participantsError) throw participantsError;
+  const participantIds = (participants || []).map((row: any) => row.id);
+  if (participantIds.length === 0) return;
+
+  const { data: periods, error: periodsError } = await supabaseAdmin
+    .from("shared_play_periods")
+    .select("id, participant_id, started_at, ended_at")
+    .in("participant_id", participantIds);
+  if (periodsError) throw periodsError;
+
+  const calculation = calculateSharedPlayShares(
+    periods || [],
+    Number(slot.hourly_rate || 0),
+    Number(slot.extra_player_charge || 0),
+    Number(slot.included_players || 1),
+    Number(slot.slot_total || 0),
+    endedAt
+  );
+
+  const { error: slotUpdateError } = await supabaseAdmin
+    .from("booking_device_slots")
+    .update({ extra_players_total: calculation.extraPlayersTotal })
+    .eq("id", slot.id);
+  if (slotUpdateError) throw slotUpdateError;
+
+  const deviceSubtotal = roundToTwo(
+    Number(booking.device_subtotal || 0) +
+    calculation.extraPlayersTotal - Number(slot.extra_players_total || 0)
+  );
+  const totalDiscount = Number(booking.subscription_discount || 0) +
+    Number(booking.promo_discount || 0) + Number(booking.happy_hour_discount || 0);
+  const totalAmount = Math.max(0, roundToTwo(
+    deviceSubtotal + Number(booking.food_subtotal || 0) - totalDiscount
+  ));
+  const { error: bookingUpdateError } = await supabaseAdmin
+    .from("bookings")
+    .update({
+      device_subtotal: deviceSubtotal,
+      total_amount: totalAmount,
+      payment_status: settlementStatus({
+        amountPaid: Number(booking.amount_paid || 0),
+        total: totalAmount
+      }),
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", bookingId);
+  if (bookingUpdateError) throw bookingUpdateError;
+
+  const { data: extraLines, error: extraLinesError } = await supabaseAdmin
+    .from("booking_line_items")
+    .select("id, line_total, is_paid")
+    .eq("booking_id", bookingId)
+    .eq("item_type", "extra_players")
+    .order("display_order", { ascending: true });
+  if (extraLinesError) throw extraLinesError;
+  if (calculation.extraPlayersTotal > 0) {
+    const lineItem = {
+      description: "Shared play extra-player charges",
+      quantity: 1,
+      unit_price: calculation.extraPlayersTotal,
+      line_total: calculation.extraPlayersTotal,
+      is_paid: false
+    };
+    if (extraLines?.length) {
+      const originalLine = extraLines[0] as any;
+      const { error } = await supabaseAdmin.from("booking_line_items").update({
+        ...lineItem,
+        is_paid: Number(originalLine.line_total) === calculation.extraPlayersTotal
+          ? originalLine.is_paid
+          : false
+      }).eq("id", originalLine.id);
+      if (error) throw error;
+      if (extraLines.length > 1) {
+        const { error: deleteError } = await supabaseAdmin
+          .from("booking_line_items")
+          .delete()
+          .in("id", extraLines.slice(1).map((row: any) => row.id));
+        if (deleteError) throw deleteError;
+      }
+    } else {
+      const { error } = await supabaseAdmin.from("booking_line_items").insert({
+        booking_id: bookingId,
+        item_type: "extra_players",
+        ...lineItem,
+        added_by: "admin",
+        display_order: 2
+      });
+      if (error) throw error;
+    }
+  } else if (extraLines?.length) {
+    const { error } = await supabaseAdmin
+      .from("booking_line_items")
+      .delete()
+      .in("id", extraLines.map((row: any) => row.id));
+    if (error) throw error;
+  }
+
+  for (const share of calculation.shares) {
+    const { error } = await supabaseAdmin
+      .from("shared_play_participants")
+      .update({ billed_amount: share.amount })
+      .eq("id", share.participantId);
+    if (error) throw error;
   }
 }
 

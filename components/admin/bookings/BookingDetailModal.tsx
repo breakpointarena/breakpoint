@@ -15,7 +15,7 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants } from "@/app/(admin)/admin/bookings/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { Label } from "@/components/ui/label";
 import { QRCodeSVG } from "qrcode.react";
@@ -39,6 +39,7 @@ import { formatDbTime, formatDbTimeRange } from "@/lib/utils/timeSlots";
 import { arenaClockTime, formatClockTime12h } from "@/lib/utils/dates";
 import { TimeOfDayField } from "@/components/ui/time-of-day-field";
 import { resolvePlannedSession } from "@/lib/bookings/walkInSession";
+import { calculateSharedPlayShares } from "@/lib/bookings/sharedPlay";
 
 interface BookingDetailModalProps {
   bookingId: string | null;
@@ -88,6 +89,11 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   /** 24-hour `HH:MM` being typed. Empty means "take the plan off". */
   const [plannedEndDraft, setPlannedEndDraft] = useState("");
   const [savingPlannedEnd, setSavingPlannedEnd] = useState(false);
+  const [sharedRoster, setSharedRoster] = useState<string[]>([]);
+  const [activePlayers, setActivePlayers] = useState<string[]>([]);
+  const [newParticipantName, setNewParticipantName] = useState("");
+  const [savingSharedPlay, setSavingSharedPlay] = useState(false);
+  const [sharedPlayNow, setSharedPlayNow] = useState(() => new Date());
 
   /**
    * The draft, read the way the server will read it: forwards from now, since a
@@ -143,12 +149,23 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
   }, [open, bookingId, openFoodModalDirectly]);
 
+  useEffect(() => {
+    if (!open || !booking?.shared_play_enabled || booking.status !== "checked_in") return;
+    const timer = window.setInterval(() => setSharedPlayNow(new Date()), 10_000);
+    return () => window.clearInterval(timer);
+  }, [open, booking?.shared_play_enabled, booking?.status]);
+
   const loadBookingDetails = async () => {
     if (!bookingId) return;
     setLoading(true);
     const result = await getBookingDetails(bookingId);
     if (result.success) {
       setBooking(result.booking);
+      const participants = result.booking.shared_play_participants || [];
+      setSharedRoster(participants.map((participant: any) => participant.name));
+      setActivePlayers(participants
+        .filter((participant: any) => participant.shared_play_periods?.some((period: any) => !period.ended_at))
+        .map((participant: any) => participant.name));
     } else {
       toast.error("Failed to load booking details", { description: result.error });
     }
@@ -349,7 +366,45 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setUpdatingPlayerCount(false);
   };
 
+  const handleSaveSharedPlay = async (enabled: boolean, rosterOverride?: string[], activeOverride?: string[]) => {
+    if (!bookingId) return;
+    setSavingSharedPlay(true);
+    const result = await setSharedPlayParticipants(
+      bookingId,
+      enabled,
+      rosterOverride ?? sharedRoster,
+      activeOverride ?? activePlayers
+    );
+    setSavingSharedPlay(false);
+    if (!result.success) {
+      toast.error("Could not update shared play", { description: result.error });
+      return;
+    }
+    toast.success(enabled ? "Shared play updated" : "Standard play selected");
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+
   const deviceSlot = booking?.booking_device_slots?.[0];
+  const sharedParticipantShares = useMemo(() => {
+    if (!booking?.shared_play_enabled || !deviceSlot) return new Map<string, number>();
+    const periods = (booking.shared_play_participants || []).flatMap((participant: any) =>
+      (participant.shared_play_periods || []).map((period: any) => ({
+        id: period.id,
+        participant_id: participant.id,
+        started_at: period.started_at,
+        ended_at: period.ended_at,
+      }))
+    );
+    return new Map(calculateSharedPlayShares(
+      periods,
+      Number(deviceSlot.hourly_rate || 0),
+      Number(deviceSlot.extra_player_charge || 0),
+      Number(deviceSlot.included_players || 1),
+      booking.status === "completed" ? Number(deviceSlot.slot_total || 0) : null,
+      booking.status === "completed" && booking.completed_at ? new Date(booking.completed_at) : sharedPlayNow,
+    ).shares.map((share) => [share.participantId, share.amount]));
+  }, [booking?.shared_play_enabled, booking?.shared_play_participants, booking?.status, booking?.completed_at, deviceSlot, sharedPlayNow]);
 
   // The detail panel itself, wrapped either in a Dialog or in plain page markup
   // further down. Kept as one expression so both modes render exactly the same
@@ -505,7 +560,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                        * session - so there is nothing to recompute here.
                        */
                       const extraPlayersCharge = Number(slot.extra_players_total || 0);
-                      const canEdit = canEditBilling;
+                      const canEdit = canEditBilling && !booking.shared_play_enabled;
 
                       return (
                         <div key={slot.id} className="bg-[var(--surface)] border border-[#27272a] rounded-lg p-4 space-y-3">
@@ -579,6 +634,113 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       );
                     })}
                   </div>
+                </Card>
+              )}
+
+              {(booking.status === "checked_in" || (booking.status === "completed" && booking.shared_play_enabled)) && booking.billed_on_actual_time !== true && booking.booking_device_slots?.length === 1 && (
+                <Card className="bg-[var(--background)] border-[#27272a] p-5 space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-black text-white uppercase tracking-wide">Play mode</h3>
+                      <p className="text-xs text-secondary-content mt-1">Choose Shared play to track each person’s time at the board.</p>
+                    </div>
+                    {booking.status === "checked_in" ? (
+                      <select
+                        aria-label="Play mode"
+                        value={booking.shared_play_enabled ? "shared" : "standard"}
+                        onChange={(event) => {
+                          if (event.target.value !== "shared") return;
+                          const initialRoster = sharedRoster.length > 0
+                            ? sharedRoster
+                            : [booking.customer_name || "Player 1"];
+                          const initialActive = activePlayers.length > 0
+                            ? activePlayers
+                            : initialRoster;
+                          setSharedRoster(initialRoster);
+                          setActivePlayers(initialActive);
+                          handleSaveSharedPlay(true, initialRoster, initialActive);
+                        }}
+                        className="h-10 rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm font-bold text-white"
+                      >
+                        <option value="standard">Standard play</option>
+                        <option value="shared">Shared play</option>
+                      </select>
+                    ) : (
+                      <span className="rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 py-2 text-sm font-bold text-white">Shared play</span>
+                    )}
+                  </div>
+
+                  {booking.shared_play_enabled && (
+                    <div className="space-y-3 border-t border-[#27272a] pt-4">
+                      <p className="text-xs text-secondary-content">Check the people playing now. Unchecked people are sitting out. Press Update players to record the time boundary.</p>
+                      <p className="text-xs font-bold text-primary">
+                        {activePlayers.length} playing · Board rate ₹{(Number(deviceSlot?.hourly_rate || 0) + Math.max(0, activePlayers.length - Number(deviceSlot?.included_players || 1)) * Number(deviceSlot?.extra_player_charge || 0)).toLocaleString("en-IN")}/hour
+                      </p>
+                      <div className="space-y-2">
+                        {sharedRoster.map((name) => {
+                          const participant = booking.shared_play_participants?.find((row: any) => row.name.toLowerCase() === name.toLowerCase());
+                          return (
+                            <label key={name} className="flex items-center justify-between rounded-md border border-[#27272a] bg-[var(--surface)] px-3 py-2">
+                              <span className="flex items-center gap-3 text-sm font-semibold text-white">
+                                <input
+                                  type="checkbox"
+                                  disabled={booking.status !== "checked_in"}
+                                  checked={activePlayers.some((active) => active.toLowerCase() === name.toLowerCase())}
+                                  onChange={(event) => setActivePlayers((current) => event.target.checked
+                                    ? [...current.filter((entry) => entry.toLowerCase() !== name.toLowerCase()), name]
+                                    : current.filter((entry) => entry.toLowerCase() !== name.toLowerCase()))}
+                                  className="h-4 w-4 accent-[var(--primary)]"
+                                />
+                                {name}
+                              </span>
+                              {booking.shared_play_enabled && <span className="text-xs font-bold text-primary">₹{Number(booking.status === "completed" ? participant?.billed_amount : sharedParticipantShares.get(participant?.id) || 0).toFixed(2)}</span>}
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {booking.status === "checked_in" && <div className="flex flex-col gap-2 sm:flex-row">
+                        <Input
+                          value={newParticipantName}
+                          onChange={(event) => setNewParticipantName(event.target.value)}
+                          placeholder="Add participant name"
+                          className="border-[#3f3f46] bg-[var(--surface)] text-white"
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter") return;
+                            event.preventDefault();
+                            const name = newParticipantName.trim();
+                            if (!name || sharedRoster.some((entry) => entry.toLowerCase() === name.toLowerCase())) return;
+                            setSharedRoster((current) => [...current, name]);
+                            setActivePlayers((current) => [...current, name]);
+                            setNewParticipantName("");
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={!newParticipantName.trim() || sharedRoster.some((entry) => entry.toLowerCase() === newParticipantName.trim().toLowerCase())}
+                          onClick={() => {
+                            const name = newParticipantName.trim();
+                            if (!name) return;
+                            setSharedRoster((current) => [...current, name]);
+                            setActivePlayers((current) => [...current, name]);
+                            setNewParticipantName("");
+                          }}
+                          className="border-[#3f3f46] text-white"
+                        >Add</Button>
+                        <Button type="button" onClick={() => handleSaveSharedPlay(true)} disabled={savingSharedPlay || activePlayers.length === 0} className="font-bold">
+                          {savingSharedPlay ? "Saving…" : "Update players"}
+                        </Button>
+                      </div>}
+                      {booking.status === "checked_in" && (
+                        <p className="text-right text-[11px] text-muted-content">Live split estimate, updates every 10 seconds</p>
+                      )}
+                      {booking.status === "completed" && (
+                        <div className="rounded-md bg-[var(--surface)] px-3 py-2 text-xs text-secondary-content">
+                          Board rate is split by time: up to four playing share the hourly rate; each active player above four adds ₹80/hour.
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </Card>
               )}
 
