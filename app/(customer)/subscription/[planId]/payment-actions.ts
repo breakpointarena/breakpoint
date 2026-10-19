@@ -37,7 +37,9 @@ export interface CreateSubscriptionOrderResult {
   amount?: number
   summary?: {
     planName: string
+    planType: 'membership' | 'hour_pack'
     durationMonths: number
+    hoursIncluded: number | null
     discountPercentage: number
     totalAmount: number
   }
@@ -70,7 +72,9 @@ export async function createSubscriptionPaymentOrder(
      * that cancels the one already paid for is not a purchase anybody meant to
      * make, so it is refused here and the customer is told what they have.
      */
-    const existing = await activeMembershipFor(auth.phone)
+    const existing = quote.planType === 'membership'
+      ? await activeMembershipFor(auth.phone)
+      : null
     if (existing) {
       return {
         success: false,
@@ -111,7 +115,9 @@ export async function createSubscriptionPaymentOrder(
       amount: order.amount,
       summary: {
         planName: quote.planName,
+        planType: quote.planType,
         durationMonths: quote.durationMonths,
+        hoursIncluded: quote.hoursIncluded,
         discountPercentage: quote.discountPercentage,
         totalAmount: quote.totalAmount,
       },

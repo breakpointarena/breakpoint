@@ -24,6 +24,11 @@ export interface PublicSubscriptionPlan {
   price: number
   duration_months: number
   discount_percentage: number
+  plan_type: 'membership' | 'hour_pack'
+  device_type_id: string | null
+  device_type_name: string | null
+  hours_included: number | null
+  standard_value: number | null
   /**
    * Always true - only active plans are returned. Carried anyway because the
    * pricing card and comparison table are typed against the full admin row, and
@@ -40,7 +45,7 @@ export async function getPublicSubscriptionPlans(): Promise<{
   try {
     const { data, error } = await supabaseAdmin
       .from('subscription_plans')
-      .select('id, name, description, price, duration_months, discount_percentage')
+      .select('id, name, description, price, duration_months, discount_percentage, plan_type, device_type_id, device_type:device_types(display_name), hours_included, standard_value')
       // A retired plan must not be offered. The purchase flow refuses one anyway
       // (`quoteSubscription` checks `is_active`), but a plan nobody can buy has
       // no business being on the page that sells them.
@@ -51,13 +56,20 @@ export async function getPublicSubscriptionPlans(): Promise<{
 
     return {
       success: true,
-      data: (data || []).map((plan: any) => ({
+      data: (data || []).filter((plan: any) =>
+        plan.plan_type !== 'hour_pack' || plan.device_type_id != null
+      ).map((plan: any) => ({
         id: plan.id,
         name: plan.name,
         description: plan.description ?? null,
         price: Number(plan.price ?? 0),
         duration_months: Number(plan.duration_months ?? 1),
         discount_percentage: Number(plan.discount_percentage ?? 0),
+        plan_type: plan.plan_type === 'hour_pack' ? 'hour_pack' : 'membership',
+        device_type_id: plan.device_type_id ?? null,
+        device_type_name: plan.device_type?.display_name ?? null,
+        hours_included: plan.hours_included == null ? null : Number(plan.hours_included),
+        standard_value: plan.standard_value == null ? null : Number(plan.standard_value),
         is_active: true as const,
       })),
     }
@@ -92,13 +104,16 @@ export async function getPublicSubscriptionPlan(id: string): Promise<{
 
     const { data, error } = await supabaseAdmin
       .from('subscription_plans')
-      .select('id, name, description, price, duration_months, discount_percentage')
+      .select('id, name, description, price, duration_months, discount_percentage, plan_type, device_type_id, device_type:device_types(display_name), hours_included, standard_value')
       .eq('id', id)
       .eq('is_active', true)
       .maybeSingle()
 
     if (error) throw new Error(error.message)
     if (!data) return { success: false, data: null, error: 'That plan is no longer available.' }
+    if (data.plan_type === 'hour_pack' && !data.device_type_id) {
+      return { success: false, data: null, error: 'That uncategorized hour pack is no longer on sale.' }
+    }
 
     return {
       success: true,
@@ -109,6 +124,11 @@ export async function getPublicSubscriptionPlan(id: string): Promise<{
         price: Number(data.price ?? 0),
         duration_months: Number(data.duration_months ?? 1),
         discount_percentage: Number(data.discount_percentage ?? 0),
+        plan_type: data.plan_type === 'hour_pack' ? 'hour_pack' : 'membership',
+        device_type_id: data.device_type_id ?? null,
+        device_type_name: (data as any).device_type?.display_name ?? null,
+        hours_included: data.hours_included == null ? null : Number(data.hours_included),
+        standard_value: data.standard_value == null ? null : Number(data.standard_value),
         is_active: true as const,
       },
     }

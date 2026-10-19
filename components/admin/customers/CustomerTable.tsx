@@ -2,6 +2,8 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { CustomerRow } from "@/lib/types/customers";
+import { AddCustomerSubscriptionModal } from "@/components/admin/customers/AddCustomerSubscriptionModal";
+import { RemoveCustomerHourPackButton } from "@/components/admin/customers/RemoveCustomerHourPackButton";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -26,12 +28,13 @@ import { toast } from "sonner";
 
 interface CustomerTableProps {
   customers: CustomerRow[];
+  onSubscriptionAssigned: () => Promise<void>;
 }
 
 type SortField = "name" | "phone" | "email" | "created_at" | "date_of_birth";
 type SortOrder = "asc" | "desc" | null;
 
-export function CustomerTable({ customers }: CustomerTableProps) {
+export function CustomerTable({ customers, onSubscriptionAssigned }: CustomerTableProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortField, setSortField] = useState<SortField | null>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>(null);
@@ -204,44 +207,26 @@ export function CustomerTable({ customers }: CustomerTableProps) {
           <table className="w-full text-left border-collapse text-sm table-fixed">
             <thead>
               <tr className="border-b border-zinc-900 bg-[var(--background)]/20 text-label-enhanced select-none">
-                <th className="p-4 w-[17%]">
+                <th className="p-4 w-[24%]">
                   <button
                     onClick={() => handleSort("name")}
                     className="flex items-center gap-2 hover:text-primary transition-colors"
                   >
-                    Customer Profile
+                    Customer
                     <SortIcon field="name" />
                   </button>
                 </th>
-                <th className="p-4 w-[14%]">
+                <th className="p-4 w-[23%]">
                   <button
                     onClick={() => handleSort("phone")}
                     className="flex items-center gap-2 hover:text-primary transition-colors"
                   >
-                    Phone Terminal
+                    Contact
                     <SortIcon field="phone" />
                   </button>
                 </th>
-                <th className="p-4 hidden lg:table-cell w-[12%]">
-                  <button
-                    onClick={() => handleSort("date_of_birth")}
-                    className="flex items-center gap-2 hover:text-primary transition-colors"
-                  >
-                    Date of Birth
-                    <SortIcon field="date_of_birth" />
-                  </button>
-                </th>
-                <th className="p-4 hidden md:table-cell w-[18%]">
-                  <button
-                    onClick={() => handleSort("email")}
-                    className="flex items-center gap-2 hover:text-primary transition-colors"
-                  >
-                    Email Address
-                    <SortIcon field="email" />
-                  </button>
-                </th>
-                <th className="p-4 w-[19%]">Membership</th>
-                <th className="p-4 hidden lg:table-cell w-[9%] text-right">Expiration</th>
+                <th className="p-4 w-[18%]">Membership</th>
+                <th className="p-4 w-[24%]">Hour Packs</th>
                 <th className="p-4 hidden xl:table-cell w-[11%] text-right">
                   <button
                     onClick={() => handleSort("created_at")}
@@ -257,86 +242,82 @@ export function CustomerTable({ customers }: CustomerTableProps) {
           {paginatedCustomers.map((row) => {
             const hasSub = !!row.subscription_name;
             const isActive = row.subscription_status === "active";
+            const hourPacks = Array.isArray(row.hour_packs) ? row.hour_packs : [];
  
             return (
               <tr key={row.id} className="group hover:bg-[var(--background)]/40 transition-all duration-200 border-l-2 border-transparent hover:border-l-primary">
  
                 {/* Customer Details Name Block */}
-                <td className="p-4 font-black tracking-wide">
+                <td className="p-4 tracking-wide">
                   {/* flex lives on an inner div: `display:flex` on a <td> drops it out of the
                       table's column layout, so it stops honouring the fixed column width */}
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-start gap-3 min-w-0">
                     <div className="h-9 w-9 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-muted-content group-hover:border-primary/50 group-hover:bg-primary/5 transition-all duration-200 shadow-inner flex-shrink-0">
                       <User className="h-4 w-4 text-primary transition-colors" />
                     </div>
-                    {/* Wraps rather than truncating: this is the directory staff read
-                        names from, so an ellipsis hides the part they need. The column
-                        is fixed-width, so a long name grows the row instead of the
-                        column and cannot push the other columns out of line.
-                        `break-all` is the fallback for a single unbroken run of
-                        characters with nowhere to wrap. */}
-                    <span
-                      title={row.name}
-                      className="text-zinc-200 group-hover:text-primary transition-colors font-black text-[15px] tracking-normal break-words [overflow-wrap:anywhere]"
-                    >
-                      {row.name}
-                    </span>
-                  </div>
-                </td>
- 
-                {/* Phone Terminal Output */}
-                <td className="p-4 text-zinc-300 font-mono tracking-wider">
-                  <div className="flex items-center gap-2 group/phone">
-                    <Phone className="h-4 w-4 text-primary flex-shrink-0" />
-                    <span className="font-bold text-zinc-300 text-sm">{row.phone}</span>
-                    <button
-                      onClick={() => handleCopy(row.phone, `phone-${row.id}`)}
-                      className="ml-auto opacity-0 group-hover/phone:opacity-100 transition-opacity p-1 hover:bg-zinc-800 rounded"
-                    >
-                      {copiedField === `phone-${row.id}` ? (
-                        <Check className="h-3.5 w-3.5 text-green-400" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5 text-secondary-content hover:text-primary" />
-                      )}
-                    </button>
-                  </div>
-                </td>
- 
-                {/* Date of Birth Block */}
-                <td className="p-4 hidden lg:table-cell text-zinc-300 font-mono tracking-wider">
-                  <div className="flex items-center gap-2">
-                    <Cake className="h-4 w-4 text-primary flex-shrink-0" />
-                    <span className="font-bold text-zinc-300 text-[13px]">
-                      {row.date_of_birth ? format(new Date(row.date_of_birth), "dd MMM yyyy") : "—"}
-                    </span>
-                  </div>
-                </td>
- 
-                {/* Email Address Block */}
-                <td className="p-4 hidden md:table-cell text-muted-content font-medium">
-                  <div className="flex items-center gap-2 group/email">
-                    <Mail className="h-4 w-4 text-primary flex-shrink-0" />
-                    <span title={row.email ?? undefined} className="truncate text-muted-content text-sm">{row.email || "No mail configured"}</span>
-                    {row.email && (
-                      <button
-                        onClick={() => handleCopy(row.email!, `email-${row.id}`)}
-                        className="ml-auto opacity-0 group-hover/email:opacity-100 transition-opacity p-1 hover:bg-zinc-800 rounded flex-shrink-0"
+                    <div className="min-w-0 space-y-1">
+                      <p
+                        title={row.name}
+                        className="text-zinc-100 group-hover:text-primary transition-colors font-black text-[15px] tracking-normal break-words [overflow-wrap:anywhere]"
                       >
-                        {copiedField === `email-${row.id}` ? (
+                        {row.name}
+                      </p>
+                      <div className="flex items-center gap-1.5 text-xs font-medium tracking-normal text-zinc-500">
+                        <Cake className="h-3.5 w-3.5 flex-shrink-0 text-primary/80" />
+                        <span>
+                          {row.date_of_birth ? format(new Date(row.date_of_birth), "dd MMM yyyy") : "Date of birth not set"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+ 
+                <td className="p-4">
+                  <div className="space-y-2">
+                    <div className="flex min-w-0 items-center gap-2 group/phone">
+                      <Phone className="h-4 w-4 flex-shrink-0 text-primary" />
+                      <span className="min-w-0 break-all font-mono text-sm font-bold tracking-wide text-zinc-200">{row.phone}</span>
+                      <button
+                        aria-label={`Copy phone number for ${row.name}`}
+                        onClick={() => handleCopy(row.phone, `phone-${row.id}`)}
+                        className="ml-auto flex-shrink-0 rounded p-1 opacity-0 transition-opacity hover:bg-zinc-800 group-hover/phone:opacity-100"
+                      >
+                        {copiedField === `phone-${row.id}` ? (
                           <Check className="h-3.5 w-3.5 text-green-400" />
                         ) : (
                           <Copy className="h-3.5 w-3.5 text-secondary-content hover:text-primary" />
                         )}
                       </button>
-                    )}
+                    </div>
+                    <div className="flex min-w-0 items-center gap-2 group/email">
+                      <Mail className="h-4 w-4 flex-shrink-0 text-primary/80" />
+                      <span
+                        title={row.email ?? undefined}
+                        className="min-w-0 break-words text-xs font-medium text-zinc-400 [overflow-wrap:anywhere]"
+                      >
+                        {row.email || "No email"}
+                      </span>
+                      {row.email && (
+                        <button
+                          aria-label={`Copy email address for ${row.name}`}
+                          onClick={() => handleCopy(row.email!, `email-${row.id}`)}
+                          className="ml-auto flex-shrink-0 rounded p-1 opacity-0 transition-opacity hover:bg-zinc-800 group-hover/email:opacity-100"
+                        >
+                          {copiedField === `email-${row.id}` ? (
+                            <Check className="h-3.5 w-3.5 text-green-400" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5 text-secondary-content hover:text-primary" />
+                          )}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </td>
  
                 {/* Membership Track */}
                 <td className="p-4 overflow-hidden">
                   {hasSub ? (
-                    /* Plan names are free text, so the badge caps at the column width and
-                       truncates instead of spilling over the Expiration column */
+                    /* Keep plan names inside their column while allowing them to wrap. */
                     <span
                       title={row.subscription_name ?? undefined}
                       className={`inline-flex items-center gap-1.5 max-w-full px-2.5 py-1 border text-[11px] font-black uppercase rounded-lg tracking-wide leading-tight ${isActive ? "bg-green-500/10 text-green-400 border-green-500/30" : "bg-zinc-900 text-secondary-content border-zinc-800"}`}
@@ -348,15 +329,73 @@ export function CustomerTable({ customers }: CustomerTableProps) {
                   ) : (
                     <span className="bg-[var(--background)]/80 text-red-400 border border-zinc-900 text-[11px] font-black px-2.5 py-1 rounded-lg uppercase whitespace-nowrap">No Plan Active</span>
                   )}
+                  <AddCustomerSubscriptionModal
+                    customer={{ id: row.id, name: row.name }}
+                    onAssigned={onSubscriptionAssigned}
+                  />
                 </td>
- 
-                {/* Expiration Date */}
-                <td className="p-4 hidden lg:table-cell text-right font-mono text-[13px]">
-                  {row.expiry_date ? (
-                    <span className={isActive ? "text-primary font-bold" : "text-muted-content line-through"}>
-                      {format(new Date(row.expiry_date), "dd/MM/yy")}
-                    </span>
-                  ) : "—"}
+
+                <td className="p-4">
+                  {hourPacks.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {hourPacks.map((pass) => {
+                        const hours = Math.floor(pass.remaining_minutes / 60);
+                        const minutes = pass.remaining_minutes % 60;
+                        const totalMinutes = pass.hours_included * 60;
+                        const remainingPercent = totalMinutes > 0
+                          ? Math.min(100, Math.max(0, (pass.remaining_minutes / totalMinutes) * 100))
+                          : 0;
+                        return (
+                          <div key={pass.id} className="rounded-xl border border-cyan-950/70 bg-cyan-950/15 p-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="break-words text-xs font-bold text-zinc-100 [overflow-wrap:anywhere]">
+                                  {pass.name}
+                                </p>
+                                <span className="mt-1 inline-flex max-w-full rounded-full border border-cyan-800/50 bg-cyan-950/40 px-2 py-0.5 text-[10px] font-semibold text-cyan-200">
+                                  {pass.device_type_name || "Legacy universal"}
+                                </span>
+                              </div>
+                              <RemoveCustomerHourPackButton
+                                customerId={row.id}
+                                customerName={row.name}
+                                subscriptionId={pass.id}
+                                packName={pass.name}
+                                onRemoved={onSubscriptionAssigned}
+                              />
+                            </div>
+                            <div className="mt-3 flex items-baseline justify-between gap-2">
+                              <p className="text-lg font-black leading-none text-cyan-300">
+                                {hours}<span className="ml-1 text-xs font-bold text-cyan-200">h</span>
+                                {minutes > 0 && <> {minutes}<span className="ml-1 text-xs font-bold text-cyan-200">m</span></>}
+                              </p>
+                              <p className="text-[10px] text-zinc-500">
+                                of {pass.hours_included}h total
+                              </p>
+                            </div>
+                            <div
+                              role="progressbar"
+                              aria-label={`${pass.name} time remaining`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round(remainingPercent)}
+                              className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800"
+                            >
+                              <div
+                                className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-teal-300 transition-all"
+                                style={{ width: `${remainingPercent}%` }}
+                              />
+                            </div>
+                            <p className="mt-2 text-[10px] font-medium text-zinc-500">
+                              Expires {format(new Date(`${pass.end_date}T00:00:00`), "dd MMM yyyy")}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-zinc-500">No active balance</span>
+                  )}
                 </td>
  
                 {/* Our Customer From */}

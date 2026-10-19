@@ -78,6 +78,47 @@ export async function getMySubscription() {
   }
 }
 
+export async function getMyHourPacks() {
+  try {
+    const phone = await getVerifiedCustomerPhone()
+    if (!phone) return { success: false, data: [], verificationRequired: true }
+
+    const { data: customer, error: customerError } = await supabaseAdmin
+      .from('customers')
+      .select('id')
+      .eq('phone', phone)
+      .maybeSingle()
+    if (customerError) throw new Error(customerError.message)
+    if (!customer) return { success: true, data: [] }
+
+    const { data, error } = await supabaseAdmin
+      .from('subscriptions')
+      .select('id, start_date, end_date, amount_paid, hours_remaining_minutes, plan:subscription_plans!inner(id, name, plan_type, hours_included, device_type:device_types(display_name))')
+      .eq('customer_id', customer.id)
+      .eq('status', 'active')
+      .eq('plan.plan_type', 'hour_pack')
+      .gte('end_date', arenaToday())
+      .gt('hours_remaining_minutes', 0)
+      .order('end_date', { ascending: true })
+    if (error) throw new Error(error.message)
+
+    return {
+      success: true,
+      data: (data || []).map((pass: any) => ({
+        id: pass.id,
+        start_date: pass.start_date,
+        end_date: pass.end_date,
+        amount_paid: Number(pass.amount_paid || 0),
+        hours_remaining: Number(pass.hours_remaining_minutes || 0) / 60,
+        plan: pass.plan,
+      })),
+    }
+  } catch (error: any) {
+    console.error('Fetch hour packs error:', error)
+    return { success: false, data: [], error: error.message || 'Failed to fetch hour packs' }
+  }
+}
+
 export interface ActivePlanSummary {
   planId: string
   planName: string

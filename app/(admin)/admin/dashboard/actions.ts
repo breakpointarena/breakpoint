@@ -426,6 +426,7 @@ export async function getTodaysRevenueDetails() {
         subscription_discount,
         promo_discount,
         happy_hour_discount,
+        hour_pass_discount,
         cash_amount,
         card_amount,
         upi_amount,

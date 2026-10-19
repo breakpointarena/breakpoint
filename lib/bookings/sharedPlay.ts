@@ -14,8 +14,58 @@ export interface SharedPlayParticipantShare {
 
 export interface SharedPlayCalculation {
   shares: SharedPlayParticipantShare[];
+  sessions: SharedPlaySessionAmount[];
+  deviceCharges: number;
   extraPlayersTotal: number;
   trackedHours: number;
+}
+
+export interface SharedPlaySession {
+  participantIds: string[];
+  startedAt: number;
+  endedAt: number;
+}
+
+export interface SharedPlaySessionAmount extends SharedPlaySession {
+  amount: number;
+}
+
+/** Builds chronological intervals showing exactly who was playing together. */
+export function getSharedPlaySessions(
+  periods: SharedPlayPeriod[],
+  endedAt: Date
+): SharedPlaySession[] {
+  const valid = periods.flatMap((period) => {
+    const start = new Date(period.started_at).getTime();
+    const end = period.ended_at ? new Date(period.ended_at).getTime() : endedAt.getTime();
+    return Number.isFinite(start) && Number.isFinite(end) && end > start
+      ? [{ participantId: period.participant_id, start, end }]
+      : [];
+  });
+  const edges = [...new Set(valid.flatMap((period) => [period.start, period.end]))].sort((a, b) => a - b);
+  const sessions: SharedPlaySession[] = [];
+
+  for (let index = 0; index < edges.length - 1; index += 1) {
+    const start = edges[index];
+    const end = edges[index + 1];
+    const midpoint = start + (end - start) / 2;
+    const participantIds = [...new Set(
+      valid.filter((period) => period.start <= midpoint && period.end > midpoint)
+        .map((period) => period.participantId)
+    )].sort();
+    if (participantIds.length === 0) continue;
+
+    const previous = sessions[sessions.length - 1];
+    const samePlayers = previous?.participantIds.length === participantIds.length &&
+      previous.participantIds.every((id, playerIndex) => id === participantIds[playerIndex]);
+    if (previous && previous.endedAt === start && samePlayers) {
+      previous.endedAt = end;
+    } else {
+      sessions.push({ participantIds, startedAt: start, endedAt: end });
+    }
+  }
+
+  return sessions;
 }
 
 /**
@@ -41,7 +91,8 @@ export function calculateSharedPlayShares(
   });
   const edges = [...new Set(valid.flatMap((period) => [period.start, period.end]))].sort((a, b) => a - b);
   const centsByParticipant = new Map<string, number>();
-  const segments: Array<{ hours: number; activeIds: string[]; extraCents: number }> = [];
+  const segments: Array<{ start: number; end: number; hours: number; activeIds: string[]; extraCents: number }> = [];
+  const sessions: Array<SharedPlaySession & { amountCents: number }> = [];
   let trackedHours = 0;
   let extraPlayersTotal = 0;
 
@@ -61,7 +112,7 @@ export function calculateSharedPlayShares(
     const extraCents = Math.round(extraAmount * 100);
     trackedHours += hours;
     extraPlayersTotal = round2(extraPlayersTotal + extraAmount);
-    segments.push({ hours, activeIds, extraCents });
+    segments.push({ start, end, hours, activeIds, extraCents });
   }
 
   let allocatedBaseCents = 0;
@@ -77,6 +128,21 @@ export function calculateSharedPlayShares(
     const extraRemainder = segment.extraCents - extraBaseShare * segment.activeIds.length;
     const baseShare = Math.floor(baseCents / segment.activeIds.length);
     const baseRemainder = baseCents - baseShare * segment.activeIds.length;
+    const previousSession = sessions[sessions.length - 1];
+    const continuesSameSession = previousSession?.endedAt === segment.start &&
+      previousSession.participantIds.length === segment.activeIds.length &&
+      previousSession.participantIds.every((id, playerIndex) => id === segment.activeIds[playerIndex]);
+    if (continuesSameSession) {
+      previousSession.endedAt = segment.end;
+      previousSession.amountCents += baseCents + segment.extraCents;
+    } else {
+      sessions.push({
+        participantIds: segment.activeIds,
+        startedAt: segment.start,
+        endedAt: segment.end,
+        amountCents: baseCents + segment.extraCents,
+      });
+    }
     segment.activeIds.forEach((participantId, participantIndex) => {
       centsByParticipant.set(
         participantId,
@@ -92,8 +158,12 @@ export function calculateSharedPlayShares(
       participantId,
       amount: cents / 100,
     })),
+    sessions: sessions.map(({ amountCents, ...session }) => ({
+      ...session,
+      amount: amountCents / 100,
+    })),
+    deviceCharges: totalBaseCents / 100,
     extraPlayersTotal,
     trackedHours,
   };
 }
-

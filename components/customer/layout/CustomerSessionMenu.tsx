@@ -207,16 +207,22 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
   ) : (
     <div className="space-y-3">
       <p className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-500">
-        No Active Plan
+        No Discount Membership
       </p>
       <p className="text-xs leading-relaxed text-zinc-400">
-        Members get a discount on every booking, applied automatically at checkout.
+        View your subscription details and any personal hour packs linked to this account.
       </p>
       <button
-        onClick={() => go("/subscription")}
+        onClick={() => go("/my-subscription")}
         className="w-full rounded-xl border border-primary/60 py-2.5 text-xs font-black uppercase tracking-wider text-primary transition-colors hover:bg-primary/10"
       >
-        View Plans
+        My Subscription
+      </button>
+      <button
+        onClick={() => go("/subscription")}
+        className="w-full rounded-xl border border-zinc-700 py-2.5 text-xs font-black uppercase tracking-wider text-zinc-300 transition-colors hover:bg-zinc-800"
+      >
+        Browse Plans
       </button>
     </div>
   );

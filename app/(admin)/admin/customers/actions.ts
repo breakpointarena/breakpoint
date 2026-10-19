@@ -2,6 +2,8 @@
 
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { requireStaff } from "@/lib/auth/require-admin";
+import { addMonthsToDateString, arenaToday } from "@/lib/utils/dates";
+import type { AssignableSubscriptionPlan } from "@/lib/types/customers";
 
 interface DBCustomer {
   id: string;
@@ -18,11 +20,26 @@ interface DBSubscription {
   subscription_plan_id: string | null;
   status: string;
   end_date: string;
+  start_date: string;
+  hours_remaining_minutes: number | null;
 }
 
 interface DBSubscriptionPlan {
   id: string;
   name: string;
+  plan_type: string;
+  hours_included: number | null;
+  device_type_id: string | null;
+}
+
+interface DBDeviceType {
+  id: string;
+  display_name: string;
+}
+
+interface DBAssignableSubscriptionPlan extends Omit<AssignableSubscriptionPlan, "plan_type" | "device_type_name"> {
+  plan_type: string;
+  device_type_id: string | null;
 }
 
 export async function getLiveCustomerRegistryAction() {
@@ -41,6 +58,7 @@ export async function getLiveCustomerRegistryAction() {
     { data: customersData, error: customerError },
     { data: subscriptionsData, error: subscriptionsError },
     { data: plansData, error: plansError },
+    { data: deviceTypesData, error: deviceTypesError },
   ] = await Promise.all([
     supabaseAdmin
       .from("customers")
@@ -49,9 +67,12 @@ export async function getLiveCustomerRegistryAction() {
 
     supabaseAdmin
       .from("subscriptions")
-      .select("id, customer_id, subscription_plan_id, status, end_date"),
+      .select("id, customer_id, subscription_plan_id, status, start_date, end_date, hours_remaining_minutes"),
 
-    supabaseAdmin.from("subscription_plans").select("id, name"),
+    supabaseAdmin
+      .from("subscription_plans")
+      .select("id, name, plan_type, hours_included, device_type_id"),
+    supabaseAdmin.from("device_types").select("id, display_name"),
   ]);
 
   // Reported in the same order as before, so the message a failure produces is
@@ -72,11 +93,42 @@ export async function getLiveCustomerRegistryAction() {
     return { data: [], error: plansError.message };
   }
 
+  if (deviceTypesError) {
+    return { data: [], error: deviceTypesError.message };
+  }
+
   const formattedCustomers = (customersData as DBCustomer[]).map((customer: DBCustomer) => {
     const customerSubscriptions = (subscriptionsData as DBSubscription[] || []).filter(
       (sub: DBSubscription) => sub.customer_id === customer.id
     );
-    const sortedSubscriptions = customerSubscriptions.sort(
+    const customerPlans = plansData as DBSubscriptionPlan[];
+    const deviceTypeNames = new Map(
+      (deviceTypesData as DBDeviceType[]).map((deviceType) => [deviceType.id, deviceType.display_name])
+    );
+    const planFor = (subscription: DBSubscription) =>
+      customerPlans.find((plan) => plan.id === subscription.subscription_plan_id);
+    const today = arenaToday();
+    const activeHourPacks = customerSubscriptions
+      .filter((sub) => {
+        const plan = planFor(sub);
+        return plan?.plan_type === "hour_pack" &&
+          sub.status === "active" &&
+          sub.start_date <= today &&
+          sub.end_date >= today &&
+          Number(sub.hours_remaining_minutes || 0) > 0;
+      })
+      .sort((a, b) => a.end_date.localeCompare(b.end_date))
+      .map((sub) => ({
+        id: sub.id,
+        name: planFor(sub)?.name || "Hour pack",
+        device_type_name: deviceTypeNames.get(planFor(sub)?.device_type_id || "") || null,
+        remaining_minutes: Number(sub.hours_remaining_minutes || 0),
+        hours_included: Number(planFor(sub)?.hours_included || 0),
+        end_date: sub.end_date,
+      }));
+    const sortedSubscriptions = customerSubscriptions
+      .filter((sub) => planFor(sub)?.plan_type !== "hour_pack")
+      .sort(
       (a: DBSubscription, b: DBSubscription) =>
         new Date(b.end_date).getTime() - new Date(a.end_date).getTime()
     );
@@ -85,7 +137,7 @@ export async function getLiveCustomerRegistryAction() {
 
     let matchedPlanName: string | null = null;
     if (latestSubscription && latestSubscription.subscription_plan_id) {
-      const planMatch = (plansData as DBSubscriptionPlan[] || []).find(
+      const planMatch = customerPlans.find(
         (plan: DBSubscriptionPlan) => plan.id === latestSubscription.subscription_plan_id
       );
       if (planMatch) {
@@ -109,8 +161,280 @@ export async function getLiveCustomerRegistryAction() {
       subscription_name: matchedPlanName,
       subscription_status: computedStatus,
       expiry_date: latestSubscription?.end_date || null,
+      hour_packs: activeHourPacks,
     };
   });
 
   return { data: formattedCustomers, error: null };
+}
+
+export async function createCustomerAction(input: {
+  name: string;
+  phone: string;
+  email?: string;
+  date_of_birth?: string;
+}) {
+  await requireStaff();
+
+  const name = String(input?.name || "").trim();
+  const phoneDigits = String(input?.phone || "").replace(/\D/g, "");
+  const phone = phoneDigits.length === 12 && phoneDigits.startsWith("91")
+    ? phoneDigits.slice(-10)
+    : phoneDigits;
+  const email = String(input?.email || "").trim() || null;
+  const dateOfBirth = String(input?.date_of_birth || "").trim() || null;
+
+  if (!name || name.length > 100) {
+    return { success: false as const, error: "Enter a customer name up to 100 characters." };
+  }
+  if (!/^\d{10}$/.test(phone)) {
+    return { success: false as const, error: "Enter a valid 10-digit mobile number." };
+  }
+  if (email && (email.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+    return { success: false as const, error: "Enter a valid email address up to 100 characters." };
+  }
+  if (dateOfBirth) {
+    const parsedDate = new Date(`${dateOfBirth}T00:00:00.000Z`);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) ||
+      Number.isNaN(parsedDate.getTime()) ||
+      parsedDate.toISOString().slice(0, 10) !== dateOfBirth
+    ) {
+      return { success: false as const, error: "Enter a valid date of birth." };
+    }
+  }
+
+  try {
+    const { data: existingCustomer, error: lookupError } = await supabaseAdmin
+      .from("customers")
+      .select("id")
+      .eq("phone", phone)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+    if (existingCustomer) {
+      return { success: false as const, error: "A customer with this mobile number already exists." };
+    }
+
+    const { data: createdCustomer, error: insertError } = await supabaseAdmin
+      .from("customers")
+      .insert({
+        name,
+        phone,
+        email,
+        date_of_birth: dateOfBirth,
+      })
+      .select("id, name, phone, email")
+      .single();
+    if (insertError?.code === "23505") {
+      return { success: false as const, error: "A customer with this mobile number already exists." };
+    }
+    if (insertError) throw insertError;
+
+    return { success: true as const, customer: createdCustomer };
+  } catch (error: any) {
+    console.error("Create customer error:", error);
+    return { success: false as const, error: error.message || "Could not create customer." };
+  }
+}
+
+export async function getAssignableSubscriptionPlansAction() {
+  await requireStaff();
+
+  const [
+    { data: plans, error: plansError },
+    { data: deviceTypes, error: deviceTypesError },
+  ] = await Promise.all([
+    supabaseAdmin
+      .from("subscription_plans")
+      .select("id, name, plan_type, price, duration_months, hours_included, device_type_id")
+      .eq("is_active", true)
+      .order("name", { ascending: true }),
+    supabaseAdmin
+      .from("device_types")
+      .select("id, display_name")
+      .eq("is_active", true),
+  ]);
+
+  if (plansError) {
+    console.error("Could not load assignable subscription plans:", plansError);
+    return { success: false as const, error: plansError.message, data: [] };
+  }
+  if (deviceTypesError) {
+    console.error("Could not load active device categories for subscription plans:", deviceTypesError);
+    return { success: false as const, error: deviceTypesError.message, data: [] };
+  }
+
+  const deviceTypeNames = new Map(
+    (deviceTypes || []).map((deviceType: DBDeviceType) => [deviceType.id, deviceType.display_name])
+  );
+
+  const data: AssignableSubscriptionPlan[] = (plans || [])
+    .filter((plan: DBAssignableSubscriptionPlan) =>
+      plan.plan_type !== "hour_pack" || deviceTypeNames.has(plan.device_type_id || "")
+    )
+    .map((plan: DBAssignableSubscriptionPlan) => ({
+      id: plan.id,
+      name: plan.name,
+      plan_type: plan.plan_type === "hour_pack" ? "hour_pack" : "membership",
+      price: Number(plan.price),
+      duration_months: Number(plan.duration_months),
+      hours_included: plan.hours_included === null ? null : Number(plan.hours_included),
+      device_type_name: deviceTypeNames.get(plan.device_type_id || "") || null,
+    }));
+
+  return { success: true as const, data };
+}
+
+export async function assignSubscriptionToCustomerAction(input: {
+  customerId: string;
+  planId: string;
+}) {
+  await requireStaff();
+
+  const customerId = typeof input?.customerId === "string" ? input.customerId.trim() : "";
+  const planId = typeof input?.planId === "string" ? input.planId.trim() : "";
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  if (!uuidPattern.test(customerId)) {
+    return { success: false as const, error: "Choose a valid customer." };
+  }
+  if (!uuidPattern.test(planId)) {
+    return { success: false as const, error: "Choose a valid subscription plan." };
+  }
+
+  const [
+    { data: customer, error: customerError },
+    { data: plan, error: planError },
+  ] = await Promise.all([
+    supabaseAdmin.from("customers").select("id").eq("id", customerId).maybeSingle(),
+    supabaseAdmin
+      .from("subscription_plans")
+      .select("id, name, price, duration_months, plan_type, hours_included, device_type_id, is_active")
+      .eq("id", planId)
+      .maybeSingle(),
+  ]);
+
+  if (customerError) {
+    console.error("Could not verify customer for subscription assignment:", customerError);
+    return { success: false as const, error: customerError.message };
+  }
+  if (!customer) {
+    return { success: false as const, error: "Customer was not found." };
+  }
+  if (planError) {
+    console.error("Could not load subscription plan for assignment:", planError);
+    return { success: false as const, error: planError.message };
+  }
+  if (!plan || !plan.is_active) {
+    return { success: false as const, error: "This subscription plan is no longer available." };
+  }
+
+  const price = Number(plan.price);
+  const durationMonths = Number(plan.duration_months);
+  if (!Number.isFinite(price) || price <= 0) {
+    return { success: false as const, error: "This plan has an invalid price and cannot be assigned." };
+  }
+  if (!Number.isInteger(durationMonths) || durationMonths < 1 || durationMonths > 60) {
+    return { success: false as const, error: "This plan has an invalid validity period and cannot be assigned." };
+  }
+
+  const isHourPack = plan.plan_type === "hour_pack";
+  const hoursIncluded = Number(plan.hours_included);
+  if (isHourPack) {
+    if (!Number.isInteger(hoursIncluded) || hoursIncluded <= 0 || !plan.device_type_id) {
+      return { success: false as const, error: "This hour pack is missing valid hours or a device category." };
+    }
+
+    const { data: activeDeviceType, error: deviceTypeError } = await supabaseAdmin
+      .from("device_types")
+      .select("id")
+      .eq("id", plan.device_type_id)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (deviceTypeError) {
+      console.error("Could not verify hour-pack category for assignment:", deviceTypeError);
+      return { success: false as const, error: deviceTypeError.message };
+    }
+    if (!activeDeviceType) {
+      return { success: false as const, error: "This hour pack's device category is no longer active." };
+    }
+  }
+
+  const startDate = arenaToday();
+  const endDate = addMonthsToDateString(startDate, durationMonths);
+  const { error: insertError } = await supabaseAdmin.from("subscriptions").insert({
+    customer_id: customerId,
+    subscription_plan_id: plan.id,
+    start_date: startDate,
+    end_date: endDate,
+    payment_id: null,
+    amount_paid: price,
+    status: "active",
+    ...(isHourPack ? { hours_remaining_minutes: hoursIncluded * 60 } : {}),
+  });
+
+  if (insertError) {
+    console.error("Could not assign subscription to customer:", insertError);
+    return { success: false as const, error: insertError.message };
+  }
+
+  return { success: true as const, planName: plan.name };
+}
+
+export async function removeCustomerHourPackAction(input: {
+  customerId: string;
+  subscriptionId: string;
+}) {
+  await requireStaff();
+
+  const customerId = typeof input?.customerId === "string" ? input.customerId.trim() : "";
+  const subscriptionId = typeof input?.subscriptionId === "string" ? input.subscriptionId.trim() : "";
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  if (!uuidPattern.test(customerId) || !uuidPattern.test(subscriptionId)) {
+    return { success: false as const, error: "Choose a valid customer hour pack." };
+  }
+
+  const { data: subscription, error: lookupError } = await supabaseAdmin
+    .from("subscriptions")
+    .select("id, status, subscription_plan_id, subscription_plans(plan_type)")
+    .eq("id", subscriptionId)
+    .eq("customer_id", customerId)
+    .maybeSingle();
+
+  if (lookupError) {
+    console.error("Could not verify customer hour pack before removal:", lookupError);
+    return { success: false as const, error: lookupError.message };
+  }
+  if (!subscription) {
+    return { success: false as const, error: "This customer hour pack was not found." };
+  }
+
+  const joinedPlan = subscription.subscription_plans;
+  const plan = Array.isArray(joinedPlan) ? joinedPlan[0] : joinedPlan;
+  if (plan?.plan_type !== "hour_pack") {
+    return { success: false as const, error: "Only hour packs can be removed from this view." };
+  }
+  if (subscription.status !== "active") {
+    return { success: false as const, error: "This hour pack is no longer active." };
+  }
+
+  const { data: removed, error: updateError } = await supabaseAdmin
+    .from("subscriptions")
+    .update({ status: "cancelled", hours_remaining_minutes: 0 })
+    .eq("id", subscriptionId)
+    .eq("customer_id", customerId)
+    .eq("status", "active")
+    .select("id")
+    .maybeSingle();
+
+  if (updateError) {
+    console.error("Could not remove customer hour pack:", updateError);
+    return { success: false as const, error: updateError.message };
+  }
+  if (!removed) {
+    return { success: false as const, error: "This hour pack was already removed or is no longer active." };
+  }
+
+  return { success: true as const };
 }

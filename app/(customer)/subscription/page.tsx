@@ -1,4 +1,5 @@
 import React from 'react'
+import Link from 'next/link'
 import { Award } from 'lucide-react'
 import { ComparisonTable } from '@/components/customer/subscription/ComparisonTable'
 import SubscriptionPricingCard from '@/components/customer/subscription/SubscriptionPricingCard'
@@ -30,6 +31,8 @@ export default async function SubscriptionPage() {
     getMyActivePlanSummary(),
   ])
   const plansData = response.success && response.data ? response.data : []
+  const membershipPlans = plansData.filter(plan => plan.plan_type === 'membership')
+  const hourPacks = plansData.filter(plan => plan.plan_type === 'hour_pack')
 
   return (
     <main className="min-h-screen bg-[#0d0a14] text-white font-sans pt-12 pb-8 px-0 sm:px-6 lg:px-8 mt-5 relative overflow-hidden">
@@ -47,14 +50,14 @@ export default async function SubscriptionPage() {
           <div className="inline-flex items-center justify-center space-x-2 bg-gradient-to-r from-primary/10 via-amber-400/10 to-primary/10 border border-primary/20 rounded-full px-5 py-2 mb-6 backdrop-blur-sm">
             <Award className="w-4 h-4 text-primary animate-pulse" />
             <span className="text-primary text-xs font-black tracking-[0.2em] uppercase">
-              Membership Plans
+              Memberships & Hour Packs
             </span>
           </div>
           <h1 className="text-4xl md:text-6xl font-black text-transparent bg-gradient-to-r from-white via-amber-100 to-white bg-clip-text mb-6 tracking-tight leading-tight">
-            Choose Your Subscription Plan
+            Choose How You Play
           </h1>
           <p className="text-zinc-400 text-lg leading-relaxed">
-            Save on every booking with our subscription plans. Unlock exclusive{' '}
+            Save on every booking with a membership, or prepay personal play hours that expire at the end of your chosen term.{' '}
             <span className="text-transparent bg-gradient-to-r from-primary via-amber-300 to-primary bg-clip-text font-bold">elite gaming status</span>
             {' '}and arena-wide benefits.
           </p>
@@ -69,13 +72,53 @@ export default async function SubscriptionPage() {
 
         {/* Pricing card */}
         <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
-          <SubscriptionPricingCard initialPlans={plansData} />
+          <SubscriptionPricingCard initialPlans={membershipPlans} />
         </div>
 
         {/* Comparison table */}
         <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-300">
-          <ComparisonTable plans={plansData} />
+          <ComparisonTable plans={membershipPlans} />
         </div>
+
+        {hourPacks.length > 0 && (
+          <section className="mt-14 px-4 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-300">
+            <div className="mb-6 text-center">
+              <h2 className="text-2xl md:text-3xl font-black text-white">Prepaid Play Hours</h2>
+              <p className="mt-2 text-sm text-zinc-400">
+                Each pack is tied to one play category and one player. Unused hours expire at the end of the package term.
+              </p>
+            </div>
+            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              {hourPacks.map(plan => (
+                <article key={plan.id} className="rounded-2xl border border-primary/30 bg-zinc-950/80 p-6 shadow-xl">
+                  <p className="text-xs font-black uppercase tracking-[0.2em] text-primary">
+                    {plan.duration_months} month{plan.duration_months === 1 ? '' : 's'} validity
+                  </p>
+                  <h3 className="mt-3 text-2xl font-black text-white">{plan.name}</h3>
+                  <p className="mt-1 text-sm font-bold text-amber-300">
+                    For {plan.device_type_name}
+                  </p>
+                  <p className="mt-2 min-h-10 text-sm text-zinc-400">{plan.description}</p>
+                  <p className="mt-5 text-3xl font-black text-primary">
+                    ₹{plan.price.toLocaleString('en-IN')}
+                    <span className="ml-2 text-base font-semibold text-zinc-500 line-through">
+                      ₹{Number(plan.standard_value || plan.price).toLocaleString('en-IN')}
+                    </span>
+                  </p>
+                  <p className="mt-1 text-sm font-bold text-emerald-400">
+                    {plan.hours_included} personal hours · Save ₹{Math.max(0, Number(plan.standard_value || plan.price) - plan.price).toLocaleString('en-IN')}
+                  </p>
+                  <Link
+                    href={`/subscription/${plan.id}`}
+                    className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-lg bg-primary px-4 text-sm font-black uppercase text-black transition hover:bg-amber-300"
+                  >
+                    Buy hour pack
+                  </Link>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     </main>
   )

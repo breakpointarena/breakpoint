@@ -29,17 +29,17 @@ function required(name: string, fix: string, minLength = 1) {
 // --- .env.local exists at all ----------------------------------------------
 if (!existsSync('.env.local')) {
   console.error('\n  .env.local is missing.\n')
-  console.error('  Create it from the starter, which is already filled in for local work:\n')
-  console.error('      cp .env.local.starter .env.local\n')
+  console.error('  Create it from the example, then add the local Supabase keys:\n')
+  console.error('      Copy-Item .env.example .env.local\n')
   process.exit(1)
 }
 
 // Next loads .env.local automatically; this script does not, so read it here.
-for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
+for (const line of readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
   const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/)
   if (!match) continue
   const [, key, raw] = match
-  if (process.env[key] === undefined) {
+  if (!process.env[key]?.trim()) {
     process.env[key] = raw.trim().replace(/^["']|["']$/g, '')
   }
 }
@@ -54,7 +54,7 @@ const hashSecret = process.env.OTP_HASH_SECRET || process.env.SESSION_SECRET || 
 checks.push({
   ok: hashSecret.length >= 32,
   label: 'OTP_HASH_SECRET is set and >= 32 characters',
-  fix: 'Without it, sending an OTP throws. The starter file has a working local value; for anything deployed, generate one with `openssl rand -hex 32`.',
+  fix: 'Without it, sending an OTP throws. Set a random value of at least 32 characters in .env.local; for anything deployed, generate one with `openssl rand -hex 32`.',
 })
 
 const testMode = process.env.MSG91_TEST_MODE === 'true'
@@ -124,4 +124,4 @@ if (failed.length > 0) {
   process.exit(1)
 }
 
-console.log('\n  Environment looks good. Next: npx supabase db reset, then npm run dev.\n')
+console.log('\n  Environment looks good. Next: npm run supabase:migrate, then npm run dev.\n')

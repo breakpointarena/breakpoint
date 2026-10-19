@@ -561,7 +561,8 @@ function RetrieveBookingContent({ phone }: { phone: string }) {
                     const calculatedTotal = calculatedSubtotal -
                       Number(selectedBooking.subscription_discount || 0) -
                       Number(selectedBooking.promo_discount || 0) -
-                      Number(selectedBooking.happy_hour_discount || 0);
+                      Number(selectedBooking.happy_hour_discount || 0) -
+                      Number(selectedBooking.hour_pass_discount || 0);
 
                     return (
                       <>
@@ -615,6 +616,13 @@ function RetrieveBookingContent({ phone }: { phone: string }) {
                               Happy Hour Discount:
                             </span>
                             <span className="font-black">-₹{Number(selectedBooking.happy_hour_discount).toFixed(2)}</span>
+                          </div>
+                        )}
+
+                        {selectedBooking.hour_pass_discount > 0 && (
+                          <div className="flex items-center justify-between py-2 text-cyan-400">
+                            <span className="font-bold">Personal Hour Pack:</span>
+                            <span className="font-black">-₹{Number(selectedBooking.hour_pass_discount).toFixed(2)}</span>
                           </div>
                         )}
 

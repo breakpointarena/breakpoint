@@ -18,12 +18,14 @@ interface EditModalProps {
 
 export function EditSubscriptionModal({ plan, onFormSuccess, open, setOpen }: EditModalProps) {
   const [isActive, setIsActive] = useState(true)
+  const [planType, setPlanType] = useState<'membership' | 'hour_pack'>('membership')
   const [isPending, startTransition] = useTransition()
   const { formRef, isComplete, recheck } = useRequiredFields()
 
   useEffect(() => {
     if (plan) {
       setIsActive(plan.is_active)
+      setPlanType(plan.plan_type === 'hour_pack' ? 'hour_pack' : 'membership')
     }
   }, [plan])
 
@@ -71,9 +73,19 @@ export function EditSubscriptionModal({ plan, onFormSuccess, open, setOpen }: Ed
           {/* Hidden fields for backend updates and boolean state */}
           <input type="hidden" name="id" value={plan?.id} />
           <input type="hidden" name="is_active" value={isActive.toString()} />
+          <input type="hidden" name="plan_type" value={planType} />
 
           {/* Form Body */}
           <div className="flex-1 p-8 space-y-6 bg-[var(--background)] overflow-y-auto">
+            <div className="space-y-2">
+              <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
+                Plan Type
+              </label>
+              <div className="h-10 rounded-md border border-[#27272a] bg-[var(--surface)] px-3 flex items-center text-sm text-white">
+                {planType === 'hour_pack' ? 'Personal hour pack' : 'Discount membership'}
+              </div>
+            </div>
+
             <div className="space-y-2">
               <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
                 Plan Name <span className="text-red-500">*</span>
@@ -87,7 +99,22 @@ export function EditSubscriptionModal({ plan, onFormSuccess, open, setOpen }: Ed
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+            {planType === 'hour_pack' && (
+              <div className="space-y-2">
+                <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
+                  Device Category
+                </label>
+                <input type="hidden" name="device_type_id" value={plan?.device_type_id || ''} />
+                <div className="h-10 rounded-md border border-[#27272a] bg-[var(--surface)] px-3 flex items-center text-sm text-white">
+                  {plan?.device_type_name || 'Legacy universal pack (retired)'}
+                </div>
+                <p className="text-xs text-zinc-500">
+                  A plan&apos;s category is fixed when it is created. Create a new plan to cover another category.
+                </p>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
               <div className="space-y-2">
                 <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
                   Price <span className="text-red-500">*</span>
@@ -106,25 +133,76 @@ export function EditSubscriptionModal({ plan, onFormSuccess, open, setOpen }: Ed
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
-                  Duration (Months) <span className="text-red-500">*</span>
-                </label>
-                <div className="relative">
-                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-content pointer-events-none" />
-                  <Input
-                    type="number"
-                    name="duration_months"
-                    min="1"
-                    max="60"
-                    defaultValue={plan?.duration_months}
-                    className="h-10 pl-9 bg-[var(--surface)] border-[#27272a] text-sm text-white focus-visible:ring-primary focus-visible:border-primary transition-colors"
-                    required
-                  />
-                </div>
-              </div>
+              {planType === 'hour_pack' && (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
+                      Play Hours <span className="text-red-500">*</span>
+                    </label>
+                    <Input
+                      type="number"
+                      name="hours_included"
+                      min="1"
+                      step="1"
+                      defaultValue={plan?.hours_included}
+                      className="h-10 bg-[var(--surface)] border-[#27272a] text-sm text-white"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
+                      Standard Value (₹) <span className="text-red-500">*</span>
+                    </label>
+                    <Input
+                      type="number"
+                      name="standard_value"
+                      min="1"
+                      step="0.01"
+                      defaultValue={plan?.standard_value}
+                      className="h-10 bg-[var(--surface)] border-[#27272a] text-sm text-white"
+                      required
+                    />
+                  </div>
+                </>
+              )}
 
-              <div className="space-y-2">
+              {planType === 'membership' ? (
+                <div className="space-y-2">
+                  <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
+                    Duration (Months) <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-content pointer-events-none" />
+                    <Input
+                      type="number"
+                      name="duration_months"
+                      min="1"
+                      max="60"
+                      defaultValue={plan?.duration_months}
+                      className="h-10 pl-9 bg-[var(--surface)] border-[#27272a] text-sm text-white focus-visible:ring-primary focus-visible:border-primary transition-colors"
+                      required
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
+                    Validity (Months) <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    name="duration_months"
+                    defaultValue={plan?.duration_months || 1}
+                    className="h-10 w-full rounded-md border border-[#27272a] bg-[var(--surface)] px-3 text-sm text-white"
+                    required
+                  >
+                    {[1, 3, 6, 12].map(months => (
+                      <option key={months} value={months}>{months} {months === 1 ? 'month' : 'months'}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {planType === 'membership' && <div className="space-y-2">
                 <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
                   Discount (%) <span className="text-red-500">*</span>
                 </label>
@@ -139,7 +217,7 @@ export function EditSubscriptionModal({ plan, onFormSuccess, open, setOpen }: Ed
                     className="h-10 pl-9 bg-[var(--surface)] border-[#27272a] text-sm text-white focus-visible:ring-primary focus-visible:border-primary transition-colors"
                   />
                 </div>
-              </div>
+              </div>}
             </div>
 
             <div className="space-y-2">

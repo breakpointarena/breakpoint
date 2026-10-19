@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Clock, LogIn, LogOut, PlayCircle, ReceiptIndianRupee } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Clock, LogIn, LogOut, PlayCircle, ReceiptIndianRupee, UsersRound } from "lucide-react";
 import { formatPlayedDuration, sessionTimes } from "@/lib/bookings/walkInSession";
 import { formatClockTime12h } from "@/lib/utils/dates";
 import { formatDbTimeRange } from "@/lib/utils/timeSlots";
+import { getSharedPlaySessions, type SharedPlayPeriod } from "@/lib/bookings/sharedPlay";
 
 /**
  * The three times a walk-in has, told apart.
@@ -66,6 +67,36 @@ export function SessionTimer({ checkedInAt }: { checkedInAt: string }) {
   return <>{formatPlayedDuration(minutes)}</>;
 }
 
+function SharedPlayTimer({
+  participants,
+  completedAt
+}: {
+  participants: Array<{ id: string; shared_play_periods?: SharedPlayPeriod[] }>;
+  completedAt?: string | null;
+}) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    if (completedAt) return;
+    const ticker = setInterval(() => setNow(new Date()), 10_000);
+    return () => clearInterval(ticker);
+  }, [completedAt]);
+
+  const periods = useMemo(
+    () => participants.flatMap((participant) =>
+      (participant.shared_play_periods || []).map((period) => ({
+        ...period,
+        participant_id: participant.id
+      }))
+    ),
+    [participants]
+  );
+  const endedAt = completedAt ? new Date(completedAt) : now;
+  const activeMilliseconds = getSharedPlaySessions(periods, endedAt)
+    .reduce((total, session) => total + session.endedAt - session.startedAt, 0);
+
+  return <>{formatPlayedDuration(Math.ceil(activeMilliseconds / 60_000))}</>;
+}
+
 /**
  * The two ends of a session, each in its own colour.
  *
@@ -86,6 +117,8 @@ export function SessionTimesCell({
     checked_in_at?: string | null;
     completed_at?: string | null;
     walk_in_planned_end?: string | null;
+    shared_play_enabled?: boolean | null;
+    shared_play_participants?: Array<{ id: string; shared_play_periods?: SharedPlayPeriod[] }>;
   };
 }) {
   const times = sessionTimes(booking);
@@ -122,8 +155,14 @@ export function SessionSummaryLine({
   createdAt,
   checkedInAt,
   completedAt,
-  plannedEndAt
-}: SessionTimes & { status: string }) {
+  plannedEndAt,
+  sharedPlayEnabled,
+  sharedPlayParticipants = []
+}: SessionTimes & {
+  status: string;
+  sharedPlayEnabled?: boolean | null;
+  sharedPlayParticipants?: Array<{ id: string; shared_play_periods?: SharedPlayPeriod[] }>;
+}) {
   if (status === "confirmed") {
     return (
       <span className="flex items-center gap-1.5 text-amber-400">
@@ -137,10 +176,13 @@ export function SessionSummaryLine({
     return (
       <span className="flex flex-col gap-0.5">
         <span className="flex items-center gap-1.5 text-white font-semibold">
-          {/* The icon keeps the live green; the duration does not, so it cannot
-              be misread as another clock time. */}
-          <PlayCircle className="h-3 w-3 text-green-400" />
-          Playing <SessionTimer checkedInAt={checkedInAt} />
+          <UsersRound className="h-3 w-3 text-green-400" />
+          {sharedPlayEnabled ? "Shared play" : "Standard play"} · Playing{" "}
+          {sharedPlayEnabled ? (
+            <SharedPlayTimer participants={sharedPlayParticipants} />
+          ) : (
+            <SessionTimer checkedInAt={checkedInAt} />
+          )}
         </span>
         <span className="text-green-400 font-semibold">In: {timeOnly(checkedInAt)}</span>
         {/* Only when the customer named one. "Till" and the paler blue keep it
@@ -156,8 +198,13 @@ export function SessionSummaryLine({
     return (
       <span className="flex flex-col gap-0.5">
         <span className="flex items-center gap-1.5 text-secondary-content">
-          <LogOut className="h-3 w-3" />
-          Played {formatPlayedDuration(sessionMinutes(checkedInAt, completedAt))}
+          <UsersRound className="h-3 w-3" />
+          {sharedPlayEnabled ? "Shared play" : "Standard play"} · Played{" "}
+          {sharedPlayEnabled ? (
+            <SharedPlayTimer participants={sharedPlayParticipants} completedAt={completedAt} />
+          ) : (
+            formatPlayedDuration(sessionMinutes(checkedInAt, completedAt))
+          )}
         </span>
         <span className="text-green-400 font-semibold">In: {timeOnly(checkedInAt)}</span>
         <span className="text-blue-400 font-semibold">Out: {timeOnly(completedAt)}</span>
@@ -204,6 +251,8 @@ export function BookingTimingCell({
     checked_in_at?: string | null;
     completed_at?: string | null;
     walk_in_planned_end?: string | null;
+    shared_play_enabled?: boolean | null;
+    shared_play_participants?: Array<{ id: string; shared_play_periods?: SharedPlayPeriod[] }>;
   };
   slot?: { slot_start_time?: string | null; slot_end_time?: string | null } | null;
 }) {
@@ -215,6 +264,8 @@ export function BookingTimingCell({
         checkedInAt={booking.checked_in_at || null}
         completedAt={booking.completed_at || null}
         plannedEndAt={booking.walk_in_planned_end || null}
+        sharedPlayEnabled={booking.shared_play_enabled}
+        sharedPlayParticipants={booking.shared_play_participants || []}
       />
     );
   }

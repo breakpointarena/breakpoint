@@ -133,6 +133,7 @@ export default function PlanDetailsPage() {
    * re-checks the session server-side, so skipping the form here grants nothing.
    */
   useEffect(() => {
+    if (!plan) return
     let cancelled = false
 
     const resume = async () => {
@@ -157,7 +158,7 @@ export default function PlanDetailsPage() {
         // path skipped the subscription entirely and went straight to review, so
         // somebody still inside their term could fill in a whole purchase before
         // the payment refused it.
-        if (result.subscription) {
+        if (result.subscription && plan.plan_type === 'membership') {
           rememberMembership(result.subscription)
           setStep('already-member')
           return
@@ -175,7 +176,7 @@ export default function PlanDetailsPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [plan])
 
   // Handle phone submission
   const handlePhoneSubmit = async (e: React.FormEvent) => {
@@ -228,7 +229,7 @@ export default function PlanDetailsPage() {
        * purchase would cost the customer the days they have left. Neither case
        * can proceed, so neither pretends to.
        */
-      if (result.subscription) {
+      if (result.subscription && plan?.plan_type === 'membership') {
         rememberMembership(result.subscription)
         setStep('already-member')
         setIsSubmitting(false)
@@ -334,7 +335,9 @@ export default function PlanDetailsPage() {
         orderId: order.orderId!,
         amount: order.amount!,
         name: 'Break Point Arena',
-        description: `${order.summary?.planName || 'Membership'} · ${order.summary?.durationMonths || 1} month(s)`,
+        description: order.summary?.planType === 'hour_pack'
+          ? `${order.summary.hoursIncluded} play hours · valid ${order.summary.durationMonths} month(s)`
+          : `${order.summary?.planName || 'Membership'} · ${order.summary?.durationMonths || 1} month(s)`,
         prefill: {
           name: customerName,
           email: customerEmail,
@@ -349,13 +352,15 @@ export default function PlanDetailsPage() {
       const confirmed = await confirmSubscriptionPayment(response)
 
       if (confirmed.success) {
-        toast.success('Membership active', {
+        toast.success(plan.plan_type === 'hour_pack' ? 'Hour pack active' : 'Membership active', {
           description: `${confirmed.planName || plan.name} is now on your account.`,
         })
         if (typeof window !== 'undefined') {
           localStorage.setItem('customerPhone', mobileNumber)
         }
-        router.push(`/subscription/${params.planId}/success`)
+        router.push(plan.plan_type === 'hour_pack'
+          ? '/my-subscription'
+          : `/subscription/${params.planId}/success`)
         return
       }
 
@@ -550,10 +555,23 @@ export default function PlanDetailsPage() {
                 <span className="text-zinc-400">Duration:</span>
                 <span className="text-white font-bold">{plan.duration_months} {plan.duration_months === 1 ? 'Month' : 'Months'}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-zinc-400">Discount:</span>
-                <span className="text-primary font-bold">{plan.discount_percentage}% off bookings</span>
-              </div>
+              {plan.plan_type === 'hour_pack' ? (
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-400">Play time:</span>
+                  <span className="text-primary font-bold">{plan.hours_included} personal hours</span>
+                </div>
+              ) : (
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-400">Discount:</span>
+                  <span className="text-primary font-bold">{plan.discount_percentage}% off bookings</span>
+                </div>
+              )}
+              {plan.plan_type === 'hour_pack' && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-400">Standard value:</span>
+                  <span className="text-zinc-300 font-bold">₹{Number(plan.standard_value).toLocaleString('en-IN')} (save ₹{Math.max(0, Number(plan.standard_value) - Number(plan.price)).toLocaleString('en-IN')})</span>
+                </div>
+              )}
               <div className="flex justify-between text-base border-t border-zinc-800 pt-2 font-black">
                 <span className="text-white">Amount:</span>
                 <span className="text-primary text-lg">₹{plan.price}</span>
@@ -714,7 +732,9 @@ export default function PlanDetailsPage() {
 
             {/* Plan Details */}
             <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-900 space-y-3 glow-box-strong">
-              <h4 className="text-xs font-black text-zinc-400 uppercase tracking-wider mb-2">Subscription Plan</h4>
+              <h4 className="text-xs font-black text-zinc-400 uppercase tracking-wider mb-2">
+                {plan.plan_type === 'hour_pack' ? 'Personal Hour Pack' : 'Membership Plan'}
+              </h4>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-zinc-400">Plan:</span>
@@ -724,10 +744,35 @@ export default function PlanDetailsPage() {
                   <span className="text-zinc-400">Duration:</span>
                   <span className="text-white font-bold">{plan.duration_months} {plan.duration_months === 1 ? 'Month' : 'Months'}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-400">Booking Discount:</span>
-                  <span className="text-primary font-bold">{plan.discount_percentage}% off</span>
-                </div>
+                {plan.plan_type === 'hour_pack' ? (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Personal play time:</span>
+                      <span className="text-primary font-bold">{plan.hours_included} hours</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Play category:</span>
+                      <span className="text-white font-bold">{plan.device_type_name}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Expires:</span>
+                      <span className="text-white font-bold">After {plan.duration_months} month{plan.duration_months === 1 ? '' : 's'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Standard value:</span>
+                      <span className="text-zinc-300 font-bold">₹{Number(plan.standard_value).toLocaleString('en-IN')}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">You save:</span>
+                      <span className="text-emerald-400 font-bold">₹{Math.max(0, Number(plan.standard_value) - Number(plan.price)).toLocaleString('en-IN')}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex justify-between">
+                    <span className="text-zinc-400">Booking Discount:</span>
+                    <span className="text-primary font-bold">{plan.discount_percentage}% off</span>
+                  </div>
+                )}
                 <div className="flex justify-between border-t border-zinc-800 pt-2 font-black text-base">
                   <span className="text-white">Amount:</span>
                   <span className="text-primary text-lg">₹{plan.price}</span>
@@ -737,7 +782,7 @@ export default function PlanDetailsPage() {
 
             <div className="space-y-2">
               <Button variant="gradient" onClick={handleActivatePlan} disabled={isActivating} className="w-full text-black font-black uppercase text-sm h-12 rounded-xl flex items-center justify-center gap-1.5">
-                {isActivating ? <Loader2 className="h-4 w-4 animate-spin" /> : 'ACTIVATE PLAN'} <CheckCircle2 className="h-4 w-4" />
+                {isActivating ? <Loader2 className="h-4 w-4 animate-spin" /> : plan.plan_type === 'hour_pack' ? 'BUY HOUR PACK' : 'ACTIVATE PLAN'} <CheckCircle2 className="h-4 w-4" />
               </Button>
               <Button type="button" onClick={() => customerExists ? setStep('phone') : setStep('details')} variant="ghost" className="w-full border border-zinc-900 text-zinc-400 hover:text-zinc-300 font-bold uppercase text-sm h-11 rounded-xl">
                 ← BACK

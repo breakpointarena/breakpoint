@@ -123,7 +123,7 @@ export async function addFoodOrderToBooking(
     const { data: booking, error: bookingError } = await supabaseAdmin
       .from("bookings")
       .select(
-        "id, customer_phone, food_subtotal, device_subtotal, total_amount, amount_paid, subscription_discount, promo_discount, happy_hour_discount"
+        "id, customer_phone, food_subtotal, device_subtotal, total_amount, amount_paid, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount"
       )
       .eq("id", bookingId)
       .single();
@@ -194,7 +194,8 @@ export async function addFoodOrderToBooking(
       newFoodSubtotal -
       Number(booking.subscription_discount || 0) -
       Number(booking.promo_discount || 0) -
-      Number(booking.happy_hour_discount || 0);
+      Number(booking.happy_hour_discount || 0) -
+      Number(booking.hour_pass_discount || 0);
 
     // Mirror the admin add-food flow: record the audit trail so this food shows
     // up in the billing breakdown as unpaid.

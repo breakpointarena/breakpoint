@@ -57,6 +57,7 @@ export function SubscriptionTable({ data = [], onEdit, onDelete }: SubscriptionT
           <thead className="bg-[var(--background)]/20 text-secondary-content font-black uppercase text-xs tracking-wider border-b border-zinc-900 select-none">
             <tr>
               <th className="px-6 py-4">Plan Name</th>
+              <th className="px-6 py-4">Device Category</th>
               <th className="px-6 py-4">Duration</th>
               <th className="px-6 py-4">Price</th>
               <th className="px-6 py-4">Discount</th>
@@ -76,11 +77,19 @@ export function SubscriptionTable({ data = [], onEdit, onDelete }: SubscriptionT
                     </div>
                   </td>
 
+                  <td className="px-6 py-4 text-white">
+                    {row.plan_type === 'hour_pack'
+                      ? row.device_type_name || 'Legacy universal (retired)'
+                      : '—'}
+                  </td>
+
                   {/* DURATION (Fixed to use duration_months) */}
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-1.5 text-white font-bold">
                       <Clock className="h-3.5 w-3.5 text-muted-content" />
-                      {row.duration_months} {row.duration_months === 1 ? 'Month' : 'Months'}
+                      {row.plan_type === 'hour_pack'
+                        ? `${row.hours_included} hours · ${row.duration_months} month${row.duration_months === 1 ? '' : 's'}`
+                        : `${row.duration_months} month${row.duration_months === 1 ? '' : 's'}`}
                     </div>
                   </td>
 
@@ -95,7 +104,9 @@ export function SubscriptionTable({ data = [], onEdit, onDelete }: SubscriptionT
                   {/* DISCOUNT */}
                   <td className="px-6 py-4">
                     <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-black uppercase tracking-wider text-primary bg-primary/10 border border-primary/20 rounded">
-                      {row.discount_percentage}% OFF
+                      {row.plan_type === 'hour_pack'
+                        ? `Save ₹${Math.max(0, Number(row.standard_value) - Number(row.price)).toLocaleString('en-IN')}`
+                        : `${row.discount_percentage}% OFF`}
                     </span>
                   </td>
 
@@ -133,7 +144,7 @@ export function SubscriptionTable({ data = [], onEdit, onDelete }: SubscriptionT
               ))
             ) : (
               <tr>
-                <td colSpan={6} className="px-6 py-12 text-center text-sm font-medium text-muted-content">
+                <td colSpan={7} className="px-6 py-12 text-center text-sm font-medium text-muted-content">
                   No subscription plans found. Add one to get started.
                 </td>
               </tr>

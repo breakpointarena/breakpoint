@@ -18,6 +18,7 @@ function moneyOf(booking: any): BookingMoney {
     subscriptionDiscount: booking.subscription_discount,
     promoDiscount: booking.promo_discount,
     happyHourDiscount: booking.happy_hour_discount,
+    hourPassDiscount: booking.hour_pass_discount,
     amountPaid: booking.amount_paid,
   };
 }
@@ -45,6 +46,7 @@ export async function getFoodReports(filters?: ReportFilters) {
         subscription_discount,
         promo_discount,
         happy_hour_discount,
+        hour_pass_discount,
         total_amount,
         amount_paid,
         status,
@@ -228,6 +230,7 @@ export async function getDeviceReports(filters?: ReportFilters) {
         subscription_discount,
         promo_discount,
         happy_hour_discount,
+        hour_pass_discount,
         amount_paid,
         status,
         payment_status,
@@ -441,6 +444,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
         subscription_discount,
         promo_discount,
         happy_hour_discount,
+        hour_pass_discount,
         total_amount,
         amount_paid,
         cash_amount,
@@ -914,6 +918,7 @@ export async function getProfitAndLoss(filters: { dateFrom: string; dateTo: stri
         subscription_discount,
         promo_discount,
         happy_hour_discount,
+        hour_pass_discount,
         total_amount,
         amount_paid,
         payment_status,
@@ -949,7 +954,8 @@ export async function getProfitAndLoss(filters: { dateFrom: string; dateTo: stri
       const subscriptionDiscount = Number(b.subscription_discount || 0);
       const promoDiscount = Number(b.promo_discount || 0);
       const happyHourDiscount = Number(b.happy_hour_discount || 0);
-      const totalDiscount = subscriptionDiscount + promoDiscount + happyHourDiscount;
+      const totalDiscount = subscriptionDiscount + promoDiscount + happyHourDiscount +
+        Number(b.hour_pass_discount || 0);
 
       // Discounts apply only to device revenue, not food
       const deviceAfterDiscount = Math.max(0, deviceSubtotal - totalDiscount);

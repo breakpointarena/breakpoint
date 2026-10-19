@@ -107,8 +107,12 @@ export interface SubscriptionQuote {
   customer: CustomerDetails
   planId: string
   planName: string
+  planType: 'membership' | 'hour_pack'
+  deviceTypeId: string | null
   durationMonths: number
   discountPercentage: number
+  hoursIncluded: number | null
+  standardValue: number | null
   totalAmount: number
 }
 
@@ -617,26 +621,56 @@ export async function quoteSubscription(
     }
 
     if (!input.planId) {
-      return { success: false, error: 'Please choose a membership plan.' }
+      return { success: false, error: 'Please choose a subscription plan.' }
     }
 
     const { data: plan, error } = await supabaseAdmin
       .from('subscription_plans')
-      .select('id, name, price, duration_months, discount_percentage, is_active')
+      .select('id, name, price, duration_months, discount_percentage, is_active, plan_type, hours_included, standard_value')
       .eq('id', input.planId)
       .maybeSingle()
 
     if (error) throw error
     if (!plan) {
-      return { success: false, error: 'That membership plan no longer exists.' }
+      return { success: false, error: 'That subscription plan no longer exists.' }
     }
     if (plan.is_active === false) {
-      return { success: false, error: 'That membership plan is no longer on sale.' }
+      return { success: false, error: 'That subscription plan is no longer on sale.' }
     }
 
     const price = Number(plan.price)
     if (!Number.isFinite(price) || price <= 0) {
-      return { success: false, error: 'That membership plan is not priced correctly. Please contact the arena.' }
+      return { success: false, error: 'That subscription plan is not priced correctly. Please contact the arena.' }
+    }
+    const planType = plan.plan_type === 'hour_pack' ? 'hour_pack' : 'membership'
+    let deviceTypeId: string | null = null
+    if (planType === 'hour_pack') {
+      const { data: categorizedPlan, error: categoryError } = await supabaseAdmin
+        .from('subscription_plans')
+        .select('device_type_id')
+        .eq('id', plan.id)
+        .maybeSingle()
+
+      if (categoryError) {
+        console.error('Could not read hour-pack category:', categoryError)
+        return {
+          success: false,
+          error: 'This hour pack is not configured with a play category yet.',
+        }
+      }
+      deviceTypeId = categorizedPlan?.device_type_id ?? null
+    }
+    const hoursIncluded = plan.hours_included == null ? null : Number(plan.hours_included)
+    const standardValue = plan.standard_value == null ? null : Number(plan.standard_value)
+    if (
+      planType === 'hour_pack' &&
+      (!deviceTypeId ||
+        !Number.isInteger(hoursIncluded) ||
+        Number(hoursIncluded) <= 0 ||
+        !Number.isFinite(standardValue) ||
+        Number(standardValue) < price)
+    ) {
+      return { success: false, error: 'That hour pack is not configured correctly. Please contact the arena.' }
     }
 
     return {
@@ -646,8 +680,12 @@ export async function quoteSubscription(
         customer,
         planId: plan.id,
         planName: plan.name || 'Membership',
+        planType,
+        deviceTypeId,
         durationMonths: Number(plan.duration_months || 1),
         discountPercentage: Number(plan.discount_percentage || 0),
+        hoursIncluded,
+        standardValue,
         totalAmount: round2(price),
       },
     }

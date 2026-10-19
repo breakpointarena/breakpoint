@@ -576,6 +576,27 @@ async function fulfilSubscription(
   payment: PaymentReference
 ): Promise<FulfilResult> {
   try {
+    if (quote.planType === 'hour_pack') {
+      const { data: plan, error: planError } = await supabaseAdmin
+        .from('subscription_plans')
+        .select('plan_type, device_type_id')
+        .eq('id', quote.planId)
+        .maybeSingle()
+
+      if (planError) throw planError
+      if (
+        !plan ||
+        plan.plan_type !== 'hour_pack' ||
+        (plan.device_type_id ?? null) !== (quote.deviceTypeId ?? null)
+      ) {
+        return {
+          success: false,
+          error: 'This hour pack changed before it could be activated. Your payment is being refunded.',
+          refundRequired: true,
+        }
+      }
+    }
+
     const phone = quote.customer.phone
 
     // The customer row is upserted rather than assumed: somebody can buy a
@@ -638,6 +659,9 @@ async function fulfilSubscription(
           payment_id: payment.razorpayPaymentId,
           amount_paid: quote.totalAmount,
           status: 'active',
+          ...(quote.planType === 'hour_pack'
+            ? { hours_remaining_minutes: Number(quote.hoursIncluded) * 60 }
+            : {}),
         },
       ])
       .select('id')
@@ -663,16 +687,18 @@ async function fulfilSubscription(
      * exist and an operator can repoint it, which is a better outcome than
      * reversing a payment for a plan that was genuinely bought.
      */
-    const { error: pointerError } = await supabaseAdmin
-      .from('customers')
-      .update({ active_subscription_id: subscription.id })
-      .eq('id', customerId)
+    if (quote.planType === 'membership') {
+      const { error: pointerError } = await supabaseAdmin
+        .from('customers')
+        .update({ active_subscription_id: subscription.id })
+        .eq('id', customerId)
 
-    if (pointerError) {
-      console.error(
-        `Membership ${subscription.id} created but active_subscription_id not set for customer ${customerId}:`,
-        pointerError
-      )
+      if (pointerError) {
+        console.error(
+          `Membership ${subscription.id} created but active_subscription_id not set for customer ${customerId}:`,
+          pointerError
+        )
+      }
     }
 
     return {

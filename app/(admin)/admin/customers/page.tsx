@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { getLiveCustomerRegistryAction } from "./actions";
 import { CustomerTable } from "@/components/admin/customers/CustomerTable";
+import { AddCustomerModal } from "@/components/admin/customers/AddCustomerModal";
 import { CustomerRow } from "@/lib/types/customers";
 import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ export default function AdminCustomersDashboard() {
             Monitor registered players, search demographics info, and verify subscription tracks.
           </p>
         </div>
+        <AddCustomerModal onCreated={loadCustomerDatabase} />
       </div>
 
       {error ? (
@@ -62,7 +64,7 @@ export default function AdminCustomersDashboard() {
           <BreakpointLoader size="md" />
         </div>
       ) : (
-        <CustomerTable customers={customers} />
+        <CustomerTable customers={customers} onSubscriptionAssigned={loadCustomerDatabase} />
       )}
     </div>
   );

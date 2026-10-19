@@ -11,7 +11,8 @@ import { CustomerSessionMenu } from '@/components/customer/layout/CustomerSessio
 
 const navLinks = [
   { label: "Home", path: "/" },
-  { label: "Subscriptions", path: "/subscription" },
+  { label: "My Subscription", path: "/my-subscription" },
+  { label: "Browse Plans", path: "/subscription" },
   { label: "My Bookings", path: "/retrieve" },
   { label: "FOOD MENU", path: "/food" }
 ];

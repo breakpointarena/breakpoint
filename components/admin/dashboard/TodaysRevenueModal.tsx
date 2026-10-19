@@ -26,7 +26,8 @@ export function TodaysRevenueModal({ open, onClose, bookings, totalRevenue, onBo
     const subscriptionDiscount = Number(b.subscription_discount || 0);
     const promoDiscount = Number(b.promo_discount || 0);
     const happyHourDiscount = Number(b.happy_hour_discount || 0);
-    const totalDiscount = subscriptionDiscount + promoDiscount + happyHourDiscount;
+    const hourPassDiscount = Number(b.hour_pass_discount || 0);
+    const totalDiscount = subscriptionDiscount + promoDiscount + happyHourDiscount + hourPassDiscount;
 
     // Discounts apply only to device revenue
     const deviceAfterDiscount = Math.max(0, deviceSubtotal - totalDiscount);

@@ -12,6 +12,8 @@ import { extraPlayersCharge, perExtraPlayerCharge } from "@/lib/payments/money";
 import { settlementStatus } from "@/lib/payments/paymentStatus";
 import { roundToTwo } from "@/lib/currency";
 import { calculateSharedPlayShares } from "@/lib/bookings/sharedPlay";
+import { redeemHourPassesForBooking } from "@/lib/subscriptions/redeemHourPasses";
+import { isHourPackEligibleForDevice } from "@/lib/subscriptions/hourPass";
 import { resolveHappyHour } from "@/lib/payments/happyHour";
 import { formatDbTime } from "@/lib/utils/timeSlots";
 import {
@@ -189,6 +191,7 @@ const BOOKING_LIST_SELECT = `
         subscription_discount,
         promo_discount,
         happy_hour_discount,
+        hour_pass_discount,
         status,
         payment_status,
         created_at,
@@ -196,6 +199,7 @@ const BOOKING_LIST_SELECT = `
         completed_at,
         lock_expires_at,
         billed_on_actual_time,
+        shared_play_enabled,
         walk_in_planned_end,
         walk_in_device_type_name,
         walk_in_player_count,
@@ -239,10 +243,11 @@ function withComputedTotals(booking: any) {
   const subscriptionDiscount = Number(booking.subscription_discount || 0);
   const promoDiscount = Number(booking.promo_discount || 0);
   const happyHourDiscount = Number(booking.happy_hour_discount || 0);
+  const hourPassDiscount = Number(booking.hour_pass_discount || 0);
   const amountPaid = Number(booking.amount_paid || 0);
 
   const correctTotal = roundToTwo(
-    deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount
+    deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount - hourPassDiscount
   );
   const balanceDue = roundToTwo(correctTotal - amountPaid);
 
@@ -257,6 +262,32 @@ function withComputedTotals(booking: any) {
       booking.billed_on_actual_time === true && !booking.completed_at
     )
   };
+}
+
+/** Fetches play periods only for the shared-play bookings in the current list. */
+async function attachSharedPlayPeriods(bookings: any[]) {
+  const sharedBookingIds = bookings
+    .filter((booking) => booking.shared_play_enabled)
+    .map((booking) => booking.id);
+  if (sharedBookingIds.length === 0) return bookings;
+
+  const { data: participants, error } = await supabaseAdmin
+    .from("shared_play_participants")
+    .select("id, booking_id, name, customer_id, customer:customers(id, name, phone, email), shared_play_periods(id, started_at, ended_at)")
+    .in("booking_id", sharedBookingIds);
+  if (error) throw error;
+
+  const participantsByBooking = new Map<string, any[]>();
+  for (const participant of participants || []) {
+    const current = participantsByBooking.get(participant.booking_id) || [];
+    current.push(participant);
+    participantsByBooking.set(participant.booking_id, current);
+  }
+
+  return bookings.map((booking) => ({
+    ...booking,
+    shared_play_participants: participantsByBooking.get(booking.id) || []
+  }));
 }
 
 export async function getAllBookings(filters?: BookingFilters) {
@@ -297,7 +328,8 @@ export async function getAllBookings(filters?: BookingFilters) {
         )
       : (data || []);
 
-    const bookingsWithBalance = inRange.map(withComputedTotals);
+    const bookingsWithPlayPeriods = await attachSharedPlayPeriods(inRange);
+    const bookingsWithBalance = bookingsWithPlayPeriods.map(withComputedTotals);
 
     return { success: true, bookings: bookingsWithBalance };
   } catch (err: any) {
@@ -333,7 +365,8 @@ export async function getAttentionBookings() {
 
     // Totals first: whether a booking counts as unpaid is decided from the
     // recomputed balance, not the stored one.
-    const priced = (data || []).map(withComputedTotals);
+    const bookingsWithPlayPeriods = await attachSharedPlayPeriods(data || []);
+    const priced = bookingsWithPlayPeriods.map(withComputedTotals);
     const flagged = priced.filter((booking: any) => needsAttention(booking));
 
     return { success: true, bookings: flagged };
@@ -399,7 +432,7 @@ export async function getBookingDetails(bookingId: string) {
     if (data.shared_play_enabled || data.status === "checked_in") {
       const { data: participants, error: participantError } = await supabaseAdmin
         .from("shared_play_participants")
-        .select("id, name, billed_amount, shared_play_periods(id, started_at, ended_at, amount)")
+        .select("id, name, customer_id, customer:customers(id, name, phone, email), billed_amount, shared_play_periods(id, started_at, ended_at, amount)")
         .eq("booking_id", bookingId)
         .order("created_at", { ascending: true });
       if (participantError) throw participantError;
@@ -428,10 +461,11 @@ export async function getBookingDetails(bookingId: string) {
     const subscriptionDiscount = Number(data.subscription_discount || 0);
     const promoDiscount = Number(data.promo_discount || 0);
     const happyHourDiscount = Number(data.happy_hour_discount || 0);
+    const hourPassDiscount = Number(data.hour_pass_discount || 0);
     const amountPaid = Number(data.amount_paid || 0);
 
     const correctTotal = roundToTwo(
-      deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount
+      deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount - hourPassDiscount
     );
     const balanceDue = roundToTwo(correctTotal - amountPaid);
 
@@ -786,6 +820,7 @@ export async function checkOutBooking(bookingId: string) {
     if (!allowed.ok) return { success: false, error: allowed.error };
 
     const now = new Date().toISOString();
+    await saveSharedPlayShares(bookingId, new Date(now));
 
     // Re-asserting the status in the WHERE clause closes the gap between the read
     // above and this write, so two staff checking the same booking out at once
@@ -807,14 +842,6 @@ export async function checkOutBooking(bookingId: string) {
       return { success: false, error: "This booking changed while you were working on it. Refresh and try again." };
     }
 
-    try {
-      await saveSharedPlayShares(bookingId, new Date(data.completed_at || now));
-    } catch (shareError) {
-      // Checkout already committed. Keep the successful checkout response intact
-      // and leave the participant breakdown available for staff to refresh.
-      console.error("Could not save shared-play split after checkout:", shareError);
-    }
-
     return { success: true, booking: data };
   } catch (err: any) {
     console.error("Check-out booking error:", err);
@@ -827,7 +854,8 @@ export async function setSharedPlayParticipants(
   bookingId: string,
   enabled: boolean,
   rosterNames: string[],
-  activeNames: string[]
+  activeNames: string[],
+  rosterCustomers: Array<{ customerId: string; name: string }> = []
 ) {
   await requireStaff();
   try {
@@ -836,6 +864,36 @@ export async function setSharedPlayParticipants(
     ).values()].filter(Boolean);
     const roster = normalize(rosterNames);
     const active = normalize(activeNames);
+    const customerLinks = [...new Map(
+      rosterCustomers.map((customer) => [
+        customer.name.trim().toLocaleLowerCase(),
+        { customerId: customer.customerId, name: customer.name.trim() }
+      ])
+    ).values()];
+    if (customerLinks.some((customer) =>
+      !customer.customerId ||
+      !roster.some((name) => name.toLocaleLowerCase() === customer.name.toLocaleLowerCase())
+    )) {
+      return { success: false, error: "Each selected customer must be on the participant list." };
+    }
+
+    if (customerLinks.length > 0) {
+      const { data: customers, error: customersError } = await supabaseAdmin
+        .from("customers")
+        .select("id, name")
+        .in("id", customerLinks.map((customer) => customer.customerId));
+      if (customersError) throw customersError;
+      const customersById = new Map<string, string>();
+      for (const customer of (customers || []) as Array<{ id: string; name: string }>) {
+        customersById.set(customer.id, customer.name);
+      }
+      if (customerLinks.some((link) =>
+        customersById.get(link.customerId)?.trim().toLocaleLowerCase() !== link.name.toLocaleLowerCase()
+      )) {
+        return { success: false, error: "A selected customer profile could not be verified." };
+      }
+    }
+
     const { error } = await supabaseAdmin.rpc("set_shared_play_participants", {
       p_booking_id: bookingId,
       p_enabled: enabled,
@@ -843,6 +901,29 @@ export async function setSharedPlayParticipants(
       p_active_names: active
     });
     if (error) throw error;
+
+    for (const customer of customerLinks) {
+      const { data: participant, error: participantError } = await supabaseAdmin
+        .from("shared_play_participants")
+        .select("id, customer_id")
+        .eq("booking_id", bookingId)
+        .eq("name", customer.name)
+        .maybeSingle();
+      if (participantError) throw participantError;
+      if (!participant) throw new Error("Could not find the newly added customer participant.");
+      if (participant.customer_id && participant.customer_id !== customer.customerId) {
+        throw new Error(`${customer.name} is already linked to a different customer account.`);
+      }
+      if (!participant.customer_id) {
+        const { error: linkError } = await supabaseAdmin
+          .from("shared_play_participants")
+          .update({ customer_id: customer.customerId })
+          .eq("id", participant.id)
+          .eq("booking_id", bookingId);
+        if (linkError) throw linkError;
+      }
+    }
+
     return { success: true };
   } catch (err: any) {
     console.error("Update shared play participants error:", err);
@@ -850,31 +931,402 @@ export async function setSharedPlayParticipants(
   }
 }
 
+export async function getCustomersForSharedPlay() {
+  await requireStaff();
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("customers")
+      .select("id, name, phone, email")
+      .order("name", { ascending: true });
+    if (error) throw error;
+    return { success: true as const, customers: data || [] };
+  } catch (err: any) {
+    console.error("Get shared-play customers error:", err);
+    return {
+      success: false as const,
+      error: err.message || "Could not load customer profiles.",
+      customers: [],
+    };
+  }
+}
+
+export async function linkSharedPlayParticipantToHourPack(
+  bookingId: string,
+  participantId: string,
+  customerId: string
+): Promise<
+  | { success: true; customerName: string; hoursRemaining: number }
+  | { success: false; error: string }
+> {
+  await requireStaff();
+  try {
+    if (!customerId) return { success: false, error: "Select a customer account." };
+
+    const { data: booking, error: bookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("walk_in_device_type_id")
+      .eq("id", bookingId)
+      .maybeSingle();
+    if (bookingError) throw bookingError;
+    if (!booking) return { success: false, error: "Booking not found." };
+
+    let bookingDeviceTypeId = booking.walk_in_device_type_id as string | null;
+    if (!bookingDeviceTypeId) {
+      const { data: slot, error: slotError } = await supabaseAdmin
+        .from("booking_device_slots")
+        .select("device_id")
+        .eq("booking_id", bookingId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (slotError) throw slotError;
+      if (slot?.device_id) {
+        const { data: device, error: deviceError } = await supabaseAdmin
+          .from("devices")
+          .select("device_type_id")
+          .eq("id", slot.device_id)
+          .maybeSingle();
+        if (deviceError) throw deviceError;
+        bookingDeviceTypeId = device?.device_type_id ?? null;
+      }
+    }
+    if (!bookingDeviceTypeId) {
+      return { success: false, error: "Could not determine this booking's play category." };
+    }
+
+    const { data: participant, error: participantError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .select("id")
+      .eq("id", participantId)
+      .eq("booking_id", bookingId)
+      .maybeSingle();
+    if (participantError) throw participantError;
+    if (!participant) return { success: false, error: "That player is not on this booking." };
+
+    const { data: customer, error: customerError } = await supabaseAdmin
+      .from("customers")
+      .select("id, name")
+      .eq("id", customerId)
+      .maybeSingle();
+    if (customerError) throw customerError;
+    if (!customer) return { success: false, error: "The selected customer account was not found." };
+
+    const { data: pass, error: passError } = await supabaseAdmin
+      .from("subscriptions")
+      .select("hours_remaining_minutes, end_date, plan:subscription_plans!inner(name, plan_type, device_type_id)")
+      .eq("customer_id", customer.id)
+      .eq("status", "active")
+      .lte("start_date", arenaToday())
+      .gte("end_date", arenaToday())
+      .gt("hours_remaining_minutes", 0)
+      .order("end_date", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (passError) throw passError;
+    const eligiblePass = (pass || []).find((candidate: any) =>
+      candidate.plan?.plan_type === "hour_pack" &&
+      isHourPackEligibleForDevice(
+        candidate.plan.device_type_id ?? null,
+        bookingDeviceTypeId
+      )
+    );
+    if (!eligiblePass) {
+      return {
+        success: false,
+        error: "No active hour pack with time remaining matches this play category."
+      };
+    }
+
+    const { error: linkError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .update({ customer_id: customer.id })
+      .eq("id", participantId)
+      .eq("booking_id", bookingId);
+    if (linkError) throw linkError;
+
+    return {
+      success: true,
+      customerName: customer.name,
+      hoursRemaining: Number(eligiblePass.hours_remaining_minutes || 0) / 60,
+    };
+  } catch (err: any) {
+    console.error("Link shared-play player to hour pack error:", err);
+    return { success: false, error: err.message || "Could not link this player's hour pack." };
+  }
+}
+
+export async function getHourPackCustomersForSharedPlay(bookingId: string) {
+  await requireStaff();
+  try {
+    const { data: booking, error: bookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("walk_in_device_type_id")
+      .eq("id", bookingId)
+      .maybeSingle();
+    if (bookingError) throw bookingError;
+    if (!booking) return { success: false as const, error: "Booking not found.", customers: [] };
+
+    let bookingDeviceTypeId = booking.walk_in_device_type_id as string | null;
+    if (!bookingDeviceTypeId) {
+      const { data: slot, error: slotError } = await supabaseAdmin
+        .from("booking_device_slots")
+        .select("device_id")
+        .eq("booking_id", bookingId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (slotError) throw slotError;
+      if (slot?.device_id) {
+        const { data: device, error: deviceError } = await supabaseAdmin
+          .from("devices")
+          .select("device_type_id")
+          .eq("id", slot.device_id)
+          .maybeSingle();
+        if (deviceError) throw deviceError;
+        bookingDeviceTypeId = device?.device_type_id ?? null;
+      }
+    }
+    if (!bookingDeviceTypeId) {
+      return {
+        success: false as const,
+        error: "Could not determine this booking's play category.",
+        customers: [],
+      };
+    }
+
+    type ActiveHourPackSubscription = {
+      customer_id: string | null;
+      subscription_plan_id: string | null;
+      hours_remaining_minutes: number | null;
+      end_date: string;
+    };
+    type HourPackPlan = {
+      id: string;
+      name: string;
+      device_type_id: string | null;
+      is_active: boolean;
+      device_type: { display_name: string } | null;
+    };
+    type CustomerAccount = { id: string; name: string; phone: string; email: string | null };
+
+    const { data: plans, error: plansError } = await supabaseAdmin
+      .from("subscription_plans")
+      .select("id, name, device_type_id, is_active, device_type:device_types(display_name)")
+      .eq("plan_type", "hour_pack");
+    if (plansError) throw plansError;
+    if (!plans?.length) return { success: true as const, customers: [] };
+    const hourPackPlans = (plans as HourPackPlan[]).filter((plan) =>
+      plan.device_type_id === bookingDeviceTypeId ||
+      (plan.device_type_id === null && !plan.is_active)
+    );
+    if (hourPackPlans.length === 0) return { success: true as const, customers: [] };
+    const planById = new Map(hourPackPlans.map((plan) => [plan.id, plan]));
+    const planIds = hourPackPlans.map((plan) => plan.id);
+
+    const today = arenaToday();
+    const { data: subscriptions, error: subscriptionsError } = await supabaseAdmin
+      .from("subscriptions")
+      .select("customer_id, subscription_plan_id, hours_remaining_minutes, end_date")
+      .eq("status", "active")
+      .lte("start_date", today)
+      .gte("end_date", today)
+      .gt("hours_remaining_minutes", 0)
+      .in("subscription_plan_id", planIds);
+    if (subscriptionsError) throw subscriptionsError;
+    if (!subscriptions?.length) return { success: true as const, customers: [] };
+    const activeSubscriptions = subscriptions as ActiveHourPackSubscription[];
+
+    const eligibleSubscriptions = activeSubscriptions
+      .filter((subscription) =>
+        subscription.customer_id && planById.has(subscription.subscription_plan_id || "")
+      )
+      .sort((a, b) => a.end_date.localeCompare(b.end_date));
+    const customerIds = [...new Set(
+      eligibleSubscriptions.map((subscription) => subscription.customer_id!)
+    )];
+    if (customerIds.length === 0) return { success: true as const, customers: [] };
+
+    const { data: customers, error: customersError } = await supabaseAdmin
+      .from("customers")
+      .select("id, name, phone, email")
+      .in("id", customerIds)
+      .order("name", { ascending: true });
+    if (customersError) throw customersError;
+    const customerAccounts = (customers || []) as CustomerAccount[];
+
+    const subscriptionByCustomer = new Map<string, (typeof eligibleSubscriptions)[number]>();
+    for (const subscription of eligibleSubscriptions) {
+      if (subscription.customer_id && !subscriptionByCustomer.has(subscription.customer_id)) {
+        subscriptionByCustomer.set(subscription.customer_id, subscription);
+      }
+    }
+
+    return {
+      success: true as const,
+      customers: customerAccounts.flatMap((customer) => {
+        const subscription = subscriptionByCustomer.get(customer.id);
+        const plan = subscription ? planById.get(subscription.subscription_plan_id || "") : null;
+        return subscription && plan ? [{
+          id: customer.id,
+          name: customer.name,
+          phone: customer.phone,
+          email: customer.email,
+          remaining_minutes: Number(subscription.hours_remaining_minutes || 0),
+          pack_name: plan.name,
+          device_type_name: plan.device_type?.display_name ?? null,
+          end_date: subscription.end_date,
+        }] : [];
+      }),
+    };
+  } catch (err: any) {
+    console.error("Get shared-play hour-pack customers error:", err);
+    return {
+      success: false as const,
+      error: err.message || "Could not load customers with active hour packs.",
+      customers: [],
+    };
+  }
+}
+
 /** Apply interval extra-player charges and save the per-person split at checkout. */
 async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
   const { data: booking, error: bookingError } = await supabaseAdmin
     .from("bookings")
-    .select("shared_play_enabled, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, total_amount, amount_paid, payment_status, booking_device_slots(id, hourly_rate, included_players, extra_player_charge, duration_hours, slot_total, extra_players_total)")
+    .select("customer_phone, customer_name, checked_in_at, shared_play_enabled, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, total_amount, amount_paid, payment_status, booking_device_slots(id, hourly_rate, player_count, included_players, extra_player_charge, duration_hours, slot_total, extra_players_total)")
     .eq("id", bookingId)
     .maybeSingle();
   if (bookingError) throw bookingError;
-  if (!booking?.shared_play_enabled) return;
+  if (!booking) return;
 
   const slot = booking.booking_device_slots?.[0];
   if (!slot) return;
   const { data: participants, error: participantsError } = await supabaseAdmin
     .from("shared_play_participants")
-    .select("id")
+    .select("id, name, customer_id")
     .eq("booking_id", bookingId);
   if (participantsError) throw participantsError;
-  const participantIds = (participants || []).map((row: any) => row.id);
+  let playerRows = participants || [];
+  if (
+    playerRows.length === 0 &&
+    !booking.shared_play_enabled &&
+    Number(slot.player_count || 1) === 1 &&
+    booking.checked_in_at
+  ) {
+    const { data: player, error: insertPlayerError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .insert({
+        booking_id: bookingId,
+        name: String(booking.customer_name || "Player 1").trim() || "Player 1"
+      })
+      .select("id, name, customer_id")
+      .single();
+    if (insertPlayerError) throw insertPlayerError;
+    playerRows = [player];
+  }
+  const participantIds = playerRows.map((row: any) => row.id);
   if (participantIds.length === 0) return;
 
-  const { data: periods, error: periodsError } = await supabaseAdmin
+  const { data: periodRows, error: periodsError } = await supabaseAdmin
     .from("shared_play_periods")
     .select("id, participant_id, started_at, ended_at")
     .in("participant_id", participantIds);
   if (periodsError) throw periodsError;
+  let periods = periodRows || [];
+  if (
+    periods.length === 0 &&
+    !booking.shared_play_enabled &&
+    Number(slot.player_count || 1) === 1 &&
+    booking.checked_in_at &&
+    new Date(booking.checked_in_at) < endedAt
+  ) {
+    const { data: period, error: insertPeriodError } = await supabaseAdmin
+      .from("shared_play_periods")
+      .insert({
+        participant_id: playerRows[0].id,
+        started_at: booking.checked_in_at,
+        ended_at: endedAt.toISOString()
+      })
+      .select("id, participant_id, started_at, ended_at")
+      .single();
+    if (insertPeriodError) throw insertPeriodError;
+    periods = [period];
+  }
+
+  const bookedPlayer = playerRows.find(
+    (row: any) => row.name.trim().toLowerCase() === String(booking.customer_name || "Player 1").trim().toLowerCase()
+  );
+  if (bookedPlayer && !bookedPlayer.customer_id && booking.customer_phone) {
+    const normalizedPhone = String(booking.customer_phone).replace(/\D/g, "").slice(-10);
+    const { data: customer, error: customerError } = await supabaseAdmin
+      .from("customers")
+      .select("id")
+      .eq("phone", normalizedPhone)
+      .maybeSingle();
+    if (customerError) throw customerError;
+    if (customer) {
+      const { error: linkError } = await supabaseAdmin
+        .from("shared_play_participants")
+        .update({ customer_id: customer.id })
+        .eq("id", bookedPlayer.id)
+        .eq("booking_id", bookingId);
+      if (linkError) throw linkError;
+      bookedPlayer.customer_id = customer.id;
+    }
+  }
+
+  const deviceSubtotal = Number(booking.device_subtotal || 0);
+  const otherDiscounts = Math.min(
+    deviceSubtotal,
+    Number(booking.subscription_discount || 0) +
+      Number(booking.promo_discount || 0) +
+      Number(booking.happy_hour_discount || 0)
+  );
+  const shareableRatio = deviceSubtotal > 0
+    ? Math.max(0, deviceSubtotal - otherDiscounts) / deviceSubtotal
+    : 0;
+  let hourPassDiscount = 0;
+
+  if (!booking.shared_play_enabled) {
+    if (Number(slot.player_count || 1) === 1 && bookedPlayer?.customer_id) {
+      const playedMs = (periods || [])
+        .filter((period: any) => period.participant_id === bookedPlayer.id)
+        .reduce((total: number, period: any) => {
+          const startedAt = new Date(period.started_at).getTime();
+          const periodEnd = period.ended_at ? new Date(period.ended_at).getTime() : endedAt.getTime();
+          return total + Math.max(0, periodEnd - startedAt);
+        }, 0);
+      const redeemed = await redeemHourPassesForBooking(bookingId, [{
+        participantId: bookedPlayer.id,
+        customerId: bookedPlayer.customer_id,
+        playedMinutes: Math.ceil(playedMs / 60_000),
+        playerShare: deviceSubtotal,
+        shareableAmount: deviceSubtotal * shareableRatio,
+      }]);
+      hourPassDiscount = redeemed.get(bookedPlayer.id)?.amountCovered || 0;
+      const totalAmount = Math.max(0, roundToTwo(
+        deviceSubtotal + Number(booking.food_subtotal || 0) -
+          otherDiscounts - hourPassDiscount
+      ));
+      const { error: bookingUpdateError } = await supabaseAdmin
+        .from("bookings")
+        .update({
+          hour_pass_discount: hourPassDiscount,
+          total_amount: totalAmount,
+          payment_status: settlementStatus({
+            amountPaid: Number(booking.amount_paid || 0),
+            total: totalAmount
+          }),
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", bookingId);
+      if (bookingUpdateError) throw bookingUpdateError;
+      const { error: playerUpdateError } = await supabaseAdmin
+        .from("shared_play_participants")
+        .update({ billed_amount: Math.max(0, deviceSubtotal - hourPassDiscount) })
+        .eq("id", bookedPlayer.id);
+      if (playerUpdateError) throw playerUpdateError;
+    }
+    return;
+  }
 
   const calculation = calculateSharedPlayShares(
     periods || [],
@@ -891,19 +1343,46 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
     .eq("id", slot.id);
   if (slotUpdateError) throw slotUpdateError;
 
-  const deviceSubtotal = roundToTwo(
+  const sharedDeviceSubtotal = roundToTwo(
     Number(booking.device_subtotal || 0) +
     calculation.extraPlayersTotal - Number(slot.extra_players_total || 0)
   );
-  const totalDiscount = Number(booking.subscription_discount || 0) +
-    Number(booking.promo_discount || 0) + Number(booking.happy_hour_discount || 0);
+  const sharedShareableRatio = sharedDeviceSubtotal > 0
+    ? Math.max(0, sharedDeviceSubtotal - otherDiscounts) / sharedDeviceSubtotal
+    : 0;
+  const byParticipant = new Map(calculation.shares.map(share => [share.participantId, share.amount]));
+  const passPlayers = playerRows.flatMap((participant: any) => {
+    if (!participant.customer_id) return [];
+    const playerPeriods = (periods || []).filter(
+      (period: any) => period.participant_id === participant.id
+    );
+    const playedMs = playerPeriods.reduce((total: number, period: any) => {
+      const startedAt = new Date(period.started_at).getTime();
+      const periodEnd = period.ended_at ? new Date(period.ended_at).getTime() : endedAt.getTime();
+      return total + Math.max(0, periodEnd - startedAt);
+    }, 0);
+    const share = byParticipant.get(participant.id) || 0;
+    return [{
+      participantId: participant.id,
+      customerId: participant.customer_id,
+      playedMinutes: Math.ceil(playedMs / 60_000),
+      playerShare: share,
+      shareableAmount: share * sharedShareableRatio,
+    }];
+  });
+  const redeemed = await redeemHourPassesForBooking(bookingId, passPlayers);
+  hourPassDiscount = roundToTwo(
+    [...redeemed.values()].reduce((total, use) => total + use.amountCovered, 0)
+  );
+  const totalDiscount = otherDiscounts + hourPassDiscount;
   const totalAmount = Math.max(0, roundToTwo(
-    deviceSubtotal + Number(booking.food_subtotal || 0) - totalDiscount
+    sharedDeviceSubtotal + Number(booking.food_subtotal || 0) - totalDiscount
   ));
   const { error: bookingUpdateError } = await supabaseAdmin
     .from("bookings")
     .update({
-      device_subtotal: deviceSubtotal,
+      device_subtotal: sharedDeviceSubtotal,
+      hour_pass_discount: hourPassDiscount,
       total_amount: totalAmount,
       payment_status: settlementStatus({
         amountPaid: Number(booking.amount_paid || 0),
@@ -966,7 +1445,11 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
   for (const share of calculation.shares) {
     const { error } = await supabaseAdmin
       .from("shared_play_participants")
-      .update({ billed_amount: share.amount })
+      .update({
+        billed_amount: Math.max(0, roundToTwo(
+          share.amount - (redeemed.get(share.participantId)?.amountCovered || 0)
+        ))
+      })
       .eq("id", share.participantId);
     if (error) throw error;
   }
@@ -1297,7 +1780,7 @@ export async function removeFoodItemFromBooking(bookingId: string, foodItemId: s
     const { data: booking, error: bookingError } = await supabaseAdmin
       .from("bookings")
       .select(
-        "status, payment_status, total_amount, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, amount_paid, billed_on_actual_time, completed_at"
+        "status, payment_status, total_amount, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, amount_paid, billed_on_actual_time, completed_at"
       )
       .eq("id", bookingId)
       .single();
@@ -1393,10 +1876,11 @@ export async function removeFoodItemFromBooking(bookingId: string, foodItemId: s
     const subscriptionDiscount = Number(booking.subscription_discount || 0);
     const promoDiscount = Number(booking.promo_discount || 0);
     const happyHourDiscount = Number(booking.happy_hour_discount || 0);
+    const hourPassDiscount = Number(booking.hour_pass_discount || 0);
     const amountPaid = Number(booking.amount_paid || 0);
 
     const newTotal =
-      deviceSubtotal + newFoodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount;
+      deviceSubtotal + newFoodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount - hourPassDiscount;
 
     // Same rule as addFoodToBooking, so removing the last unpaid item settles
     // a booking that was only "partial" because of it.
@@ -2370,7 +2854,7 @@ export async function checkOutWalkInSession(
       // The RPC refuses anything that is not a session in progress; say which.
       const { data: booking } = await supabaseAdmin
         .from("bookings")
-        .select("status, billed_on_actual_time")
+        .select("status, billed_on_actual_time, completed_at")
         .eq("id", bookingId)
         .maybeSingle();
 
@@ -2385,6 +2869,21 @@ export async function checkOutWalkInSession(
         };
       }
       if (booking.status === "completed") {
+        if (booking.billed_on_actual_time && booking.completed_at) {
+          await saveSharedPlayShares(bookingId, new Date(booking.completed_at));
+          const { data: completedBooking, error: completedError } = await supabaseAdmin
+            .from("bookings")
+            .select("device_subtotal, total_amount, hour_pass_discount")
+            .eq("id", bookingId)
+            .single();
+          if (completedError) throw completedError;
+          return {
+            success: true,
+            deviceSubtotal: Number(completedBooking.device_subtotal || 0),
+            totalAmount: Number(completedBooking.total_amount || 0),
+            hourPassDiscount: Number(completedBooking.hour_pass_discount || 0),
+          };
+        }
         return { success: false, error: "This session has already been checked out." };
       }
       return {
@@ -2418,6 +2917,67 @@ export async function checkOutWalkInSession(
       includedPlayers: Number(slot.included_players || 1),
       extraPlayerCharge: Number(slot.extra_player_charge || 0)
     });
+    let extraPlayersTotal = pricing.extraPlayersTotal;
+    let deviceSubtotal = pricing.deviceSubtotal;
+
+    // Food already on the booking stays; only the device side is priced here.
+    const { data: current, error: currentError } = await supabaseAdmin
+      .from("bookings")
+      .select(
+        "customer_phone, food_subtotal, promo_discount, walk_in_device_type_id, walk_in_device_type_name, shared_play_enabled"
+      )
+      .eq("id", bookingId)
+      .single();
+
+    if (currentError) throw currentError;
+
+    let sharedPlayCalculation: ReturnType<typeof calculateSharedPlayShares> | null = null;
+    let billedPricing = pricing;
+    if (current.shared_play_enabled) {
+      const { data: participants, error: participantsError } = await supabaseAdmin
+        .from("shared_play_participants")
+        .select("id")
+        .eq("booking_id", bookingId);
+      if (participantsError) throw participantsError;
+      const participantIds = (participants || []).map((participant: { id: string }) => participant.id);
+      if (participantIds.length === 0) {
+        throw new Error("Shared play is enabled but the booking has no participants.");
+      }
+
+      const { data: periods, error: periodsError } = await supabaseAdmin
+        .from("shared_play_periods")
+        .select("id, participant_id, started_at, ended_at")
+        .in("participant_id", participantIds);
+      if (periodsError) throw periodsError;
+
+      sharedPlayCalculation = calculateSharedPlayShares(
+        periods || [],
+        Number(slot.hourly_rate || 0),
+        Number(slot.extra_player_charge || 0),
+        Number(slot.included_players || 1),
+        null,
+        endedAt
+      );
+      extraPlayersTotal = sharedPlayCalculation.extraPlayersTotal;
+      const sharedPlayDeviceCharges = sharedPlayCalculation.deviceCharges;
+      deviceSubtotal = roundToTwo(sharedPlayDeviceCharges + extraPlayersTotal);
+      billedPricing = {
+        ...pricing,
+        playedMinutes: Math.ceil(sharedPlayCalculation.trackedHours * 60),
+        durationHours: sharedPlayCalculation.trackedHours,
+        deviceCharges: sharedPlayDeviceCharges,
+        extraPlayersTotal,
+        deviceSubtotal
+      };
+
+      for (const share of sharedPlayCalculation.shares) {
+        const { error: shareError } = await supabaseAdmin
+          .from("shared_play_participants")
+          .update({ billed_amount: share.amount })
+          .eq("id", share.participantId);
+        if (shareError) throw shareError;
+      }
+    }
 
     // The window actually played replaces the placeholder claimed at check-in, so
     // availability, the timeline and the utilisation reports all describe the
@@ -2429,23 +2989,12 @@ export async function checkOutWalkInSession(
         slot_start_time: toClockTime(startedAt),
         slot_end_time: toClockTime(endedAt),
         duration_hours: pricing.durationHours,
-        slot_total: pricing.deviceCharges,
-        extra_players_total: pricing.extraPlayersTotal
+        slot_total: billedPricing.deviceCharges,
+        extra_players_total: extraPlayersTotal
       })
       .eq("id", slot.id);
 
     if (slotUpdateError) throw slotUpdateError;
-
-    // Food already on the booking stays; only the device side is priced here.
-    const { data: current, error: currentError } = await supabaseAdmin
-      .from("bookings")
-      .select(
-        "customer_phone, food_subtotal, promo_discount, walk_in_device_type_id, walk_in_device_type_name"
-      )
-      .eq("id", bookingId)
-      .single();
-
-    if (currentError) throw currentError;
 
     // Happy hour rules name devices either way round, so the matcher is given the
     // display name and the internal one - the same pair the online quote passes.
@@ -2459,7 +3008,7 @@ export async function checkOutWalkInSession(
     // the same helpers the online quote uses. Neither could be worked out when the
     // walk-in was created: there was no amount to take a percentage of, and no
     // window to test against a happy hour.
-    const discountable = pricing.deviceSubtotal;
+    const discountable = deviceSubtotal;
 
     const membership = await resolveActiveMembership(current.customer_phone || "");
     const subscriptionDiscount = calculateMembershipDiscount(
@@ -2492,15 +3041,16 @@ export async function checkOutWalkInSession(
 
     const totalAmount = Math.max(
       0,
-      roundToTwo(pricing.deviceSubtotal + foodSubtotal - totalDiscount)
+      roundToTwo(deviceSubtotal + foodSubtotal - totalDiscount)
     );
 
     const { error: bookingUpdateError } = await supabaseAdmin
       .from("bookings")
       .update({
-        device_subtotal: pricing.deviceSubtotal,
+        device_subtotal: deviceSubtotal,
         subscription_discount: subscriptionDiscount,
         happy_hour_discount: happyHour.discount,
+        hour_pass_discount: 0,
         total_amount: totalAmount,
         updated_at: new Date().toISOString()
       })
@@ -2508,11 +3058,25 @@ export async function checkOutWalkInSession(
 
     if (bookingUpdateError) throw bookingUpdateError;
 
-    await rewriteSessionLineItems(bookingId, pricing, Number(slot.hourly_rate || 0), {
-      subscriptionDiscount,
-      subscriptionPercentage: membership.discountPercentage,
-      happyHour
-    });
+    await rewriteSessionLineItems(
+      bookingId,
+      billedPricing,
+      Number(slot.hourly_rate || 0),
+      {
+        subscriptionDiscount,
+        subscriptionPercentage: membership.discountPercentage,
+        happyHour
+      },
+      sharedPlayCalculation !== null
+    );
+    await saveSharedPlayShares(bookingId, endedAt);
+
+    const { data: finalBooking, error: finalBookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("hour_pass_discount, total_amount")
+      .eq("id", bookingId)
+      .single();
+    if (finalBookingError) throw finalBookingError;
 
     return {
       success: true,
@@ -2520,11 +3084,12 @@ export async function checkOutWalkInSession(
       endedAt: session.ended_at,
       playedMinutes: pricing.playedMinutes,
       durationLabel: formatPlayedDuration(pricing.playedMinutes),
-      deviceSubtotal: pricing.deviceSubtotal,
+      deviceSubtotal,
       subscriptionDiscount,
       happyHourDiscount: happyHour.discount,
       happyHourRuleName: happyHour.ruleName,
-      totalAmount
+      totalAmount: Number(finalBooking.total_amount || totalAmount),
+      hourPassDiscount: Number(finalBooking.hour_pass_discount || 0)
     };
   } catch (err: any) {
     console.error("Check-out walk-in session error:", err);
@@ -2547,13 +3112,14 @@ async function rewriteSessionLineItems(
     subscriptionDiscount: number;
     subscriptionPercentage: number;
     happyHour: { ruleId: string | null; ruleName: string | null; discount: number };
-  }
+  },
+  sharedPlay = false
 ) {
   await supabaseAdmin
     .from("booking_line_items")
     .delete()
     .eq("booking_id", bookingId)
-    .in("item_type", ["device", "extra_players", "subscription_discount", "happy_hour_discount"]);
+    .in("item_type", ["device", "extra_players", "subscription_discount", "happy_hour_discount", "hour_pass_discount"]);
 
   const lineItems: any[] = [
     {
@@ -2569,7 +3135,19 @@ async function rewriteSessionLineItems(
     }
   ];
 
-  if (pricing.extraPlayersCount > 0) {
+  if (sharedPlay && pricing.extraPlayersTotal > 0) {
+    lineItems.push({
+      booking_id: bookingId,
+      item_type: "extra_players",
+      description: "Shared play extra-player charges",
+      quantity: 1,
+      unit_price: pricing.extraPlayersTotal,
+      line_total: pricing.extraPlayersTotal,
+      added_by: "admin",
+      is_paid: false,
+      display_order: 2
+    });
+  } else if (!sharedPlay && pricing.extraPlayersCount > 0) {
     lineItems.push({
       booking_id: bookingId,
       item_type: "extra_players",
@@ -2638,7 +3216,7 @@ export async function updatePlayerCount(slotId: string, newPlayerCount: number, 
     // Get current slot details and booking info
     const { data: slot, error: slotError } = await supabaseAdmin
       .from("booking_device_slots")
-      .select("*, bookings!inner(id, status, payment_status, total_amount, amount_paid, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, billed_on_actual_time, completed_at)")
+      .select("*, bookings!inner(id, status, payment_status, total_amount, amount_paid, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, billed_on_actual_time, completed_at)")
       .eq("id", slotId)
       .single();
 
@@ -2723,9 +3301,10 @@ export async function updatePlayerCount(slotId: string, newPlayerCount: number, 
     const subscriptionDiscount = Number(slot.bookings.subscription_discount || 0);
     const promoDiscount = Number(slot.bookings.promo_discount || 0);
     const happyHourDiscount = Number(slot.bookings.happy_hour_discount || 0);
+    const hourPassDiscount = Number(slot.bookings.hour_pass_discount || 0);
 
     // Recalculate total: (device + food) - all discounts
-    const newTotalAmount = newDeviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount;
+    const newTotalAmount = newDeviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount - hourPassDiscount;
 
     const { error: updateBookingError } = await supabaseAdmin
       .from("bookings")
@@ -2816,6 +3395,7 @@ export async function closeBooking(bookingId: string) {
     if (!allowed.ok) return { success: false, error: allowed.error };
 
     const now = new Date().toISOString();
+    await saveSharedPlayShares(bookingId, new Date(now));
 
     const { data, error } = await supabaseAdmin
       .from("bookings")
@@ -2859,6 +3439,7 @@ export async function getBookingBillingDetails(bookingId: string) {
         subscription_discount,
         promo_discount,
         happy_hour_discount,
+        hour_pass_discount,
         payment_status,
         status,
         completed_at,
@@ -2900,9 +3481,15 @@ export async function getBookingBillingDetails(bookingId: string) {
     const subscriptionDiscount = Number(data.subscription_discount || 0);
     const promoDiscount = Number(data.promo_discount || 0);
     const happyHourDiscount = Number(data.happy_hour_discount || 0);
+    const hourPassDiscount = Number(data.hour_pass_discount || 0);
     const amountPaid = Number(data.amount_paid || 0);
 
-    const correctTotal = deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount;
+    const correctTotal = Math.max(
+      0,
+      roundToTwo(
+        deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount - hourPassDiscount
+      )
+    );
 
     // Calculate unpaid amount
     const unpaidItems = lineItems?.filter((item: any) => !item.is_paid) || [];
@@ -3095,6 +3682,7 @@ export async function createFoodOnlyWalkInBooking(payload: {
         subscription_discount: 0,
         promo_discount: 0,
         happy_hour_discount: 0,
+        hour_pass_discount: 0,
         total_amount: payload.totalAmount,
         /**
          * Raised unpaid, like every other order.

@@ -109,6 +109,8 @@ export function BookingsGrid({
                       createdAt={booking.created_at}
                       checkedInAt={booking.checked_in_at}
                       completedAt={booking.completed_at}
+                      sharedPlayEnabled={booking.shared_play_enabled}
+                      sharedPlayParticipants={booking.shared_play_participants || []}
                     />
                     {awaitingCheckIn && (
                       <p className="text-[11px] text-amber-300/70 font-medium mt-1">

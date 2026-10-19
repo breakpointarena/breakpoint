@@ -22,6 +22,13 @@ export default function SubscriptionPage() {
 
   // State for dynamic data and delete confirmation
   const [plans, setPlans] = useState<any[]>([])
+  const [deviceTypes, setDeviceTypes] = useState<Array<{
+    id: string
+    name: string
+    display_name: string
+    regular_hourly_rate: number
+    is_active: boolean
+  }>>([])
   const [planToDelete, setPlanToDelete] = useState<string | null>(null)
 
   const [isLoading, setIsLoading] = useState(true)
@@ -33,8 +40,10 @@ export default function SubscriptionPage() {
   const loadPlans = async () => {
     setIsLoading(true)
     try {
-      const { data } = await getSubscriptionPlans()
-      setPlans(data)
+      const result = await getSubscriptionPlans()
+      if (!result.success) throw new Error(result.error)
+      setPlans(result.data || [])
+      setDeviceTypes(result.deviceTypes || [])
     } catch (error: any) {
       toast.error('Failed to load plans', { description: error.message })
     } finally {
@@ -109,7 +118,12 @@ export default function SubscriptionPage() {
       </div>
 
       {/* ADD / EDIT MODALS */}
-      <AddSubscriptionModal open={isAddOpen} setOpen={setIsAddOpen} onFormSuccess={handleRefresh} />
+      <AddSubscriptionModal
+        deviceTypes={deviceTypes}
+        open={isAddOpen}
+        setOpen={setIsAddOpen}
+        onFormSuccess={handleRefresh}
+      />
 
       {editingPlan && (
         <EditSubscriptionModal
