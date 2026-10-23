@@ -94,12 +94,17 @@ export default function AdminBookingsPage() {
   /**
    * The entered finish, read the way the server will read it.
    *
-   * Against now, because check-in from this screen starts the session now - the
-   * same function the action calls, so what the dialog says and what the claim
-   * does cannot drift apart.
+   * Against the saved manual start when this booking has one, otherwise now.
    */
   const checkInPlannedEndCheck = useMemo(
-    () => (checkInPlannedEnd ? resolvePlannedSession(null, checkInPlannedEnd) : null),
+    () => (checkInPlannedEnd
+      ? resolvePlannedSession(
+          checkInTarget?.walk_in_pending_start_time
+            ? String(checkInTarget.walk_in_pending_start_time).slice(0, 5)
+            : null,
+          checkInPlannedEnd
+        )
+      : null),
     [checkInPlannedEnd, checkInTarget]
   );
   const [cancelReason, setCancelReason] = useState("");
@@ -114,17 +119,22 @@ export default function AdminBookingsPage() {
     balanceDue: number;
     bookingNumber: string;
     isCheckout: boolean; // Track if this is from checkout attempt (vs billing modal)
+    walletBalance: number;
+    paymentRequestId: string;
   }>({
     open: false,
     bookingId: null,
     balanceDue: 0,
     bookingNumber: "",
-    isCheckout: false
+    isCheckout: false,
+    walletBalance: 0,
+    paymentRequestId: ""
   });
   const [paymentSplit, setPaymentSplit] = useState({
     cashAmount: 0,
     cardAmount: 0,
-    upiAmount: 0
+    upiAmount: 0,
+    walletAmount: 0
   });
 
   // Initialize payment split when modal opens
@@ -141,7 +151,8 @@ export default function AdminBookingsPage() {
       setPaymentSplit({
         cashAmount: 0,
         cardAmount: 0,
-        upiAmount: pendingPaymentModal.balanceDue
+        upiAmount: pendingPaymentModal.balanceDue,
+        walletAmount: 0
       });
     }
   }, [pendingPaymentModal.open, pendingPaymentModal.balanceDue]);
@@ -600,6 +611,12 @@ export default function AdminBookingsPage() {
   };
 
   const handleCheckOut = async (bookingId: string, bookingNumber: string, booking: any) => {
+    // Shared play settles each person against their own participant record and
+    // wallet. Open the participant controls instead of booking-owner billing.
+    if (booking.shared_play_enabled) {
+      setSelectedBooking(booking);
+      return;
+    }
     // A session has no scheduled end to be early for. Checking out is what fixes
     // the end time and, with it, the price.
     if (booking.billed_on_actual_time) {
@@ -653,7 +670,9 @@ export default function AdminBookingsPage() {
         bookingId: billingBooking.id,
         balanceDue: balanceDue,
         bookingNumber: billingBooking.booking_number,
-        isCheckout: true // Mark this as a checkout attempt
+        isCheckout: true, // Mark this as a checkout attempt
+        walletBalance: Number(billingBooking.wallet_balance || 0),
+        paymentRequestId: crypto.randomUUID()
       });
       return;
     }
@@ -682,6 +701,10 @@ export default function AdminBookingsPage() {
     }
 
     const { booking } = billingResult;
+    if (booking.shared_play_enabled) {
+      setSelectedBooking({ id: booking.id });
+      return;
+    }
     const balanceDue = Number(booking.balance_due || 0);
 
     // If there's a balance due (pending payment), show warning modal first
@@ -691,7 +714,9 @@ export default function AdminBookingsPage() {
         bookingId: booking.id,
         balanceDue: balanceDue,
         bookingNumber: booking.booking_number,
-        isCheckout: false // This is for billing modal, not direct checkout
+        isCheckout: false, // This is for billing modal, not direct checkout
+        walletBalance: Number(booking.wallet_balance || 0),
+        paymentRequestId: crypto.randomUUID()
       });
     } else {
       // No pending payment, proceed directly to checkout billing modal
@@ -704,7 +729,7 @@ export default function AdminBookingsPage() {
     if (!pendingPaymentModal.bookingId) return;
 
     // Validate split amounts
-    const totalSplit = paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount;
+    const totalSplit = paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount;
     if (Math.abs(totalSplit - pendingPaymentModal.balanceDue) > 0.01) {
       toast.error("Invalid payment split", {
         description: `Total split (₹${totalSplit.toFixed(2)}) must equal balance due (₹${pendingPaymentModal.balanceDue.toFixed(2)})`
@@ -716,7 +741,7 @@ export default function AdminBookingsPage() {
     const isCheckoutAttempt = pendingPaymentModal.isCheckout;
 
     startTransition(async () => {
-      const result = await markBookingAsPaid(bookingIdToProcess, paymentSplit);
+      const result = await markBookingAsPaid(bookingIdToProcess, { ...paymentSplit, idempotencyKey: pendingPaymentModal.paymentRequestId });
 
       if (result.success) {
         // Build payment description
@@ -726,12 +751,13 @@ export default function AdminBookingsPage() {
         if (paymentSplit.upiAmount > 0) methods.push(`UPI: ₹${paymentSplit.upiAmount}`);
         if (paymentSplit.cashAmount > 0) methods.push(`Cash: ₹${paymentSplit.cashAmount}`);
         if (paymentSplit.cardAmount > 0) methods.push(`Card: ₹${paymentSplit.cardAmount}`);
+        if (paymentSplit.walletAmount > 0) methods.push(`Wallet: ₹${paymentSplit.walletAmount}`);
 
         toast.success("Payment marked as paid", {
           description: methods.join(', ')
         });
-        setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false });
-        setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: 0 }); // Reset
+        setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false, walletBalance: 0, paymentRequestId: "" });
+        setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: 0, walletAmount: 0 }); // Reset
 
         if (isCheckoutAttempt) {
           // If this was a checkout attempt, proceed with checkout
@@ -1667,14 +1693,17 @@ export default function AdminBookingsPage() {
           refreshAll();
         }}
         openFoodModalDirectly={openFoodModal}
-        onPendingPayment={(bookingId, balanceDue, bookingNumber) => {
+        onPendingPayment={async (bookingId, balanceDue, bookingNumber) => {
           // Show the pending payment modal (from checkout attempt)
+          const billingResult = await getBookingBillingDetails(bookingId);
           setPendingPaymentModal({
             open: true,
             bookingId,
             balanceDue,
             bookingNumber,
-            isCheckout: true
+            isCheckout: true,
+            walletBalance: Number(billingResult.booking?.wallet_balance || 0),
+            paymentRequestId: crypto.randomUUID()
           });
         }}
       />
@@ -1682,7 +1711,7 @@ export default function AdminBookingsPage() {
       {/* Pending Payment Confirmation Dialog */}
       <Dialog open={pendingPaymentModal.open} onOpenChange={(open) => {
         if (!open) {
-          setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false });
+          setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false, walletBalance: 0, paymentRequestId: "" });
         }
       }}>
         <DialogContent className="bg-[var(--background)] border-2 border-amber-500/50 text-white max-w-md max-h-[85vh] overflow-y-auto">
@@ -1777,15 +1806,37 @@ export default function AdminBookingsPage() {
                 </div>
               </div>
 
+              {/* Wallet Amount */}
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">👛</span>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-zinc-400 uppercase">Wallet credits</Label>
+                    <span className="text-xs text-zinc-500">Available: ₹{pendingPaymentModal.walletBalance.toFixed(2)}</span>
+                  </div>
+                  <Input
+                    type="number"
+                    min="0"
+                    max={Math.min(pendingPaymentModal.walletBalance, pendingPaymentModal.balanceDue)}
+                    step="0.01"
+                    value={paymentSplit.walletAmount || ''}
+                    onChange={(e) => setPaymentSplit({ ...paymentSplit, walletAmount: Math.min(Math.max(0, parseFloat(e.target.value) || 0), pendingPaymentModal.walletBalance, pendingPaymentModal.balanceDue) })}
+                    disabled={pendingPaymentModal.walletBalance <= 0}
+                    className="bg-zinc-800 border-zinc-700 text-white h-9 text-sm"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
               {/* Total Validator */}
               <div className="pt-2 border-t border-zinc-800">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-zinc-400">Total Split:</span>
-                  <span className={`text-sm font-black ${Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount) - pendingPaymentModal.balanceDue) < 0.01 ? 'text-green-400' : 'text-red-400'}`}>
-                    ₹{(paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount).toFixed(2)}
+                  <span className={`text-sm font-black ${Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount) - pendingPaymentModal.balanceDue) < 0.01 ? 'text-green-400' : 'text-red-400'}`}>
+                    ₹{(paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount).toFixed(2)}
                   </span>
                 </div>
-                {Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount) - pendingPaymentModal.balanceDue) >= 0.01 && (
+                {Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount) - pendingPaymentModal.balanceDue) >= 0.01 && (
                   <p className="text-xs text-red-400 mt-1">
                     ⚠️ Total must equal ₹{pendingPaymentModal.balanceDue.toFixed(2)}
                   </p>
@@ -1798,7 +1849,7 @@ export default function AdminBookingsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue })}
+                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue, walletAmount: 0 })}
                   className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
                 >
                   All UPI
@@ -1807,7 +1858,7 @@ export default function AdminBookingsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setPaymentSplit({ cashAmount: pendingPaymentModal.balanceDue, cardAmount: 0, upiAmount: 0 })}
+                  onClick={() => setPaymentSplit({ cashAmount: pendingPaymentModal.balanceDue, cardAmount: 0, upiAmount: 0, walletAmount: 0 })}
                   className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
                 >
                   All Cash
@@ -1816,10 +1867,23 @@ export default function AdminBookingsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: pendingPaymentModal.balanceDue, upiAmount: 0 })}
+                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: pendingPaymentModal.balanceDue, upiAmount: 0, walletAmount: 0 })}
                   className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
                 >
                   All Card
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={pendingPaymentModal.walletBalance <= 0}
+                  onClick={() => {
+                    const walletAmount = Math.min(pendingPaymentModal.walletBalance, pendingPaymentModal.balanceDue);
+                    setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue - walletAmount, walletAmount });
+                  }}
+                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                >
+                  Use Wallet
                 </Button>
               </div>
             </div>
@@ -1827,7 +1891,7 @@ export default function AdminBookingsPage() {
 
           <DialogFooter className="flex gap-2">
             <Button
-              onClick={() => setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false })}
+              onClick={() => setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false, walletBalance: 0, paymentRequestId: "" })}
               variant="ghost"
               className="flex-1 border border-zinc-800 text-muted-content hover:text-white font-bold uppercase text-xs h-10 rounded-lg"
             >
@@ -1849,11 +1913,8 @@ export default function AdminBookingsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Start a waiting walk-in.
-
-          The clock starts now either way; the only question is whether the
-          customer has said when they are leaving, which decides how long the
-          station is held and nothing about the money. */}
+      {/* Start a waiting walk-in, retaining any start time entered when it was
+          first created if the floor was full at that time. */}
       <Dialog
         open={!!checkInTarget}
         onOpenChange={(open) => {
@@ -1870,8 +1931,9 @@ export default function AdminBookingsPage() {
               Check In
             </DialogTitle>
             <DialogDescription className="text-sm text-secondary-content">
-              The clock starts now. The bill is worked out at checkout from the time
-              actually played.
+              {checkInTarget?.walk_in_pending_start_time
+                ? `Billing starts at ${formatDbTime(String(checkInTarget.walk_in_pending_start_time))} as entered on the new walk-in form.`
+                : "The clock starts now."} The bill is worked out at checkout from the time actually played.
             </DialogDescription>
           </DialogHeader>
 

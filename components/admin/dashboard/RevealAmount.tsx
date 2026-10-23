@@ -45,7 +45,7 @@ export function RevealAmount({ amount, label, className = "" }: RevealAmountProp
         <CurrencyCountUp amount={amount} duration={1200} />
       ) : (
         // Fixed-width mask so revealing does not shunt the card's layout about.
-        <span className="tracking-[0.2em] select-none" aria-hidden="true">
+        <span className="whitespace-nowrap tracking-[0.2em] select-none" aria-hidden="true">
           ₹ ••••••
         </span>
       )}

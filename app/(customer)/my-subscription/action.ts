@@ -217,6 +217,8 @@ export async function getMyActivePlanSummary(): Promise<ActivePlanSummary | null
 export interface CustomerHeaderState {
   /** The verified number, or null when this browser holds no session. */
   phone: string | null
+  /** The verified customer's display name, when present in the customer record. */
+  name: string | null
   /** Their membership, or null for none - and always null without a session. */
   plan: ActivePlanSummary | null
 }
@@ -237,13 +239,19 @@ export interface CustomerHeaderState {
 export async function getCustomerHeaderState(): Promise<CustomerHeaderState> {
   try {
     const phone = await getVerifiedCustomerPhone()
-    if (!phone) return { phone: null, plan: null }
+    if (!phone) return { phone: null, name: null, plan: null }
 
-    return { phone, plan: await activePlanForPhone(phone) }
+    const { data: customer } = await supabaseAdmin
+      .from('customers')
+      .select('name')
+      .eq('phone', phone)
+      .maybeSingle()
+
+    return { phone, name: customer?.name?.trim() || null, plan: await activePlanForPhone(phone) }
   } catch (err) {
     // The header is decoration; it must never take the page down with it.
     console.error('getCustomerHeaderState error:', err)
-    return { phone: null, plan: null }
+    return { phone: null, name: null, plan: null }
   }
 }
 

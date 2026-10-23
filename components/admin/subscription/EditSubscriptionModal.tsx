@@ -18,14 +18,13 @@ interface EditModalProps {
 
 export function EditSubscriptionModal({ plan, onFormSuccess, open, setOpen }: EditModalProps) {
   const [isActive, setIsActive] = useState(true)
-  const [planType, setPlanType] = useState<'membership' | 'hour_pack'>('membership')
+  const planType: string = 'membership'
   const [isPending, startTransition] = useTransition()
   const { formRef, isComplete, recheck } = useRequiredFields()
 
   useEffect(() => {
     if (plan) {
       setIsActive(plan.is_active)
-      setPlanType(plan.plan_type === 'hour_pack' ? 'hour_pack' : 'membership')
     }
   }, [plan])
 
@@ -82,7 +81,7 @@ export function EditSubscriptionModal({ plan, onFormSuccess, open, setOpen }: Ed
                 Plan Type
               </label>
               <div className="h-10 rounded-md border border-[#27272a] bg-[var(--surface)] px-3 flex items-center text-sm text-white">
-                {planType === 'hour_pack' ? 'Personal hour pack' : 'Discount membership'}
+                Discount membership
               </div>
             </div>
 

@@ -1,9 +1,109 @@
 "use server";
 
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { requireStaff } from "@/lib/auth/require-admin";
+import { requireAdmin, requireStaff } from "@/lib/auth/require-admin";
 import { addMonthsToDateString, arenaToday } from "@/lib/utils/dates";
 import type { AssignableSubscriptionPlan } from "@/lib/types/customers";
+import { addWalletCredits } from "@/lib/wallet/server";
+
+export async function addCustomerWalletCreditAction(input: {
+  customerId: string;
+  amount: number;
+  walletCredits?: number;
+  creditType: "paid" | "bonus";
+  paymentMethod?: "cash" | "card" | "upi";
+  bonusExpiryDays?: number | null;
+  reason: string;
+  idempotencyKey: string;
+}) {
+  const actor = await requireAdmin();
+
+  const customerId = String(input.customerId || "").trim();
+  const amount = Number(input.amount);
+  const reason = String(input.reason || "").trim();
+  const idempotencyKey = String(input.idempotencyKey || "").trim();
+  const creditType = input.creditType;
+  const paymentMethod = input.paymentMethod;
+  const bonusExpiryDays = input.bonusExpiryDays === undefined
+    ? undefined
+    : input.bonusExpiryDays === null ? null : Number(input.bonusExpiryDays);
+  const walletCredits = creditType === "paid" ? Number(input.walletCredits ?? amount) : 0;
+  const bonusAmount = creditType === "paid" ? Math.round((walletCredits - amount) * 100) / 100 : amount;
+
+  if (!customerId) return { success: false as const, error: "Choose a customer." };
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000 || Math.abs(Math.round(amount * 100) - amount * 100) > 1e-7) {
+    return { success: false as const, error: "Enter a credit amount from ₹0.01 to ₹10,00,000, with up to two decimals." };
+  }
+  if (creditType !== "paid" && creditType !== "bonus") {
+    return { success: false as const, error: "Choose a wallet sale or bonus adjustment." };
+  }
+  if (creditType === "paid" && !["cash", "card", "upi"].includes(String(paymentMethod))) {
+    return { success: false as const, error: "Choose how the customer paid for the wallet credit." };
+  }
+  if (creditType === "paid" && (!Number.isFinite(walletCredits) || walletCredits < amount || walletCredits > 1000000 || Math.abs(Math.round(walletCredits * 100) - walletCredits * 100) > 1e-7)) {
+    return { success: false as const, error: "Wallet credits must be at least the amount paid, with up to two decimals." };
+  }
+  if (reason.length < 3 || reason.length > 200) {
+    return { success: false as const, error: "Enter a reason between 3 and 200 characters." };
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey)) {
+    return { success: false as const, error: "The credit request is invalid. Close the dialog and try again." };
+  }
+  if (bonusAmount > 0 && bonusExpiryDays === undefined) {
+    return { success: false as const, error: "Choose an expiry for bonus credits or mark them never to expire." };
+  }
+  if (bonusAmount > 0 && typeof bonusExpiryDays === "number" && (!Number.isInteger(bonusExpiryDays) || bonusExpiryDays < 1 || bonusExpiryDays > 3650)) {
+    return { success: false as const, error: "Bonus expiry must be never or 1 to 3650 days." };
+  }
+
+  const { data: customer, error: customerError } = await supabaseAdmin
+    .from("customers")
+    .select("id")
+    .eq("id", customerId)
+    .maybeSingle();
+  if (customerError) return { success: false as const, error: customerError.message };
+  if (!customer) return { success: false as const, error: "Customer not found." };
+
+  const isBonus = creditType === "bonus";
+  const bonusExpiresAt = bonusAmount > 0 && bonusExpiryDays != null
+    ? new Date(Date.now() + bonusExpiryDays * 24 * 60 * 60 * 1000).toISOString()
+    : null;
+
+  try {
+    if (isBonus) {
+      await addWalletCredits({
+        customerId,
+        paidAmount: 0,
+        bonusAmount: amount,
+        bonusExpiresAt,
+        kind: "adjustment",
+        description: `Admin wallet bonus: ${reason}`,
+        source: "admin_wallet_adjustment",
+        idempotencyKey: `admin-wallet-adjustment:${idempotencyKey}`,
+        createdBy: actor.userId,
+      });
+    } else {
+      const { error: saleError } = await supabaseAdmin.rpc("wallet_add_admin_sale", {
+        p_customer_id: customerId,
+        p_amount: amount,
+        p_wallet_credits: walletCredits,
+        p_bonus_expires_at: bonusExpiresAt,
+        p_description: `Admin wallet sale: ${reason}`,
+        p_payment_method: paymentMethod,
+        p_idempotency_key: `admin-wallet-sale:${idempotencyKey}`,
+        p_created_by: actor.userId,
+      });
+      if (saleError) throw saleError;
+    }
+    return { success: true as const, amount, walletCredits: isBonus ? amount : walletCredits, bonusAmount, creditType };
+  } catch (error) {
+    console.error("Admin wallet credit adjustment failed:", error);
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Could not add wallet credit.",
+    };
+  }
+}
 
 interface DBCustomer {
   id: string;
@@ -43,7 +143,8 @@ interface DBAssignableSubscriptionPlan extends Omit<AssignableSubscriptionPlan, 
 }
 
 export async function getLiveCustomerRegistryAction() {
-  await requireStaff();
+  const actor = await requireStaff();
+  const canAdjustWallet = actor.role === "admin";
 
   /**
    * Three reads, together rather than one after the other.
@@ -59,6 +160,7 @@ export async function getLiveCustomerRegistryAction() {
     { data: subscriptionsData, error: subscriptionsError },
     { data: plansData, error: plansError },
     { data: deviceTypesData, error: deviceTypesError },
+    { data: walletBalancesData, error: walletBalancesError },
   ] = await Promise.all([
     supabaseAdmin
       .from("customers")
@@ -73,29 +175,41 @@ export async function getLiveCustomerRegistryAction() {
       .from("subscription_plans")
       .select("id, name, plan_type, hours_included, device_type_id"),
     supabaseAdmin.from("device_types").select("id, display_name"),
+    supabaseAdmin.from("customer_wallet_balances").select("customer_id,balance,reserved_balance"),
   ]);
 
   // Reported in the same order as before, so the message a failure produces is
   // unchanged.
   if (customerError) {
-    return { data: [], error: customerError.message };
+    return { data: [], error: customerError.message, canAdjustWallet };
   }
 
   if (!customersData || customersData.length === 0) {
-    return { data: [], error: null };
+    return { data: [], error: null, canAdjustWallet };
   }
 
   if (subscriptionsError) {
-    return { data: [], error: subscriptionsError.message };
+    return { data: [], error: subscriptionsError.message, canAdjustWallet };
   }
 
   if (plansError) {
-    return { data: [], error: plansError.message };
+    return { data: [], error: plansError.message, canAdjustWallet };
   }
 
   if (deviceTypesError) {
-    return { data: [], error: deviceTypesError.message };
+    return { data: [], error: deviceTypesError.message, canAdjustWallet };
   }
+
+  if (walletBalancesError) {
+    return { data: [], error: walletBalancesError.message, canAdjustWallet };
+  }
+
+  const walletBalances = new Map(
+    (walletBalancesData || []).map((row: { customer_id: string; balance: number; reserved_balance: number }) => [
+      row.customer_id,
+      Math.max(0, Number(row.balance || 0) - Number(row.reserved_balance || 0)),
+    ])
+  );
 
   const formattedCustomers = (customersData as DBCustomer[]).map((customer: DBCustomer) => {
     const customerSubscriptions = (subscriptionsData as DBSubscription[] || []).filter(
@@ -162,10 +276,11 @@ export async function getLiveCustomerRegistryAction() {
       subscription_status: computedStatus,
       expiry_date: latestSubscription?.end_date || null,
       hour_packs: activeHourPacks,
+      wallet_balance: walletBalances.get(customer.id) || 0,
     };
   });
 
-  return { data: formattedCustomers, error: null };
+  return { data: formattedCustomers, error: null, canAdjustWallet };
 }
 
 export async function createCustomerAction(input: {

@@ -10,17 +10,18 @@ interface TodaysRevenueModalProps {
   open: boolean;
   onClose: () => void;
   bookings: any[];
+  walletSales: any[];
   totalRevenue: number;
   onBookingClick: (bookingId: string) => void;
 }
 
-export function TodaysRevenueModal({ open, onClose, bookings, totalRevenue, onBookingClick }: TodaysRevenueModalProps) {
+export function TodaysRevenueModal({ open, onClose, bookings, walletSales, totalRevenue, onBookingClick }: TodaysRevenueModalProps) {
   // Calculate device and food revenue based on actual amount paid
   let deviceRevenue = 0;
   let foodRevenue = 0;
 
   bookings.forEach(b => {
-    const amountPaid = Number(b.amount_paid || 0);
+    const amountPaid = Math.max(0, Number(b.amount_paid || 0) - Number(b.wallet_amount || 0));
     const deviceSubtotal = Number(b.device_subtotal || 0);
     const foodSubtotal = Number(b.food_subtotal || 0);
     const subscriptionDiscount = Number(b.subscription_discount || 0);
@@ -49,12 +50,14 @@ export function TodaysRevenueModal({ open, onClose, bookings, totalRevenue, onBo
     }
   });
 
-  const paidAmount = bookings.filter(b => b.payment_status === 'paid').reduce((sum, b) => sum + Number(b.amount_paid || 0), 0);
-  const partialAmount = bookings.filter(b => b.payment_status === 'partial').reduce((sum, b) => sum + Number(b.amount_paid || 0), 0);
-  const cashRevenue = bookings.reduce((sum, b) => sum + Number(b.cash_amount || 0), 0);
-  const cardRevenue = bookings.reduce((sum, b) => sum + Number(b.card_amount || 0), 0);
-  const upiRevenue = bookings.reduce((sum, b) => sum + Number(b.upi_amount || 0), 0);
-  const onlineRevenue = bookings.reduce((sum, b) => sum + Number(b.online_amount || 0), 0);
+  const paidAmount = bookings.filter(b => b.payment_status === 'paid').reduce((sum, b) => sum + Math.max(0, Number(b.amount_paid || 0) - Number(b.wallet_amount || 0)), 0);
+  const partialAmount = bookings.filter(b => b.payment_status === 'partial').reduce((sum, b) => sum + Math.max(0, Number(b.amount_paid || 0) - Number(b.wallet_amount || 0)), 0);
+  const walletTopUpsTotal = walletSales.reduce((sum, sale) => sum + Number(sale.paid_amount || 0), 0);
+  const walletBonusTotal = walletSales.reduce((sum, sale) => sum + Number(sale.bonus_amount || 0), 0);
+  const cashRevenue = bookings.reduce((sum, b) => sum + Number(b.cash_amount || 0), 0) + walletSales.filter(sale => sale.sale_payment_method === 'cash').reduce((sum, sale) => sum + Number(sale.paid_amount || 0), 0);
+  const cardRevenue = bookings.reduce((sum, b) => sum + Number(b.card_amount || 0), 0) + walletSales.filter(sale => sale.sale_payment_method === 'card').reduce((sum, sale) => sum + Number(sale.paid_amount || 0), 0);
+  const upiRevenue = bookings.reduce((sum, b) => sum + Number(b.upi_amount || 0), 0) + walletSales.filter(sale => sale.sale_payment_method === 'upi').reduce((sum, sale) => sum + Number(sale.paid_amount || 0), 0);
+  const onlineRevenue = bookings.reduce((sum, b) => sum + Number(b.online_amount || 0), 0) + walletSales.filter(sale => sale.source === 'razorpay' || sale.sale_payment_method === 'online').reduce((sum, sale) => sum + Number(sale.paid_amount || 0), 0);
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -62,20 +65,20 @@ export function TodaysRevenueModal({ open, onClose, bookings, totalRevenue, onBo
         <DialogHeader>
           <DialogTitle className="text-xl font-black uppercase text-white flex items-center gap-2">
             <IndianRupee className="h-5 w-5 text-green-500" />
-            Today's Revenue
+            Today's Collections
           </DialogTitle>
         </DialogHeader>
 
         {/* Summary Stats */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div className="p-4 bg-gradient-to-br from-green-500/10 to-green-600/5 border border-green-500/20 rounded-lg">
-            <p className="text-xs text-green-400 mb-1">Total Revenue</p>
+            <p className="text-xs text-green-400 mb-1">Total Collections</p>
             <p className="text-2xl font-black text-white">₹{totalRevenue.toLocaleString('en-IN')}</p>
-            <p className="text-label mt-1">{bookings.length} bookings</p>
+            <p className="text-label mt-1">{bookings.length} bookings · {walletSales.length} wallet top-ups</p>
           </div>
 
           <div className="p-4 bg-[var(--surface)] border border-[#27272a] rounded-lg">
-            <p className="text-xs text-muted-content mb-1">Payment Status</p>
+            <p className="text-xs text-muted-content mb-1">Booking Payments</p>
             <p className="text-2xl font-black text-primary">₹{paidAmount.toLocaleString('en-IN')}</p>
             <p className="text-label mt-1">
               {bookings.filter(b => b.payment_status === 'paid').length} paid
@@ -91,6 +94,13 @@ export function TodaysRevenueModal({ open, onClose, bookings, totalRevenue, onBo
           <div className="p-4 bg-[var(--surface)] border border-[#27272a] rounded-lg">
             <p className="text-xs text-muted-content mb-1">Food Revenue</p>
             <p className="text-lg font-black text-white">₹{formatCurrency(foodRevenue)}</p>
+          </div>
+          <div className="p-4 bg-[var(--surface)] border border-emerald-500/20 rounded-lg">
+            <p className="text-xs text-emerald-300 mb-1">Wallet top-ups paid today</p>
+            <p className="text-lg font-black text-white">₹{formatCurrency(walletTopUpsTotal)}</p>
+            {walletBonusTotal > 0 && (
+              <p className="text-[11px] text-secondary-content mt-1">₹{formatCurrency(walletBonusTotal)} bonus credits excluded</p>
+            )}
           </div>
         </div>
 
@@ -155,7 +165,10 @@ export function TodaysRevenueModal({ open, onClose, bookings, totalRevenue, onBo
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-black text-white">₹{Number(booking.amount_paid || 0).toLocaleString('en-IN')}</p>
+                      <p className="text-sm font-black text-white">₹{Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)).toLocaleString('en-IN')}</p>
+                      {Number(booking.wallet_amount || 0) > 0 && (
+                        <p className="text-[11px] text-secondary-content">₹{Number(booking.wallet_amount).toLocaleString('en-IN')} wallet used</p>
+                      )}
                       <p className={`text-[11px] uppercase mt-1 ${booking.payment_status === 'paid' ? 'text-green-500' : booking.payment_status === 'partial' ? 'text-blue-500' : 'text-amber-500'}`}>
                         {booking.payment_status}
                       </p>
@@ -167,10 +180,31 @@ export function TodaysRevenueModal({ open, onClose, bookings, totalRevenue, onBo
           ) : (
             <div className="text-center py-8">
               <ReceiptIndianRupee className="h-12 w-12 text-zinc-700 mx-auto mb-2" />
-              <p className="text-sm text-muted-content">No bookings today</p>
+              <p className="text-sm text-muted-content">No booking payments today</p>
             </div>
           )}
         </div>
+
+        {walletSales.length > 0 && (
+          <div className="space-y-2 mt-5">
+            <h4 className="text-sm font-black uppercase text-muted-content mb-3">Wallet top-ups paid today</h4>
+            {walletSales.map((sale) => (
+              <div key={sale.id} className="p-3 bg-[var(--surface)] border border-[#27272a] rounded-lg flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-bold text-white">{sale.customer?.name || "Customer"}</p>
+                  <p className="text-label mt-1">{sale.description || "Wallet top-up"}</p>
+                  {Number(sale.bonus_amount || 0) > 0 && (
+                    <p className="text-[11px] text-secondary-content mt-1">₹{formatCurrency(Number(sale.bonus_amount))} bonus credits</p>
+                  )}
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-sm font-black text-green-400">₹{formatCurrency(Number(sale.paid_amount || 0))} paid</p>
+                  <p className="text-[11px] text-secondary-content mt-1">₹{formatCurrency(Number(sale.amount || 0))} credited</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -46,6 +46,7 @@ export async function getPublicSubscriptionPlans(): Promise<{
     const { data, error } = await supabaseAdmin
       .from('subscription_plans')
       .select('id, name, description, price, duration_months, discount_percentage, plan_type, device_type_id, device_type:device_types(display_name), hours_included, standard_value')
+      .eq('plan_type', 'membership')
       // A retired plan must not be offered. The purchase flow refuses one anyway
       // (`quoteSubscription` checks `is_active`), but a plan nobody can buy has
       // no business being on the page that sells them.
@@ -106,6 +107,7 @@ export async function getPublicSubscriptionPlan(id: string): Promise<{
       .from('subscription_plans')
       .select('id, name, description, price, duration_months, discount_percentage, plan_type, device_type_id, device_type:device_types(display_name), hours_included, standard_value')
       .eq('id', id)
+      .eq('plan_type', 'membership')
       .eq('is_active', true)
       .maybeSingle()
 

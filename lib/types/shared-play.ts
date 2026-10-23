@@ -11,6 +11,9 @@ export interface SharedPlayParticipant {
   customer_id: string | null;
   customer: SharedPlayCustomer | null;
   billed_amount: number | null;
+  checked_out_at?: string | null;
+  settled_amount?: number | null;
+  wallet_amount?: number | null;
   shared_play_periods: Array<{
     id: string;
     started_at: string;

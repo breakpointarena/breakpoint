@@ -594,7 +594,7 @@ export default function WalkInBookingPage() {
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
       customerEmail: customerEmail.trim() || null,
-      customerDob: customerDob ? formatDateForDB(customerDob) : "",
+      customerDob: customerDob ? formatDateForDB(customerDob) : null,
       deviceTypeId: selectedDeviceType.id,
       deviceTypeName: selectedDeviceType.display_name,
       playerCount,
@@ -1805,9 +1805,10 @@ export default function WalkInBookingPage() {
                   All {busyPrompt.total} stations are occupied right now.{" "}
                   {startMode === "manual" ? (
                     <>
-                      A start time was entered, but the session can only begin on a station -
-                      so {customerName.trim() || "the customer"} will be booked in waiting and
-                      the {plannedEnd ? "times" : "time"} typed in will not be used.
+                      A start time was entered, but no station is free for that time.{" "}
+                      {customerName.trim() || "The customer"} will be booked in waiting; the
+                      {plannedEnd ? " times" : " time"} will be used when a station is available
+                      and you check them in.
                     </>
                   ) : (
                     <>

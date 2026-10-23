@@ -75,7 +75,11 @@ export default function SubscriptionPage() {
       const result = await deleteSubscriptionPlan(targetId)
 
       if (result.success) {
-        toast.success('Plan Deleted Successfully')
+        toast.success(result.deactivated ? 'Plan Deactivated' : 'Plan Deleted Successfully', {
+          description: result.deactivated
+            ? 'This plan has existing subscriptions, so it was removed from sale and its history was preserved.'
+            : undefined,
+        })
         await loadPlans()
       } else {
         toast.error('Deletion Failed', { description: result.error })
@@ -140,8 +144,8 @@ export default function SubscriptionPage() {
         onClose={() => setPlanToDelete(null)}
         onConfirm={confirmDelete}
         title="Remove Subscription Plan"
-        description="Are you sure you want to delete this subscription plan? This drops the plan completely from your database configuration mapping and cannot be undone."
-        confirmText="Delete"
+        description="Plans with existing subscriptions will be deactivated to preserve purchase history. Plans without subscriptions will be deleted."
+        confirmText="Remove Plan"
         cancelText="Cancel"
         variant="danger"
       />

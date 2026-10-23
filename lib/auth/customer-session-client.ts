@@ -42,7 +42,7 @@ export function getCustomerHeaderStateShared(): Promise<CustomerHeaderState> {
     // Matches what the action itself returns on failure, so a caller cannot
     // tell the difference between a failed lookup and no session.
     console.error('Error getting customer session:', error)
-    return { phone: null, plan: null }
+    return { phone: null, name: null, plan: null }
   })
 
   pending = inflight

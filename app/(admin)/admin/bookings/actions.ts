@@ -1,6 +1,7 @@
 "use server";
 
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { getWalletBalance } from "@/lib/wallet/server";
 import { annotateRemovableFoodItems } from "@/lib/bookings/foodItems";
 import {
   foodItemsToCancel,
@@ -174,6 +175,7 @@ function isBookingInDateRange(
  */
 const BOOKING_LIST_SELECT = `
         id,
+        customer_id,
         booking_number,
         customer_name,
         customer_phone,
@@ -200,6 +202,8 @@ const BOOKING_LIST_SELECT = `
         lock_expires_at,
         billed_on_actual_time,
         shared_play_enabled,
+        walk_in_pending_start_time,
+        walk_in_pending_end_time,
         walk_in_planned_end,
         walk_in_device_type_name,
         walk_in_player_count,
@@ -220,6 +224,7 @@ const BOOKING_LIST_SELECT = `
         ),
         booking_food_items(
           id,
+          participant_id,
           item_name,
           quantity,
           unit_price,
@@ -414,6 +419,7 @@ export async function getBookingDetails(bookingId: string) {
         ),
         booking_food_items(
           id,
+          participant_id,
           menu_item_id,
           item_name,
           item_category,
@@ -432,7 +438,7 @@ export async function getBookingDetails(bookingId: string) {
     if (data.shared_play_enabled || data.status === "checked_in") {
       const { data: participants, error: participantError } = await supabaseAdmin
         .from("shared_play_participants")
-        .select("id, name, customer_id, customer:customers(id, name, phone, email), billed_amount, shared_play_periods(id, started_at, ended_at, amount)")
+        .select("id, name, customer_id, customer:customers(id, name, phone, email), billed_amount, checked_out_at, settled_amount, wallet_amount, shared_play_periods(id, started_at, ended_at, amount)")
         .eq("booking_id", bookingId)
         .order("created_at", { ascending: true });
       if (participantError) throw participantError;
@@ -855,10 +861,17 @@ export async function setSharedPlayParticipants(
   enabled: boolean,
   rosterNames: string[],
   activeNames: string[],
-  rosterCustomers: Array<{ customerId: string; name: string }> = []
+  rosterCustomers: Array<{ customerId: string; name: string }> = [],
+  /** Optional arena-clock time for a participant who sat in earlier this shift. */
+  sitInClock: string | null = null
 ) {
   await requireStaff();
   try {
+    if (sitInClock) {
+      const started = resolveBackdatedStart(sitInClock);
+      if (!started.ok) return { success: false, error: started.error };
+    }
+
     const normalize = (names: string[]) => [...new Map(
       names.map((name) => [name.trim().toLocaleLowerCase(), name.trim()])
     ).values()].filter(Boolean);
@@ -894,11 +907,24 @@ export async function setSharedPlayParticipants(
       }
     }
 
+    const { data: existingParticipants, error: existingParticipantsError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .select("name, checked_out_at")
+      .eq("booking_id", bookingId);
+    if (existingParticipantsError) throw existingParticipantsError;
+    const checkedOutNames = new Set((existingParticipants || [])
+      .filter((row: any) => row.checked_out_at)
+      .map((row: any) => String(row.name).trim().toLocaleLowerCase()));
+    if (active.some((name) => checkedOutNames.has(name.toLocaleLowerCase()))) {
+      return { success: false, error: "A checked-out participant cannot rejoin this session." };
+    }
+
     const { error } = await supabaseAdmin.rpc("set_shared_play_participants", {
       p_booking_id: bookingId,
       p_enabled: enabled,
       p_roster_names: roster,
-      p_active_names: active
+      p_active_names: active,
+      p_sit_in_clock: sitInClock
     });
     if (error) throw error;
 
@@ -928,6 +954,172 @@ export async function setSharedPlayParticipants(
   } catch (err: any) {
     console.error("Update shared play participants error:", err);
     return { success: false, error: err.message };
+  }
+}
+
+async function sharedPlayParticipantCheckoutQuote(bookingId: string, participantId: string) {
+  const { data: booking, error: bookingError } = await supabaseAdmin
+    .from("bookings")
+    .select("id, status, shared_play_enabled, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, booking_device_slots(hourly_rate, included_players, extra_player_charge), shared_play_participants(id, name, customer_id, checked_out_at, shared_play_periods(id, participant_id, started_at, ended_at))")
+    .eq("id", bookingId)
+    .maybeSingle();
+  if (bookingError) throw bookingError;
+  if (!booking || booking.status !== "checked_in" || !booking.shared_play_enabled) {
+    throw new Error("This shared-play booking is no longer active.");
+  }
+
+  const participant = (booking.shared_play_participants || []).find((row: any) => row.id === participantId);
+  if (!participant) throw new Error("Participant not found in this booking.");
+  if (participant.checked_out_at) throw new Error("This participant has already checked out.");
+  const slot = booking.booking_device_slots?.[0];
+  if (!slot) throw new Error("The booking has no active board.");
+
+  const now = new Date();
+  const periods = (booking.shared_play_participants || []).flatMap((row: any) =>
+    (row.shared_play_periods || []).map((period: any) => ({
+      ...period,
+      participant_id: row.id,
+      ended_at: period.participant_id === participantId && !period.ended_at
+        ? now.toISOString()
+        : period.ended_at
+    }))
+  );
+  const calculation = calculateSharedPlayShares(
+    periods,
+    Number(slot.hourly_rate || 0),
+    Number(slot.extra_player_charge || 0),
+    Number(slot.included_players || 1),
+    null,
+    now
+  );
+  const rawDeviceShare = calculation.shares.find((share) => share.participantId === participantId)?.amount || 0;
+  const participantPlayedMs = periods
+    .filter((period: any) => period.participant_id === participantId)
+    .reduce((total: number, period: any) => total + Math.max(
+      0,
+      new Date(period.ended_at || now).getTime() - new Date(period.started_at).getTime()
+    ), 0);
+  const grossDeviceTotal = roundToTwo(calculation.shares.reduce((sum, share) => sum + share.amount, 0));
+  const totalDiscount = Math.min(
+    grossDeviceTotal,
+    Number(booking.subscription_discount || 0) + Number(booking.promo_discount || 0) + Number(booking.happy_hour_discount || 0)
+  );
+  const deviceRatio = grossDeviceTotal > 0 ? Math.max(0, grossDeviceTotal - totalDiscount) / grossDeviceTotal : 1;
+  const deviceAmount = roundToTwo(rawDeviceShare * deviceRatio);
+
+  const { data: foodItems, error: foodError } = await supabaseAdmin
+    .from("booking_food_items")
+    .select("id, item_name, quantity, line_total")
+    .eq("participant_id", participantId)
+    .order("created_at", { ascending: true });
+  if (foodError) throw foodError;
+  const foodAmount = roundToTwo((foodItems || []).reduce((sum: number, item: any) => sum + Number(item.line_total || 0), 0));
+
+  let walletBalance = 0;
+  if (participant.customer_id) {
+    const wallet = await getWalletBalance(participant.customer_id);
+    walletBalance = Math.max(0, Number(wallet.balance || 0));
+  }
+
+  return {
+    participantId,
+    participantName: participant.name,
+    customerId: participant.customer_id,
+    checkoutAt: now.toISOString(),
+    playedMinutes: Math.floor(participantPlayedMs / 60_000),
+    deviceAmount,
+    foodAmount,
+    totalAmount: roundToTwo(deviceAmount + foodAmount),
+    walletBalance,
+    foodItems: foodItems || []
+  };
+}
+
+export async function getSharedPlayParticipantCheckoutQuote(bookingId: string, participantId: string) {
+  await requireStaff();
+  try {
+    return { success: true as const, quote: await sharedPlayParticipantCheckoutQuote(bookingId, participantId) };
+  } catch (error: any) {
+    console.error("Shared-play participant checkout quote error:", error);
+    return { success: false as const, error: error.message || "Could not calculate this participant's bill." };
+  }
+}
+
+export async function linkSharedPlayParticipantToCustomer(bookingId: string, participantId: string, customerId: string) {
+  await requireStaff();
+  try {
+    const { data: participant, error: participantError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .select("id, checked_out_at")
+      .eq("id", participantId)
+      .eq("booking_id", bookingId)
+      .maybeSingle();
+    if (participantError) throw participantError;
+    if (!participant) throw new Error("Participant not found in this booking.");
+    if (participant.checked_out_at) throw new Error("A participant who has checked out cannot be relinked.");
+
+    const { data: customer, error: customerError } = await supabaseAdmin
+      .from("customers")
+      .select("id, name")
+      .eq("id", customerId)
+      .maybeSingle();
+    if (customerError) throw customerError;
+    if (!customer) throw new Error("Customer account not found.");
+
+    const { data: duplicate, error: duplicateError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .select("id")
+      .eq("booking_id", bookingId)
+      .eq("customer_id", customerId)
+      .neq("id", participantId)
+      .maybeSingle();
+    if (duplicateError) throw duplicateError;
+    if (duplicate) throw new Error("That customer is already linked to another participant in this booking.");
+
+    const { error: updateError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .update({ customer_id: customerId })
+      .eq("id", participantId)
+      .eq("booking_id", bookingId);
+    if (updateError) throw updateError;
+    return { success: true as const, customerName: customer.name };
+  } catch (error: any) {
+    console.error("Link shared-play participant customer error:", error);
+    return { success: false as const, error: error.message || "Could not link the customer account." };
+  }
+}
+
+export async function checkOutSharedPlayParticipant(input: {
+  bookingId: string;
+  participantId: string;
+  useWallet: boolean;
+  paymentMethod: "cash" | "card" | "upi";
+  idempotencyKey: string;
+}) {
+  await requireStaff();
+  try {
+    if (!input.idempotencyKey || input.idempotencyKey.length < 12) {
+      throw new Error("Checkout request expired. Reopen the participant checkout.");
+    }
+    const quote = await sharedPlayParticipantCheckoutQuote(input.bookingId, input.participantId);
+    const walletAmount = input.useWallet ? Math.min(quote.totalAmount, quote.walletBalance) : 0;
+    const externalAmount = roundToTwo(quote.totalAmount - walletAmount);
+    const { data, error } = await supabaseAdmin.rpc("wallet_settle_shared_play_participant", {
+      p_booking_id: input.bookingId,
+      p_participant_id: input.participantId,
+      p_charge_amount: quote.totalAmount,
+      p_cash_amount: input.paymentMethod === "cash" ? externalAmount : 0,
+      p_card_amount: input.paymentMethod === "card" ? externalAmount : 0,
+      p_upi_amount: input.paymentMethod === "upi" ? externalAmount : 0,
+      p_use_wallet: input.useWallet,
+      p_checkout_at: quote.checkoutAt,
+      p_idempotency_key: input.idempotencyKey
+    });
+    if (error) throw error;
+    return { success: true as const, quote, payment: data };
+  } catch (error: any) {
+    console.error("Shared-play participant checkout error:", error);
+    return { success: false as const, error: error.message || "Could not check out this participant." };
   }
 }
 
@@ -1201,7 +1393,7 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
   if (!slot) return;
   const { data: participants, error: participantsError } = await supabaseAdmin
     .from("shared_play_participants")
-    .select("id, name, customer_id")
+    .select("id, name, customer_id, checked_out_at")
     .eq("booking_id", bookingId);
   if (participantsError) throw participantsError;
   let playerRows = participants || [];
@@ -1333,22 +1525,23 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
     Number(slot.hourly_rate || 0),
     Number(slot.extra_player_charge || 0),
     Number(slot.included_players || 1),
-    Number(slot.slot_total || 0),
+    null,
     endedAt
   );
 
   const { error: slotUpdateError } = await supabaseAdmin
     .from("booking_device_slots")
-    .update({ extra_players_total: calculation.extraPlayersTotal })
+    .update({
+      slot_total: calculation.deviceCharges,
+      extra_players_total: calculation.extraPlayersTotal,
+      duration_hours: roundToTwo(calculation.trackedHours)
+    })
     .eq("id", slot.id);
   if (slotUpdateError) throw slotUpdateError;
 
-  const sharedDeviceSubtotal = roundToTwo(
-    Number(booking.device_subtotal || 0) +
-    calculation.extraPlayersTotal - Number(slot.extra_players_total || 0)
-  );
+  const sharedDeviceSubtotal = roundToTwo(calculation.deviceCharges + calculation.extraPlayersTotal);
   const sharedShareableRatio = sharedDeviceSubtotal > 0
-    ? Math.max(0, sharedDeviceSubtotal - otherDiscounts) / sharedDeviceSubtotal
+    ? Math.max(0, sharedDeviceSubtotal - Math.min(sharedDeviceSubtotal, otherDiscounts)) / sharedDeviceSubtotal
     : 0;
   const byParticipant = new Map(calculation.shares.map(share => [share.participantId, share.amount]));
   const passPlayers = playerRows.flatMap((participant: any) => {
@@ -1443,11 +1636,13 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
   }
 
   for (const share of calculation.shares) {
+    const player = playerRows.find((row: any) => row.id === share.participantId);
+    if (player?.checked_out_at) continue;
     const { error } = await supabaseAdmin
       .from("shared_play_participants")
       .update({
         billed_amount: Math.max(0, roundToTwo(
-          share.amount - (redeemed.get(share.participantId)?.amountCovered || 0)
+          share.amount * sharedShareableRatio - (redeemed.get(share.participantId)?.amountCovered || 0)
         ))
       })
       .eq("id", share.participantId);
@@ -1485,6 +1680,7 @@ export async function getBookingStats(
     const revenueColumns = `
       id,
       amount_paid,
+      wallet_amount,
       payment_status,
       status,
       created_at,
@@ -1494,6 +1690,8 @@ export async function getBookingStats(
     const [
       { data: touchedInWindow, error: touchedError },
       { data: settledInWindow, error: settledError },
+      { data: onlineWalletSales, error: onlineWalletError },
+      { data: adminWalletSales, error: adminWalletError },
     ] = await Promise.all([
       supabaseAdmin
         .from("bookings")
@@ -1506,6 +1704,7 @@ export async function getBookingStats(
         .select(`
           id,
           amount_paid,
+          wallet_amount,
           payment_status,
           status,
           created_at,
@@ -1515,20 +1714,44 @@ export async function getBookingStats(
         .in("payment_status", ["paid", "partial"])
         .neq("status", "cancelled")
         .gte("payment_groups.paid_at", revenueWindow),
+      supabaseAdmin
+        .from("payment_orders")
+        .select("amount, paid_at")
+        .eq("purpose", "wallet_top_up")
+        .eq("status", "fulfilled")
+        .gte("paid_at", revenueWindow)
+        .not("paid_at", "is", null),
+      supabaseAdmin
+        .from("wallet_transactions")
+        .select("paid_amount, created_at")
+        .eq("source", "admin_wallet_sale")
+        .eq("kind", "top_up")
+        .eq("direction", "credit")
+        .gte("created_at", revenueWindow),
     ]);
 
     if (touchedError) throw touchedError;
     if (settledError) throw settledError;
+    if (onlineWalletError) throw onlineWalletError;
+    if (adminWalletError) throw adminWalletError;
 
     const paidBookings = mergeBookingRows(
       touchedInWindow as { id: string }[] | null,
       settledInWindow as { id: string }[] | null
     );
-    const todayRevenue = (paidBookings as any[]).reduce((sum, booking) => {
+    const bookingRevenueToday = (paidBookings as any[]).reduce((sum, booking) => {
       const paidAt = effectivePaidAt(booking);
-      if (!paidAt || paidAt.split("T")[0] !== today) return sum;
-      return sum + Number(booking.amount_paid || 0);
+      if (!paidAt || arenaDate(new Date(paidAt)) !== today) return sum;
+      return sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0));
     }, 0);
+    const walletRevenueToday = [
+      ...(onlineWalletSales || []).map((sale: any) => ({ amount: sale.amount, timestamp: sale.paid_at })),
+      ...(adminWalletSales || []).map((sale: any) => ({ amount: sale.paid_amount, timestamp: sale.created_at })),
+    ].reduce((sum, sale) => {
+      if (!sale.timestamp || arenaDate(new Date(sale.timestamp)) !== today) return sum;
+      return sum + Number(sale.amount || 0);
+    }, 0);
+    const todayRevenue = bookingRevenueToday + walletRevenueToday;
 
     // Group by status
     const grouped = (statusCounts || []).reduce((acc: any, item: any) => {
@@ -1562,6 +1785,7 @@ export async function addFoodToBooking(
     itemCategory: string;
     quantity: number;
     unitPrice: number;
+    participantId?: string | null;
   }>
 ) {
   await requireStaff();
@@ -1571,7 +1795,7 @@ export async function addFoodToBooking(
     // editable until fully paid, while cancelled and settled bookings are closed.
     const { data: subject, error: subjectError } = await supabaseAdmin
       .from("bookings")
-      .select("status, payment_status, amount_paid, total_amount, billed_on_actual_time, completed_at")
+      .select("status, payment_status, amount_paid, total_amount, billed_on_actual_time, completed_at, shared_play_enabled")
       .eq("id", bookingId)
       .maybeSingle();
 
@@ -1585,7 +1809,7 @@ export async function addFoodToBooking(
     );
     if (
       subject.status === "cancelled" ||
-      subjectPaymentStatus === "paid" ||
+      (subjectPaymentStatus === "paid" && !(subject.shared_play_enabled && subject.status === "checked_in")) ||
       subjectPaymentStatus === "refunded"
     ) {
       return {
@@ -1594,6 +1818,31 @@ export async function addFoodToBooking(
           ? "This booking is cancelled. Food can no longer be added."
           : "This booking is fully settled. Food can no longer be added."
       };
+    }
+
+    if (items.some((item) => item.participantId)) {
+      const participantIds = [...new Set(items.map((item) => item.participantId).filter(Boolean))] as string[];
+      const { data: participants, error: participantsError } = await supabaseAdmin
+        .from("shared_play_participants")
+        .select("id, checked_out_at")
+        .eq("booking_id", bookingId)
+        .in("id", participantIds);
+      if (participantsError) throw participantsError;
+      if (participants?.length !== participantIds.length) throw new Error("Food must be assigned to someone in this booking.");
+      if (participants.some((participant: any) => participant.checked_out_at)) {
+        throw new Error("Food cannot be added to a participant who has checked out.");
+      }
+    }
+    if (items.some((item) => !item.participantId)) {
+      const { data: bookingKind, error: bookingKindError } = await supabaseAdmin
+        .from("bookings")
+        .select("shared_play_enabled")
+        .eq("id", bookingId)
+        .single();
+      if (bookingKindError) throw bookingKindError;
+      if (bookingKind.shared_play_enabled) {
+        return { success: false, error: "Assign each shared-play food item to a participant." };
+      }
     }
 
     // VALIDATION: Check stock availability before adding
@@ -1650,6 +1899,7 @@ export async function addFoodToBooking(
       quantity: item.quantity,
       unit_price: item.unitPrice,
       line_total: item.unitPrice * item.quantity,
+      participant_id: item.participantId || null,
       status: "pending"
     }));
 
@@ -1698,6 +1948,7 @@ export async function addFoodToBooking(
     // Create line items for the food (for audit trail)
     const bookingLineItems = items.map((item, index) => ({
       booking_id: bookingId,
+      food_item_id: foodItems?.[index]?.id || null,
       item_type: 'food',
       description: item.itemName,
       quantity: item.quantity,
@@ -1922,7 +2173,7 @@ export async function createWalkInBooking(payload: {
   customerName: string;
   customerPhone: string;
   customerEmail: string | null;
-  customerDob: string;
+  customerDob: string | null;
   deviceTypeId: string;
   deviceTypeName: string;
   selectedDate: string;
@@ -1966,7 +2217,7 @@ export async function createWalkInBooking(payload: {
         p_phone: payload.customerPhone,
         p_name: payload.customerName,
         p_email: payload.customerEmail || null,
-        p_dob: payload.customerDob
+        p_dob: payload.customerDob || null
       });
 
     if (customerError) throw customerError;
@@ -2012,7 +2263,7 @@ export async function createWalkInBooking(payload: {
         customer_name: payload.customerName,
         customer_phone: payload.customerPhone,
         customer_email: payload.customerEmail,
-        customer_dob: payload.customerDob,
+        customer_dob: payload.customerDob || null,
         device_subtotal: deviceSubtotal,
         food_subtotal: 0,
         subscription_discount: subscriptionDiscount,
@@ -2455,7 +2706,7 @@ export async function createWalkInSession(payload: {
   customerName: string;
   customerPhone: string;
   customerEmail: string | null;
-  customerDob: string;
+  customerDob: string | null;
   deviceTypeId: string;
   deviceTypeName: string;
   playerCount: number;
@@ -2506,7 +2757,7 @@ export async function createWalkInSession(payload: {
         p_phone: payload.customerPhone,
         p_name: payload.customerName,
         p_email: payload.customerEmail || null,
-        p_dob: payload.customerDob
+        p_dob: payload.customerDob || null
       });
 
     if (customerError) throw customerError;
@@ -2527,7 +2778,7 @@ export async function createWalkInSession(payload: {
         customer_name: payload.customerName,
         customer_phone: payload.customerPhone,
         customer_email: payload.customerEmail,
-        customer_dob: payload.customerDob,
+        customer_dob: payload.customerDob || null,
         device_subtotal: 0,
         food_subtotal: 0,
         subscription_discount: 0,
@@ -2541,6 +2792,8 @@ export async function createWalkInSession(payload: {
         walk_in_device_type_id: payload.deviceTypeId,
         walk_in_device_type_name: payload.deviceTypeName,
         walk_in_player_count: payload.playerCount,
+        walk_in_pending_start_time: payload.startedClock || null,
+        walk_in_pending_end_time: payload.startedClock ? payload.plannedEndClock || null : null,
         lock_expires_at: null
       })
       .select("id, booking_number")
@@ -2627,29 +2880,13 @@ export async function checkInWalkInSession(
 ) {
   await requireStaff();
 
-  let startedFrom: string | null = null;
-  let plannedEnd: string | null = null;
-
-  if (plannedEndClock) {
-    // Both readings at once, because the planned end is only meaningful against
-    // the start: "9:00 PM" is a fine time of day and a nonsense finish for a
-    // session that began at 10.
-    const planned = resolvePlannedSession(startedClock ?? null, plannedEndClock);
-    if (!planned.ok) return { success: false, error: planned.error };
-    if (startedClock) startedFrom = planned.session.start.clock;
-    plannedEnd = planned.session.end.clock;
-  } else if (startedClock) {
-    const resolved = resolveBackdatedStart(startedClock);
-    if (!resolved.ok) return { success: false, error: resolved.error };
-    startedFrom = resolved.start.clock;
-  }
-
   try {
     const { data: booking, error: readError } = await supabaseAdmin
       .from("bookings")
       .select(
         `status, checked_in_at, billed_on_actual_time,
-         walk_in_device_type_id, walk_in_device_type_name, walk_in_player_count`
+         walk_in_device_type_id, walk_in_device_type_name, walk_in_player_count,
+         walk_in_pending_start_time, walk_in_pending_end_time`
       )
       .eq("id", bookingId)
       .maybeSingle();
@@ -2667,6 +2904,24 @@ export async function checkInWalkInSession(
         success: false,
         error: `A ${String(booking.status).replace(/_/g, " ")} booking cannot be checked in.`
       };
+    }
+
+    // Postgres TIME values arrive from Supabase with seconds (HH:MM:SS),
+    // while the arena time parsers intentionally accept the UI's HH:MM value.
+    const asClock = (value: string | null | undefined) => value ? value.slice(0, 5) : null;
+    const requestedStart = asClock(startedClock || booking.walk_in_pending_start_time || null);
+    const requestedEnd = asClock(plannedEndClock || booking.walk_in_pending_end_time || null);
+    let startedFrom: string | null = null;
+    let plannedEnd: string | null = null;
+    if (requestedEnd) {
+      const planned = resolvePlannedSession(requestedStart, requestedEnd);
+      if (!planned.ok) return { success: false, error: planned.error };
+      if (requestedStart) startedFrom = planned.session.start.clock;
+      plannedEnd = planned.session.end.clock;
+    } else if (requestedStart) {
+      const resolved = resolveBackdatedStart(requestedStart);
+      if (!resolved.ok) return { success: false, error: resolved.error };
+      startedFrom = resolved.start.clock;
     }
 
     const { data: deviceType, error: deviceTypeError } = await supabaseAdmin
@@ -2710,6 +2965,13 @@ export async function checkInWalkInSession(
           `Free one up or move this customer to another device type.`
       };
     }
+
+    const { error: clearPendingTimeError } = await supabaseAdmin
+      .from("bookings")
+      .update({ walk_in_pending_start_time: null, walk_in_pending_end_time: null })
+      .eq("id", bookingId)
+      .eq("status", "checked_in");
+    if (clearPendingTimeError) throw clearPendingTimeError;
 
     return {
       success: true,
@@ -3429,6 +3691,7 @@ export async function getBookingBillingDetails(bookingId: string) {
       .from("bookings")
       .select(`
         id,
+        customer_id,
         booking_number,
         customer_name,
         customer_phone,
@@ -3475,6 +3738,17 @@ export async function getBookingBillingDetails(bookingId: string) {
 
     if (lineItemsError) throw lineItemsError;
 
+    let walletBalance = 0;
+    if (data.customer_id) {
+      const { data: wallet, error: walletError } = await supabaseAdmin
+        .from("customer_wallet_balances")
+        .select("balance,reserved_balance")
+        .eq("customer_id", data.customer_id)
+        .maybeSingle();
+      if (walletError) throw walletError;
+      walletBalance = Math.max(0, Number(wallet?.balance || 0) - Number(wallet?.reserved_balance || 0));
+    }
+
     // Calculate correct total_amount (don't trust stored value)
     const deviceSubtotal = Number(data.device_subtotal || 0);
     const foodSubtotal = Number(data.food_subtotal || 0);
@@ -3502,6 +3776,7 @@ export async function getBookingBillingDetails(bookingId: string) {
       success: true,
       booking: {
         ...data,
+        wallet_balance: walletBalance,
         total_amount: correctTotal, // Override with calculated value
         line_items: lineItems,
         unpaid_items: unpaidItems,
@@ -3531,100 +3806,33 @@ export async function markBookingAsPaid(
     cashAmount: number;
     cardAmount: number;
     upiAmount: number;
+    walletAmount?: number;
+    idempotencyKey?: string;
   }
 ) {
   await requireStaff();
 
   try {
-    // Get booking details including current payment status
-    const { data: booking, error: fetchError } = await supabaseAdmin
-      .from("bookings")
-      .select(
-        "total_amount, amount_paid, cash_amount, card_amount, upi_amount, online_amount, booking_number, billed_on_actual_time, completed_at"
-      )
-      .eq("id", bookingId)
-      .single();
-
-    if (fetchError || !booking) throw new Error("Booking not found");
-
-    // A session in progress has a total of zero because the bill has not been
-    // worked out yet. Settling it would take a zero payment and stamp the row
-    // `paid` - and the reports read that column directly, so the session would be
-    // counted as a completed sale for nothing. The bill exists after checkout.
-    if (booking.billed_on_actual_time && !booking.completed_at) {
-      return {
-        success: false,
-        error: "This session is still in progress. Check the customer out first so the bill can be calculated."
-      };
+    const walletAmount = Number(paymentSplit.walletAmount || 0);
+    const totalSplit = paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + walletAmount;
+    if ([paymentSplit.cashAmount, paymentSplit.cardAmount, paymentSplit.upiAmount, walletAmount].some((amount) => !Number.isFinite(amount) || amount < 0)) {
+      throw new Error("Payment amounts must be non-negative numbers");
     }
+    if (walletAmount > 0 && !paymentSplit.idempotencyKey) throw new Error("Wallet payment request expired. Reopen the payment dialog.");
 
-    // Calculate balance due
-    const currentAmountPaid = Number(booking.amount_paid || 0);
-    const balanceDue = roundToTwo(Number(booking.total_amount) - currentAmountPaid);
-
-    // Validate that split amounts equal balance due (not total, since there might be partial payment)
-    const totalSplit = paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount;
-    if (Math.abs(totalSplit - balanceDue) > 0.01) {
-      throw new Error(`Payment split (₹${totalSplit}) does not match balance due (₹${balanceDue})`);
-    }
-
-    // Add the new payment to existing split amounts.
-    // online_amount is carried through untouched: a customer who part-paid via
-    // Razorpay and settles the rest at the counter must keep that record, and
-    // check_payment_split asserts cash + card + upi + online = amount_paid.
-    const newCashAmount = Number(booking.cash_amount || 0) + paymentSplit.cashAmount;
-    const newCardAmount = Number(booking.card_amount || 0) + paymentSplit.cardAmount;
-    const newUpiAmount = Number(booking.upi_amount || 0) + paymentSplit.upiAmount;
-    const onlineAmount = Number(booking.online_amount || 0);
-    const newAmountPaid = currentAmountPaid + totalSplit;
-
-    // Determine if fully paid or still partial
-    const newPaymentStatus = Math.abs(newAmountPaid - booking.total_amount) < 0.01 ? "paid" : "partial";
-
-    // Update booking payment status with accumulated split amounts
-    const { error: updateError } = await supabaseAdmin
-      .from("bookings")
-      .update({
-        payment_status: newPaymentStatus,
-        amount_paid: newAmountPaid,
-        cash_amount: newCashAmount,
-        card_amount: newCardAmount,
-        upi_amount: newUpiAmount,
-        online_amount: onlineAmount,
-        // payment_method will be set automatically by trigger
-      })
-      .eq("id", bookingId);
-
-    if (updateError) throw updateError;
-
-    // Mark all line items as paid
-    const { error: lineItemsError } = await supabaseAdmin
-      .from("booking_line_items")
-      .update({ is_paid: true })
-      .eq("booking_id", bookingId);
-
-    if (lineItemsError) {
-      console.error("Failed to update line items:", lineItemsError);
-      throw new Error("Failed to update line items payment status");
-    }
-
-    // Update food items status from 'pending' to 'preparing' since they're now paid
-    // This allows kitchen staff to start preparing paid orders
-    const { error: foodItemsError } = await supabaseAdmin
-      .from("booking_food_items")
-      .update({ status: "preparing" })
-      .eq("booking_id", bookingId)
-      .eq("status", "pending"); // Only update pending items (not already preparing/ready/served)
-
-    if (foodItemsError) {
-      console.error("Failed to update food items status:", foodItemsError);
-      // Don't throw - food status is non-critical, payment is already marked
-      // This allows the transaction to succeed even if food status update fails
-    }
+    const { error } = await supabaseAdmin.rpc("wallet_apply_booking_payment", {
+      p_booking_id: bookingId,
+      p_cash_amount: paymentSplit.cashAmount,
+      p_card_amount: paymentSplit.cardAmount,
+      p_upi_amount: paymentSplit.upiAmount,
+      p_wallet_amount: walletAmount,
+      p_idempotency_key: paymentSplit.idempotencyKey || crypto.randomUUID()
+    });
+    if (error) throw error;
 
     return {
       success: true,
-      message: `Booking ${booking.booking_number} marked as paid`,
+      message: "Booking marked as paid",
     };
   } catch (error: any) {
     console.error("Error marking booking as paid:", error);

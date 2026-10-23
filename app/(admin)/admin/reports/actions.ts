@@ -9,6 +9,7 @@ import {
 } from "@/lib/payments/paymentStatus";
 import { foodPaymentRatio, revenueSplit, type BookingMoney } from "@/lib/payments/revenueSplit";
 import { partitionCancelled, refundPosition } from "@/lib/reports/cancellations";
+import { arenaDate } from "@/lib/utils/dates";
 
 /** The money columns, named as `revenueSplit` wants them. */
 function moneyOf(booking: any): BookingMoney {
@@ -19,7 +20,7 @@ function moneyOf(booking: any): BookingMoney {
     promoDiscount: booking.promo_discount,
     happyHourDiscount: booking.happy_hour_discount,
     hourPassDiscount: booking.hour_pass_discount,
-    amountPaid: booking.amount_paid,
+    amountPaid: Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)),
   };
 }
 
@@ -49,6 +50,7 @@ export async function getFoodReports(filters?: ReportFilters) {
         hour_pass_discount,
         total_amount,
         amount_paid,
+        wallet_amount,
         status,
         payment_status,
         created_at,
@@ -232,6 +234,7 @@ export async function getDeviceReports(filters?: ReportFilters) {
         happy_hour_discount,
         hour_pass_discount,
         amount_paid,
+        wallet_amount,
         status,
         payment_status,
         created_at,
@@ -447,6 +450,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
         hour_pass_discount,
         total_amount,
         amount_paid,
+        wallet_amount,
         cash_amount,
         card_amount,
         upi_amount,
@@ -474,6 +478,26 @@ export async function getRevenueReports(filters?: ReportFilters) {
 
     if (error) throw error;
 
+    const [
+      { data: onlineWalletOrders, error: onlineWalletError },
+      { data: adminWalletSales, error: adminWalletError },
+    ] = await Promise.all([
+      supabaseAdmin
+        .from('payment_orders')
+        .select('id, amount, paid_at')
+        .eq('purpose', 'wallet_top_up')
+        .eq('status', 'fulfilled')
+        .not('paid_at', 'is', null),
+      supabaseAdmin
+        .from('wallet_transactions')
+        .select('id, paid_amount, sale_payment_method, created_at')
+        .eq('source', 'admin_wallet_sale')
+        .eq('kind', 'top_up')
+        .eq('direction', 'credit'),
+    ]);
+    if (onlineWalletError) throw onlineWalletError;
+    if (adminWalletError) throw adminWalletError;
+
     /**
      * The date a booking belongs to in this report.
      *
@@ -488,7 +512,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
           ? booking.created_at
           : booking.payment_groups?.paid_at || booking.updated_at || booking.created_at;
 
-      return paidAt ? paidAt.split('T')[0] : null;
+      return paidAt ? arenaDate(new Date(paidAt)) : null;
     };
 
     let filteredData = data || [];
@@ -516,6 +540,16 @@ export async function getRevenueReports(filters?: ReportFilters) {
       partitionCancelled(filteredData as any[]);
     const refunds = refundPosition(cancelledData);
 
+    const isInDateRange = (timestamp: string | null | undefined) => {
+      if (!timestamp) return false;
+      const date = arenaDate(new Date(timestamp));
+      if (filters?.dateFrom && date < filters.dateFrom) return false;
+      if (filters?.dateTo && date > filters.dateTo) return false;
+      return true;
+    };
+    const walletOnlineSales = (onlineWalletOrders || []).filter((row: any) => isInDateRange(row.paid_at));
+    const walletAdminSales = (adminWalletSales || []).filter((row: any) => isInDateRange(row.created_at));
+
     /**
      * Money actually received. Every revenue figure is measured over these, so
      * including unpaid bookings above changes no revenue number and no average -
@@ -525,7 +559,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
      * payment belongs in the revenue whatever word is stored beside it.
      */
     const revenueBookings = activeData.filter(
-      (booking: any) => Number(booking.amount_paid || 0) > 0
+      (booking: any) => Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0) > 0
     );
 
     /**
@@ -582,8 +616,10 @@ export async function getRevenueReports(filters?: ReportFilters) {
     );
 
     let totalRevenue = 0;
+    let bookingRevenue = 0;
     let deviceRevenue = 0;
     let foodRevenue = 0;
+    let walletRevenue = 0;
     /** Received beyond anything charged, so it belongs to neither half above. */
     let unallocatedRevenue = 0;
 
@@ -598,6 +634,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
       source: string;
       totalRevenue: number;
       bookingCount: number;
+      transactionCount: number;
     }> = {};
 
     // Daily revenue
@@ -605,6 +642,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
       date: string;
       deviceRevenue: number;
       foodRevenue: number;
+      walletRevenue: number;
       totalRevenue: number;
     }> = {};
 
@@ -616,7 +654,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
 
       // Calculate actual revenue based on what was actually paid (amount_paid)
       // Revenue = what customer actually paid, not the calculated total_amount
-      const revenue = Number(booking.amount_paid || 0);
+      const revenue = Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0));
 
       /**
        * Device against food, from the amounts rather than from `payment_status`.
@@ -633,6 +671,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
       unallocatedRevenue += split.overpaid;
 
       totalRevenue += revenue;
+      bookingRevenue += revenue;
       deviceRevenue += deviceRev;
       foodRevenue += foodRev;
 
@@ -647,7 +686,8 @@ export async function getRevenueReports(filters?: ReportFilters) {
         sourceBreakdown[source] = {
           source,
           totalRevenue: 0,
-          bookingCount: 0
+          bookingCount: 0,
+          transactionCount: 0,
         };
       }
       sourceBreakdown[source].totalRevenue += revenue;
@@ -659,12 +699,68 @@ export async function getRevenueReports(filters?: ReportFilters) {
           date: revenueDate,
           deviceRevenue: 0,
           foodRevenue: 0,
+          walletRevenue: 0,
           totalRevenue: 0
         };
       }
       dailyRevenue[revenueDate].deviceRevenue += deviceRev;
       dailyRevenue[revenueDate].foodRevenue += foodRev;
       dailyRevenue[revenueDate].totalRevenue += revenue;
+    });
+
+    const addWalletSaleRevenue = (sale: {
+      source: string;
+      amount: number;
+      date: string;
+      paymentMethod: 'cash' | 'card' | 'upi' | 'online';
+    }) => {
+      if (!Number.isFinite(sale.amount) || sale.amount <= 0 || !sale.date) return;
+      totalRevenue += sale.amount;
+      walletRevenue += sale.amount;
+      if (sale.paymentMethod === 'cash') totalCash += sale.amount;
+      else if (sale.paymentMethod === 'card') totalCard += sale.amount;
+      else if (sale.paymentMethod === 'upi') totalUpi += sale.amount;
+      else totalOnline += sale.amount;
+
+      if (!sourceBreakdown[sale.source]) {
+        sourceBreakdown[sale.source] = {
+          source: sale.source,
+          totalRevenue: 0,
+          bookingCount: 0,
+          transactionCount: 0,
+        };
+      }
+      sourceBreakdown[sale.source].totalRevenue += sale.amount;
+      sourceBreakdown[sale.source].transactionCount += 1;
+
+      if (!dailyRevenue[sale.date]) {
+        dailyRevenue[sale.date] = {
+          date: sale.date,
+          deviceRevenue: 0,
+          foodRevenue: 0,
+          walletRevenue: 0,
+          totalRevenue: 0,
+        };
+      }
+      dailyRevenue[sale.date].walletRevenue += sale.amount;
+      dailyRevenue[sale.date].totalRevenue += sale.amount;
+    };
+
+    walletOnlineSales.forEach((sale: any) => addWalletSaleRevenue({
+      source: 'wallet_online',
+      amount: Number(sale.amount),
+      date: arenaDate(new Date(sale.paid_at)),
+      paymentMethod: 'online',
+    }));
+    walletAdminSales.forEach((sale: any) => {
+      const method = sale.sale_payment_method;
+      if (method !== 'cash' && method !== 'card' && method !== 'upi') return;
+      addWalletSaleRevenue({
+        source: 'wallet_admin',
+        amount: Number(sale.paid_amount),
+        date: arenaDate(new Date(sale.created_at)),
+        paymentMethod: method,
+      });
     });
 
     const sourceBreakdownArray = Object.values(sourceBreakdown)
@@ -679,6 +775,8 @@ export async function getRevenueReports(filters?: ReportFilters) {
         totalRevenue,
         deviceRevenue,
         foodRevenue,
+        walletRevenue,
+        walletTopUps: walletOnlineSales.length + walletAdminSales.length,
         // Bookings that produced revenue. Left as it was, on purpose: the
         // Overview tab reads this through getDashboardSummary, and revenue per
         // booking must not be divided by bookings that paid nothing.
@@ -714,8 +812,9 @@ export async function getRevenueReports(filters?: ReportFilters) {
          * and the booking behind it wants looking at.
          */
         unallocatedRevenue,
-        averageRevenuePerBooking: revenueBookings.length ? totalRevenue / revenueBookings.length : 0,
+        averageRevenuePerBooking: revenueBookings.length ? bookingRevenue / revenueBookings.length : 0,
         deviceRevenuePercentage: totalRevenue ? (deviceRevenue / totalRevenue) * 100 : 0,
+        walletRevenuePercentage: totalRevenue ? (walletRevenue / totalRevenue) * 100 : 0,
         // Payment method breakdown
         totalCash,
         totalCard,
@@ -733,6 +832,97 @@ export async function getRevenueReports(filters?: ReportFilters) {
     };
   } catch (err: any) {
     console.error("Get revenue reports error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/** Revenue by arena calendar month for a selected month range. */
+export async function getMonthlyRevenueReports(fromMonth?: string, toMonth?: string) {
+  await requireAdmin();
+
+  try {
+    const today = arenaDate(new Date());
+    const [todayYear, todayMonth, todayDay] = today.split("-").map(Number);
+    const defaultTo = today.slice(0, 7);
+    const defaultFromDate = new Date(Date.UTC(todayYear, todayMonth - 12, 1));
+    const fromKey = fromMonth || `${defaultFromDate.getUTCFullYear()}-${String(defaultFromDate.getUTCMonth() + 1).padStart(2, "0")}`;
+    const toKey = toMonth || defaultTo;
+    const monthPattern = /^\d{4}-(0[1-9]|1[0-2])$/;
+    if (!monthPattern.test(fromKey) || !monthPattern.test(toKey) || fromKey > toKey) {
+      return { success: false, error: "Choose a valid month range." };
+    }
+    const [fromYear, fromNumber] = fromKey.split("-").map(Number);
+    const [toYear, toNumber] = toKey.split("-").map(Number);
+    const monthCount = (toYear - fromYear) * 12 + toNumber - fromNumber + 1;
+    if (monthCount > 60) {
+      return { success: false, error: "Choose a range of 60 months or less." };
+    }
+    const firstMonth = new Date(Date.UTC(fromYear, fromNumber - 1, 1));
+    const comparisonStart = new Date(Date.UTC(fromYear, fromNumber - 2, 1));
+    const lastMonth = new Date(Date.UTC(toYear, toNumber, 0));
+    const dateFrom = `${comparisonStart.getUTCFullYear()}-${String(comparisonStart.getUTCMonth() + 1).padStart(2, "0")}-01`;
+    const selectedEndDate = `${toKey}-${String(lastMonth.getUTCDate()).padStart(2, "0")}`;
+    const dateTo = toKey === defaultTo && today < selectedEndDate ? today : selectedEndDate;
+
+    const report = await getRevenueReports({ dateFrom, dateTo });
+    if (!report.success) return { success: false as const, error: "Could not load revenue data for this month range." };
+
+    const months = Array.from({ length: monthCount }, (_, index) => {
+      const date = new Date(Date.UTC(firstMonth.getUTCFullYear(), firstMonth.getUTCMonth() + index, 1));
+      const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+      return {
+        month: key,
+        label: date.toLocaleDateString("en-IN", { month: "short", timeZone: "UTC" }),
+        year: date.getUTCFullYear(),
+        totalRevenue: 0,
+        deviceRevenue: 0,
+        foodRevenue: 0,
+        walletRevenue: 0,
+      };
+    });
+    const byMonth = new Map(months.map((item) => [item.month, item]));
+
+    for (const dayRevenue of report.dailyRevenue || []) {
+      const bucket = byMonth.get(dayRevenue.date.slice(0, 7));
+      if (!bucket) continue;
+      bucket.totalRevenue += Number(dayRevenue.totalRevenue || 0);
+      bucket.deviceRevenue += Number(dayRevenue.deviceRevenue || 0);
+      bucket.foodRevenue += Number(dayRevenue.foodRevenue || 0);
+      bucket.walletRevenue += Number(dayRevenue.walletRevenue || 0);
+    }
+
+    const currentKey = toKey;
+    const previousDate = new Date(Date.UTC(toYear, toNumber - 2, 1));
+    const previousKey = `${previousDate.getUTCFullYear()}-${String(previousDate.getUTCMonth() + 1).padStart(2, "0")}`;
+    const isCurrentMonth = currentKey === defaultTo;
+    const comparisonDays = isCurrentMonth ? todayDay : lastMonth.getUTCDate();
+    const selectedMonthRevenue = byMonth.get(currentKey)?.totalRevenue || 0;
+    const currentToDate = isCurrentMonth ? (report.dailyRevenue || [])
+      .filter((item: any) => item.date.slice(0, 7) === currentKey)
+      .reduce((sum: number, item: any) => sum + Number(item.totalRevenue || 0), 0) : selectedMonthRevenue;
+    const previousToDate = (report.dailyRevenue || [])
+      .filter((item: any) => item.date.slice(0, 7) === previousKey && Number(item.date.slice(8, 10)) <= comparisonDays)
+      .reduce((sum: number, item: any) => sum + Number(item.totalRevenue || 0), 0);
+    const changePercent = previousToDate > 0
+      ? ((currentToDate - previousToDate) / previousToDate) * 100
+      : null;
+
+    return {
+      success: true,
+      months,
+      currentMonth: currentKey,
+      currentMonthDays: comparisonDays,
+      fromMonth: fromKey,
+      toMonth: toKey,
+      isCurrentMonth,
+      changePercent,
+      currentToDate,
+      previousToDate,
+      previousMonth: previousKey,
+      totalRevenue: months.reduce((sum, item) => sum + item.totalRevenue, 0),
+    };
+  } catch (err: any) {
+    console.error("Get monthly revenue reports error:", err);
     return { success: false, error: err.message };
   }
 }
@@ -758,7 +948,9 @@ export async function getDashboardSummary(filters?: ReportFilters) {
         totalRevenue: revenueResult.summary?.totalRevenue || 0,
         deviceRevenue: revenueResult.summary?.deviceRevenue || 0,
         foodRevenue: revenueResult.summary?.foodRevenue || 0,
+        walletRevenue: revenueResult.summary?.walletRevenue || 0,
         totalBookings: revenueResult.summary?.totalBookings || 0,
+        averageRevenuePerBooking: revenueResult.summary?.averageRevenuePerBooking || 0,
         totalFoodOrders: foodResult.summary?.totalOrders || 0,
         totalItemsSold: foodResult.summary?.totalItemsSold || 0,
         totalHoursBooked: deviceResult.summary?.totalHours || 0,
@@ -921,6 +1113,7 @@ export async function getProfitAndLoss(filters: { dateFrom: string; dateTo: stri
         hour_pass_discount,
         total_amount,
         amount_paid,
+        wallet_amount,
         payment_status,
         created_at,
         updated_at,
@@ -948,7 +1141,7 @@ export async function getProfitAndLoss(filters: { dateFrom: string; dateTo: stri
     let foodRevenue = 0;
 
     paidBookings.forEach((b: any) => {
-      const amountPaid = Number(b.amount_paid || 0);
+      const amountPaid = Math.max(0, Number(b.amount_paid || 0) - Number(b.wallet_amount || 0));
       const deviceSubtotal = Number(b.device_subtotal || 0);
       const foodSubtotal = Number(b.food_subtotal || 0);
       const subscriptionDiscount = Number(b.subscription_discount || 0);

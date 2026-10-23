@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Award, ChevronDown, LogOut, UserCheck, Loader2 } from "lucide-react";
+import { Award, ChevronDown, LogOut, UserCheck, UserRound, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { signOutCustomerAction } from "@/app/(customer)/booking/otp-actions";
 import {
@@ -44,6 +44,7 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
   const router = useRouter();
   const pathname = usePathname();
   const [phone, setPhone] = useState<string | null>(null);
+  const [customerName, setCustomerName] = useState<string | null>(null);
   const [plan, setPlan] = useState<ActivePlanSummary | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [open, setOpen] = useState(false);
@@ -70,6 +71,7 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
       .then((state) => {
         if (request !== latestRequest.current) return;
         setPhone(state.phone);
+        setCustomerName(state.name);
         // A membership without a live session is not shown; the server already
         // returns null for the plan in that case, and the control itself
         // renders nothing without a number.
@@ -78,6 +80,7 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
       .catch(() => {
         if (request !== latestRequest.current) return;
         setPhone(null);
+        setCustomerName(null);
         setPlan(null);
       });
   }, []);
@@ -135,6 +138,7 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
     try {
       await signOutCustomerAction();
       setPhone(null);
+      setCustomerName(null);
       setPlan(null);
       setOpen(false);
       // The other direction of the same problem: anything else on screen that
@@ -210,7 +214,7 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
         No Discount Membership
       </p>
       <p className="text-xs leading-relaxed text-zinc-400">
-        View your subscription details and any personal hour packs linked to this account.
+        View your membership details and booking savings.
       </p>
       <button
         onClick={() => go("/my-subscription")}
@@ -249,7 +253,10 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
       <div className="space-y-4 rounded-2xl border border-zinc-800 bg-[#111111] p-4">
         <span className="flex items-center gap-2 text-sm font-bold text-white">
           <UserCheck className="h-4 w-4 text-primary" />
-          {masked}
+          <span className="min-w-0">
+            <span className="block truncate">{customerName || masked}</span>
+            {customerName && <span className="block text-xs font-medium text-zinc-400">{masked}</span>}
+          </span>
         </span>
         <div className="border-t border-zinc-900 pt-4">{planDetails}</div>
         <div className="border-t border-zinc-900 pt-4">{signOutRow}</div>
@@ -263,31 +270,18 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
         onClick={() => setOpen((wasOpen) => !wasOpen)}
         aria-haspopup="menu"
         aria-expanded={open}
-        title={`Verified as +91 ${phone}`}
-        className={`flex items-center gap-3 rounded-xl border px-4 py-2 text-left transition-colors ${open
+        aria-label={customerName ? `Customer account for ${customerName}` : "Customer account"}
+        title={customerName || "Customer account"}
+        className={`flex shrink-0 items-center justify-center gap-3 rounded-xl border px-4 py-2 text-left transition-colors ${open
           ? "border-primary/60 bg-primary/10"
           : "border-primary/25 bg-[#141110] hover:border-primary/50"
           }`}
       >
-        <Award className="h-4 w-4 shrink-0 text-primary" />
-        <span className="min-w-0">
-          {/* The plan is the headline when there is one; otherwise the number
-              stands on its own rather than under an empty label. */}
-          {plan ? (
-            <>
-              <span className="block truncate text-[11px] font-black uppercase tracking-wider text-primary">
-                {plan.planName}
-              </span>
-              <span className="block text-[10px] font-bold text-zinc-400">{masked}</span>
-            </>
-          ) : (
-            <span className="block text-xs font-bold text-zinc-300">{masked}</span>
-          )}
-        </span>
         <ChevronDown
           className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform duration-200 ${open ? "rotate-180" : ""
             }`}
         />
+        <UserRound className="h-4 w-4 shrink-0 text-primary" />
       </button>
 
       {open && (
@@ -297,7 +291,10 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
         >
           <span className="flex items-center gap-2 text-sm font-bold text-white">
             <UserCheck className="h-4 w-4 text-primary" />
-            {masked}
+            <span className="min-w-0">
+              <span className="block truncate">{customerName || masked}</span>
+              {customerName && <span className="block text-xs font-medium text-zinc-400">{masked}</span>}
+            </span>
           </span>
 
           <div className="border-t border-zinc-900 pt-4">{planDetails}</div>

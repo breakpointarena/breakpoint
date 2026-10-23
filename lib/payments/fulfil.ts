@@ -1,7 +1,13 @@
 import { supabaseAdmin } from '@/lib/supabase/server'
-import type { DeviceBookingQuote, FoodOrderQuote, SubscriptionQuote } from './quote'
+import type {
+  DeviceBookingQuote,
+  FoodOrderQuote,
+  SubscriptionQuote,
+  WalletTopUpQuote,
+} from './quote'
 import { addMonthsToDateString, arenaToday } from '@/lib/utils/dates'
 import { perExtraPlayerCharge } from './money'
+import { addWalletCredits } from '@/lib/wallet/server'
 
 /**
  * Turns a paid Razorpay order into a booking.
@@ -25,18 +31,58 @@ export type FulfilResult =
       bookingNumber?: string
       subscriptionId?: string
       planName?: string
+      walletTransactionId?: string
     }
   | { success: false; error: string; refundRequired: boolean }
 
 /** Dispatches a stored quote to the right fulfilment routine. */
 export async function fulfilQuote(
-  purpose: 'device_booking' | 'food_order' | 'subscription',
+  purpose: 'device_booking' | 'food_order' | 'subscription' | 'wallet_top_up',
   quote: unknown,
   payment: PaymentReference
 ): Promise<FulfilResult> {
   if (purpose === 'device_booking') return fulfilDeviceBooking(quote as DeviceBookingQuote, payment)
   if (purpose === 'subscription') return fulfilSubscription(quote as SubscriptionQuote, payment)
+  if (purpose === 'wallet_top_up') return fulfilWalletTopUp(quote as WalletTopUpQuote, payment)
   return fulfilFoodOrder(quote as FoodOrderQuote, payment)
+}
+
+async function fulfilWalletTopUp(
+  quote: WalletTopUpQuote,
+  payment: PaymentReference
+): Promise<FulfilResult> {
+  if (
+    quote.kind !== 'wallet_top_up' ||
+    !quote.customerId ||
+    !payment.razorpayPaymentId ||
+    quote.price <= 0 ||
+    quote.paidCredits <= 0 ||
+    quote.bonusCredits < 0 ||
+    (quote.bonusCredits > 0 && quote.bonusValidityDays !== null && quote.bonusValidityDays < 1)
+  ) {
+    return {
+      success: false,
+      error: 'Wallet purchase details could not be verified.',
+      refundRequired: true,
+    }
+  }
+
+  const bonusExpiresAt = quote.bonusCredits > 0 && quote.bonusValidityDays
+    ? new Date(Date.now() + quote.bonusValidityDays * 24 * 60 * 60 * 1000).toISOString()
+    : null
+
+  const walletTransactionId = await addWalletCredits({
+    customerId: quote.customerId,
+    paidAmount: quote.paidCredits,
+    bonusAmount: quote.bonusCredits,
+    bonusExpiresAt,
+    kind: 'top_up',
+    description: `Wallet top-up: ${quote.offerName}`,
+    source: 'razorpay',
+    idempotencyKey: `wallet-topup:${payment.razorpayPaymentId}`,
+  })
+
+  return { success: true, walletTransactionId }
 }
 
 /** Payment columns shared by both flows - online money lands in `online_amount`. */

@@ -32,7 +32,7 @@ export default async function SubscriptionPage() {
   ])
   const plansData = response.success && response.data ? response.data : []
   const membershipPlans = plansData.filter(plan => plan.plan_type === 'membership')
-  const hourPacks = plansData.filter(plan => plan.plan_type === 'hour_pack')
+  const hourPacks: any[] = []
 
   return (
     <main className="min-h-screen bg-[#0d0a14] text-white font-sans pt-12 pb-8 px-0 sm:px-6 lg:px-8 mt-5 relative overflow-hidden">
@@ -50,14 +50,14 @@ export default async function SubscriptionPage() {
           <div className="inline-flex items-center justify-center space-x-2 bg-gradient-to-r from-primary/10 via-amber-400/10 to-primary/10 border border-primary/20 rounded-full px-5 py-2 mb-6 backdrop-blur-sm">
             <Award className="w-4 h-4 text-primary animate-pulse" />
             <span className="text-primary text-xs font-black tracking-[0.2em] uppercase">
-              Memberships & Hour Packs
+              Memberships
             </span>
           </div>
           <h1 className="text-4xl md:text-6xl font-black text-transparent bg-gradient-to-r from-white via-amber-100 to-white bg-clip-text mb-6 tracking-tight leading-tight">
             Choose How You Play
           </h1>
           <p className="text-zinc-400 text-lg leading-relaxed">
-            Save on every booking with a membership, or prepay personal play hours that expire at the end of your chosen term.{' '}
+            Save on every booking with a membership and enjoy arena-wide benefits.{' '}
             <span className="text-transparent bg-gradient-to-r from-primary via-amber-300 to-primary bg-clip-text font-bold">elite gaming status</span>
             {' '}and arena-wide benefits.
           </p>

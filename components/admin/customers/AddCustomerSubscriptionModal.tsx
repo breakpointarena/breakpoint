@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Loader2, Plus, WalletCards } from "lucide-react";
+import { BadgePlus, Loader2, Plus, WalletCards } from "lucide-react";
 import { toast } from "sonner";
 import {
   assignSubscriptionToCustomerAction,
@@ -106,12 +106,13 @@ export function AddCustomerSubscriptionModal({
       <DialogTrigger asChild>
         <Button
           type="button"
-          size="sm"
+          size="icon"
           variant="outline"
-          className="mt-2 h-7 border-zinc-700 px-2 text-[10px] font-bold uppercase text-zinc-300 hover:border-primary hover:text-primary"
+          className="mt-0 h-8 w-8 border-zinc-700 p-0 text-zinc-300 hover:border-primary hover:text-primary"
+          aria-label={`Add subscription for ${customer.name}`}
+          title="Add subscription"
         >
-          <Plus className="mr-1 h-3 w-3" />
-          Add subscription
+          <BadgePlus className="h-4 w-4" />
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-lg border-[#27272a] bg-[var(--background)] text-white">

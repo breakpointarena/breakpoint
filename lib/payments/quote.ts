@@ -116,6 +116,19 @@ export interface SubscriptionQuote {
   totalAmount: number
 }
 
+export interface WalletTopUpQuote {
+  kind: 'wallet_top_up'
+  customerId: string
+  customerPhone: string
+  offerId: string
+  offerName: string
+  price: number
+  paidCredits: number
+  bonusCredits: number
+  bonusValidityDays: number | null
+  totalAmount: number
+}
+
 export type QuoteResult<T> =
   | { success: true; quote: T }
   | { success: false; error: string }

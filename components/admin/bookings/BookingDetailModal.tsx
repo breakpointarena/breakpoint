@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -16,7 +18,7 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, linkSharedPlayParticipantToHourPack, getHourPackCustomersForSharedPlay, getCustomersForSharedPlay } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, checkOutSharedPlayParticipant } from "@/app/(admin)/admin/bookings/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
 import { Label } from "@/components/ui/label";
@@ -41,9 +43,9 @@ import { formatDbTime, formatDbTimeRange } from "@/lib/utils/timeSlots";
 import { arenaClockTime, formatClockTime12h } from "@/lib/utils/dates";
 import { TimeOfDayField } from "@/components/ui/time-of-day-field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { formatPlayedDuration, playedMinutes, priceSession, resolvePlannedSession } from "@/lib/bookings/walkInSession";
+import { formatPlayedDuration, MAX_BACKDATED_START_HOURS, playedMinutes, priceSession, resolveBackdatedStart, resolvePlannedSession } from "@/lib/bookings/walkInSession";
 import { calculateSharedPlayShares, getSharedPlaySessions } from "@/lib/bookings/sharedPlay";
-import type { HourPackCustomerChoice, SharedPlayCustomer, SharedPlayParticipant } from "@/lib/types/shared-play";
+import type { SharedPlayCustomer, SharedPlayParticipant } from "@/lib/types/shared-play";
 
 interface BookingDetailModalProps {
   bookingId: string | null;
@@ -75,6 +77,12 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [addFoodModalOpen, setAddFoodModalOpen] = useState(false);
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [selectedFoodItems, setSelectedFoodItems] = useState<Record<string, number>>({});
+  const [foodParticipantId, setFoodParticipantId] = useState("");
+  const [participantCheckoutQuote, setParticipantCheckoutQuote] = useState<any>(null);
+  const [participantCheckoutMethod, setParticipantCheckoutMethod] = useState<"cash" | "card" | "upi">("upi");
+  const [participantCheckoutUseWallet, setParticipantCheckoutUseWallet] = useState(false);
+  const [participantCheckoutKey, setParticipantCheckoutKey] = useState("");
+  const [participantCheckoutLoading, setParticipantCheckoutLoading] = useState(false);
   const [updatingPlayerCount, setUpdatingPlayerCount] = useState(false);
   const [foodItemToRemove, setFoodItemToRemove] = useState<any>(null);
   const [removingFoodItem, setRemovingFoodItem] = useState(false);
@@ -104,10 +112,10 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [loadingSharedPlayCustomers, setLoadingSharedPlayCustomers] = useState(false);
   const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
   const [savingSharedPlay, setSavingSharedPlay] = useState(false);
-  const [hourPackCustomerDrafts, setHourPackCustomerDrafts] = useState<Record<string, string>>({});
-  const [hourPackCustomers, setHourPackCustomers] = useState<HourPackCustomerChoice[]>([]);
-  const [loadingHourPackCustomers, setLoadingHourPackCustomers] = useState(false);
-  const [linkingHourPackParticipant, setLinkingHourPackParticipant] = useState<string | null>(null);
+  const [sitInDialogOpen, setSitInDialogOpen] = useState(false);
+  const [sitInClockDraft, setSitInClockDraft] = useState("");
+  const [participantCustomerDrafts, setParticipantCustomerDrafts] = useState<Record<string, string>>({});
+  const [linkingParticipantCustomer, setLinkingParticipantCustomer] = useState<string | null>(null);
   const [sharedPlayNow, setSharedPlayNow] = useState(() => new Date());
 
   /**
@@ -158,9 +166,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       setHasLoaded(false);
       loadBookingDetails();
       loadMenuItems();
-      loadHourPackCustomers();
       loadSharedPlayCustomers();
       if (openFoodModalDirectly) {
+        setFoodParticipantId("");
         setAddFoodModalOpen(true);
       }
     }
@@ -171,6 +179,12 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     const timer = window.setInterval(() => setSharedPlayNow(new Date()), 10_000);
     return () => window.clearInterval(timer);
   }, [open, booking?.billed_on_actual_time, booking?.status]);
+
+  useEffect(() => {
+    if (!addFoodModalOpen || !booking?.shared_play_enabled || foodParticipantId) return;
+    const firstEligible = (booking.shared_play_participants || []).find((participant: any) => !participant.checked_out_at);
+    if (firstEligible) setFoodParticipantId(firstEligible.id);
+  }, [addFoodModalOpen, booking?.shared_play_enabled, booking?.shared_play_participants, foodParticipantId]);
 
   const loadBookingDetails = async () => {
     if (!bookingId) return;
@@ -202,18 +216,6 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
   };
 
-  const loadHourPackCustomers = async () => {
-    if (!bookingId) return;
-    setLoadingHourPackCustomers(true);
-    const result = await getHourPackCustomersForSharedPlay(bookingId);
-    setLoadingHourPackCustomers(false);
-    if (!result.success) {
-      toast.error("Could not load customer accounts", { description: result.error });
-      return;
-    }
-    setHourPackCustomers(result.customers);
-  };
-
   const loadSharedPlayCustomers = async () => {
     setLoadingSharedPlayCustomers(true);
     const result = await getCustomersForSharedPlay();
@@ -230,6 +232,10 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       toast.error("Please select at least one item");
       return;
     }
+    if (booking?.shared_play_enabled && !foodParticipantId) {
+      toast.error("Choose which participant ordered this food");
+      return;
+    }
 
     setActionLoading(true);
 
@@ -242,7 +248,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
           itemName: menuItem.name,
           itemCategory: menuItem.category,
           quantity,
-          unitPrice: Number(menuItem.price)
+          unitPrice: Number(menuItem.price),
+          participantId: booking?.shared_play_enabled ? foodParticipantId : null
         };
       });
 
@@ -265,11 +272,67 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setActionLoading(false);
   };
 
+  const openFoodPicker = () => {
+    const firstEligible = (booking?.shared_play_participants || []).find((participant: any) => !participant.checked_out_at);
+    setFoodParticipantId(booking?.shared_play_enabled ? firstEligible?.id || "" : "");
+    setAddFoodModalOpen(true);
+  };
+
+  const handleOpenParticipantCheckout = async (participantId: string) => {
+    if (!bookingId) return;
+    setParticipantCheckoutLoading(true);
+    const result = await getSharedPlayParticipantCheckoutQuote(bookingId, participantId);
+    setParticipantCheckoutLoading(false);
+    if (!result.success) {
+      toast.error("Could not calculate participant bill", { description: result.error });
+      return;
+    }
+    setParticipantCheckoutQuote(result.quote);
+    setParticipantCheckoutUseWallet(false);
+    setParticipantCheckoutMethod("upi");
+    setParticipantCheckoutKey(crypto.randomUUID());
+  };
+
+  const handleConfirmParticipantCheckout = async () => {
+    if (!bookingId || !participantCheckoutQuote) return;
+    setParticipantCheckoutLoading(true);
+    const result = await checkOutSharedPlayParticipant({
+      bookingId,
+      participantId: participantCheckoutQuote.participantId,
+      useWallet: participantCheckoutUseWallet,
+      paymentMethod: participantCheckoutMethod,
+      idempotencyKey: participantCheckoutKey
+    });
+    setParticipantCheckoutLoading(false);
+    if (!result.success) {
+      toast.error("Participant checkout failed", { description: result.error });
+      return;
+    }
+    const walletUsed = Number(result.payment?.wallet_amount || 0);
+    toast.success(`${participantCheckoutQuote.participantName} checked out`, {
+      description: `₹${Number(result.quote.totalAmount).toFixed(2)} collected${walletUsed > 0 ? ` (₹${walletUsed.toFixed(2)} from wallet)` : ""}.`
+    });
+    setParticipantCheckoutQuote(null);
+    const remainingParticipants = (booking.shared_play_participants || []).filter(
+      (participant: any) => participant.id !== result.quote.participantId && !participant.checked_out_at
+    );
+    if (remainingParticipants.length === 0) {
+      const closeResult = booking.billed_on_actual_time
+        ? await checkOutWalkInSession(bookingId)
+        : await checkOutBooking(bookingId);
+      if (!closeResult.success) {
+        toast.error("Participant paid, but booking could not be closed", { description: closeResult.error });
+      }
+    }
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+
   /** True for a walk-in whose bill comes from the clock, not from a chosen slot. */
   const isSession = booking?.billed_on_actual_time === true;
   const canEditBilling = !!booking &&
     booking.status !== "cancelled" &&
-    booking.payment_status !== "paid" &&
+    (booking.payment_status !== "paid" || (booking.shared_play_enabled && booking.status === "checked_in")) &&
     booking.payment_status !== "refunded";
 
   const handleSessionCheckIn = async () => {
@@ -297,6 +360,21 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
    */
   const handleSessionCheckOut = () => {
     if (!bookingId) return;
+    if (booking?.shared_play_enabled) {
+      const remainingParticipants = (booking.shared_play_participants || []).filter(
+        (participant: any) => !participant.checked_out_at
+      );
+      if (remainingParticipants.length > 1) {
+        toast.error("Check out each participant separately", {
+          description: "Use the Check out button beside each person to show and settle their individual bill."
+        });
+        return;
+      }
+      if (remainingParticipants.length === 1) {
+        void handleOpenParticipantCheckout(remainingParticipants[0].id);
+        return;
+      }
+    }
     setCheckOutOpen(true);
   };
 
@@ -333,6 +411,20 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
 
   const handleCheckOut = async () => {
     if (!bookingId || !booking) return;
+
+    if (booking.shared_play_enabled) {
+      const remainingParticipants = (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at);
+      if (remainingParticipants.length === 1) {
+        await handleOpenParticipantCheckout(remainingParticipants[0].id);
+        return;
+      }
+      if (remainingParticipants.length > 1) {
+        toast.error("Check out each participant separately", {
+          description: "Choose the participant who is leaving so only their played time and wallet are charged."
+        });
+        return;
+      }
+    }
 
     // Check if there are pending payments before checkout
     const balanceDue = Number(booking.balance_due || 0);
@@ -412,7 +504,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     rosterOverride?: string[],
     activeOverride?: string[],
     successMessage?: string,
-    rosterCustomers: Array<{ customerId: string; name: string }> = []
+    rosterCustomers: Array<{ customerId: string; name: string }> = [],
+    sitInClock: string | null = null
   ): Promise<boolean> => {
     if (!bookingId) return false;
     const roster = rosterOverride ?? sharedRoster;
@@ -423,7 +516,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       enabled,
       roster,
       active,
-      rosterCustomers
+      rosterCustomers,
+      sitInClock
     );
     setSavingSharedPlay(false);
     if (!result.success) {
@@ -437,22 +531,20 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     return true;
   };
 
-  const handleLinkHourPack = async (participantId: string, name: string) => {
+  const handleLinkParticipantCustomer = async (participantId: string, name: string) => {
     if (!bookingId) return;
-    setLinkingHourPackParticipant(participantId);
-    const result = await linkSharedPlayParticipantToHourPack(
+    setLinkingParticipantCustomer(participantId);
+    const result = await linkSharedPlayParticipantToCustomer(
       bookingId,
       participantId,
-      hourPackCustomerDrafts[participantId] || ""
+      participantCustomerDrafts[participantId] || ""
     );
-    setLinkingHourPackParticipant(null);
+    setLinkingParticipantCustomer(null);
     if (!result.success) {
-      toast.error("Could not link hour pack", { description: result.error });
+      toast.error("Could not link customer account", { description: result.error });
       return;
     }
-    toast.success(`${name} linked to ${result.customerName}'s hour pack`, {
-      description: `${formatPlayedDuration(Math.round(result.hoursRemaining * 60))} remaining`,
-    });
+    toast.success(`${name} linked to ${result.customerName}'s account`, { description: "Wallet credits are available at checkout." });
     await loadBookingDetails();
     onUpdate?.();
   };
@@ -541,7 +633,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     await handleAddSharedParticipant(createdCustomer);
   };
 
-  const handleSetSelectedParticipantsPlaying = async (sitIn: boolean) => {
+  const handleSetSelectedParticipantsPlaying = async (sitIn: boolean, sitInClock: string | null = null) => {
     if (savingSharedPlay) return;
     const selectedNames = sharedRoster.filter((name) =>
       selectedParticipants.some((selected) => selected.toLowerCase() === name.toLowerCase())
@@ -565,9 +657,28 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       true,
       sharedRoster,
       nextActive,
-      `${selectedNames.length} player${selectedNames.length === 1 ? "" : "s"} ${sitIn ? "sat in" : "marked sitting out"}`
+      `${selectedNames.length} player${selectedNames.length === 1 ? "" : "s"} ${sitIn ? "sat in" : "marked sitting out"}`,
+      [],
+      sitInClock
     );
-    if (saved) setSelectedParticipants([]);
+    if (saved) {
+      setSelectedParticipants([]);
+      if (sitIn) setSitInDialogOpen(false);
+    }
+  };
+
+  const openSitInDialog = () => {
+    setSitInClockDraft(arenaClockTime(sharedPlayNow).slice(0, 5));
+    setSitInDialogOpen(true);
+  };
+
+  const confirmSitIn = () => {
+    const started = resolveBackdatedStart(sitInClockDraft, sharedPlayNow);
+    if (!started.ok) {
+      toast.error("Check the sit-in time", { description: started.error });
+      return;
+    }
+    void handleSetSelectedParticipantsPlaying(true, sitInClockDraft);
   };
 
   const deviceSlot = booking?.booking_device_slots?.[0];
@@ -604,6 +715,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       sharedPlayEnd,
     );
   }, [booking?.shared_play_enabled, booking?.status, deviceSlot, sharedPlayPeriods, sharedPlayEnd]);
+  const isLiveActualSession =
+    booking?.billed_on_actual_time === true && booking.status === "checked_in";
   const sharedParticipantShares = useMemo(
     () => new Map((sharedPlayCalculation?.shares || []).map((share) => [share.participantId, share.amount])),
     [sharedPlayCalculation]
@@ -629,6 +742,21 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       extraPlayerCharge: Number(deviceSlot.extra_player_charge || 0)
     });
   }, [booking?.billed_on_actual_time, booking?.status, booking?.shared_play_enabled, booking?.checked_in_at, deviceSlot, sharedPlayNow]);
+
+  const liveSessionBalanceDue = (() => {
+    if (!isLiveActualSession) return Number(booking?.balance_due || 0);
+
+    const liveDeviceTotal = booking?.shared_play_enabled
+      ? (sharedPlayCalculation?.deviceCharges || 0) + (sharedPlayCalculation?.extraPlayersTotal || 0)
+      : standardLivePricing?.deviceSubtotal || 0;
+    const discounts =
+      Number(booking?.subscription_discount || 0) +
+      Number(booking?.promo_discount || 0) +
+      Number(booking?.happy_hour_discount || 0) +
+      Number(booking?.hour_pass_discount || 0);
+    const liveTotal = liveDeviceTotal + Number(booking?.food_subtotal || 0) - discounts;
+    return Math.max(0, Number((liveTotal - Number(booking?.amount_paid || 0)).toFixed(2)));
+  })();
 
   // The detail panel itself, wrapped either in a Dialog or in plain page markup
   // further down. Kept as one expression so both modes render exactly the same
@@ -921,7 +1049,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                               type="button"
                               size="sm"
                               disabled={savingSharedPlay || selectedParticipants.length === 0}
-                              onClick={() => void handleSetSelectedParticipantsPlaying(true)}
+                              onClick={openSitInDialog}
                               className="bg-emerald-600 text-white hover:bg-emerald-500"
                             >
                               <Play className="mr-1 h-3 w-3" /> Sit in
@@ -945,6 +1073,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       {activePlayers.length === 0 && booking.status === "checked_in" && (
                         <p className="text-xs font-semibold text-amber-300">Everyone is sitting out. Player timers are paused until someone sits in.</p>
                       )}
+                      {booking.status === "checked_in" && (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1 && (
+                        <p className="text-xs font-semibold text-secondary-content">Check out each participant separately. Each person pays only their own play and assigned food, using their own wallet if selected.</p>
+                      )}
                       <div className="space-y-2">
                         {sharedRoster.map((name) => {
                           const participant: SharedPlayParticipant | undefined = booking.shared_play_participants?.find(
@@ -962,7 +1093,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                           return (
                             <div key={name} className="flex items-center justify-between gap-3 rounded-md border border-[#27272a] bg-[var(--surface)] px-3 py-2">
                               <div className="flex min-w-0 items-center gap-3">
-                                {booking.status === "checked_in" && (
+                                {booking.status === "checked_in" && !participant?.checked_out_at && (
                                   <input
                                     type="checkbox"
                                     aria-label={`Select ${name}`}
@@ -1000,38 +1131,55 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                                         : 0
                                   ).toFixed(2)}
                                 </span>
-                                {booking.status === "checked_in" && (
-                                  <span className={isActive
+                              {booking.status === "checked_in" && (
+                                <span className={participant?.checked_out_at
+                                  ? "min-w-16 rounded border border-amber-500/40 px-2 py-1 text-center text-xs font-bold text-amber-300"
+                                  : isActive
                                     ? "min-w-16 rounded border border-emerald-500/40 px-2 py-1 text-center text-xs font-bold text-emerald-300"
                                     : "min-w-16 rounded border border-zinc-700 px-2 py-1 text-center text-xs font-bold text-secondary-content"}>
-                                    {isActive ? "Playing" : "Sit out"}
-                                  </span>
-                                )}
+                                  {participant?.checked_out_at ? "Checked out" : isActive ? "Playing" : "Sit out"}
+                                </span>
+                              )}
+                              {booking.status === "checked_in" && participant?.id && !participant?.checked_out_at && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={participantCheckoutLoading}
+                                  onClick={() => void handleOpenParticipantCheckout(participant.id)}
+                                  className="h-8 shrink-0 border-amber-500/50 px-2 text-xs text-amber-300 hover:bg-amber-500/10"
+                                >
+                                  {participantCheckoutLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="mr-1 h-3 w-3" />}
+                                  Check out
+                                </Button>
+                              )}
                               </div>
-                              {booking.status === "checked_in" && !participant?.customer_id && participant?.id && (
+                              {booking.status === "checked_in" && !participant?.customer_id && participant?.id && !participant?.checked_out_at && (
                                 <div className="flex w-full flex-wrap items-center gap-2 pl-7 pt-1">
                                   <Select
-                                    value={hourPackCustomerDrafts[participant.id] || ""}
-                                    onValueChange={(customerId) => setHourPackCustomerDrafts((current) => ({
+                                    value={participantCustomerDrafts[participant.id] || ""}
+                                    onValueChange={(customerId) => setParticipantCustomerDrafts((current) => ({
                                       ...current,
                                       [participant.id]: customerId,
                                     }))}
                                   >
                                     <SelectTrigger
-                                      aria-label={`Select hour-pack customer for ${name}`}
-                                      disabled={loadingHourPackCustomers || hourPackCustomers.length === 0}
+                                      aria-label={`Select customer account for ${name}`}
+                                      disabled={loadingSharedPlayCustomers || sharedPlayCustomers.length === 0}
                                       className="h-8 min-w-0 flex-1 border-[#3f3f46] bg-[var(--background)] text-xs text-white"
                                     >
                                       <SelectValue placeholder={
-                                        loadingHourPackCustomers
+                                        loadingSharedPlayCustomers
                                           ? "Loading customer accounts..."
-                                          : "Select customer with an active hour pack"
+                                          : "Select customer account for wallet"
                                       } />
                                     </SelectTrigger>
                                     <SelectContent className="border-[#3f3f46] bg-[var(--surface)] text-white">
-                                      {hourPackCustomers.map((customer) => (
+                                      {sharedPlayCustomers.filter((customer) => !booking.shared_play_participants?.some(
+                                        (row: SharedPlayParticipant) => row.id !== participant.id && row.customer_id === customer.id
+                                      )).map((customer) => (
                                         <SelectItem key={customer.id} value={customer.id}>
-                                          {customer.name} · {customer.phone} · {customer.pack_name} · {customer.device_type_name || "Legacy universal"} · {Math.floor(customer.remaining_minutes / 60)}h {customer.remaining_minutes % 60}m
+                                          {customer.name} · {customer.phone}
                                         </SelectItem>
                                       ))}
                                     </SelectContent>
@@ -1040,14 +1188,14 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                                     type="button"
                                     size="sm"
                                     variant="outline"
-                                    disabled={loadingHourPackCustomers || linkingHourPackParticipant === participant.id || !hourPackCustomerDrafts[participant.id]}
-                                    onClick={() => void handleLinkHourPack(participant.id, name)}
+                                    disabled={loadingSharedPlayCustomers || linkingParticipantCustomer === participant.id || !participantCustomerDrafts[participant.id]}
+                                    onClick={() => void handleLinkParticipantCustomer(participant.id, name)}
                                     className="h-8 shrink-0 border-primary/40 px-2 text-xs text-primary"
                                   >
-                                    {linkingHourPackParticipant === participant.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Link pack"}
+                                    {linkingParticipantCustomer === participant.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Link account"}
                                   </Button>
-                                  {!loadingHourPackCustomers && hourPackCustomers.length === 0 && (
-                                    <p className="w-full text-[11px] text-secondary-content">No customers have an active hour pack with time remaining.</p>
+                                  {!loadingSharedPlayCustomers && sharedPlayCustomers.length === 0 && (
+                                    <p className="w-full text-[11px] text-secondary-content">No customer accounts are available.</p>
                                   )}
                                 </div>
                               )}
@@ -1286,7 +1434,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   </h3>
                   {canEditBilling && (
                     <Button
-                      onClick={() => setAddFoodModalOpen(true)}
+                      onClick={openFoodPicker}
                       size="sm"
                       className="bg-primary hover:bg-primary-hover text-black font-black uppercase text-xs h-9 px-4"
                     >
@@ -1302,6 +1450,11 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                         <div className="flex-1">
                           <p className="text-lg font-bold text-white mb-1">{item.item_name}</p>
                           <p className="text-sm-enhanced text-secondary-content">Qty: <span className="font-bold">{item.quantity}</span> × ₹{Number(item.unit_price).toLocaleString('en-IN')}</p>
+                          {item.participant_id && booking.shared_play_enabled && (
+                            <p className="mt-1 text-xs font-semibold text-primary">
+                              For {booking.shared_play_participants?.find((participant: any) => participant.id === item.participant_id)?.name || "participant"}
+                            </p>
+                          )}
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="text-right">
@@ -1553,14 +1706,21 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                         )}
 
                         {/* Balance Due Warning */}
-                        {Number(booking.balance_due || 0) > 0 && booking.payment_status !== 'paid' && (
+                        {liveSessionBalanceDue > 0 && (isLiveActualSession || booking.payment_status !== 'paid') && (
                           <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-2">
                             <div className="flex items-center justify-between">
-                              <span className="text-amber-400 font-bold text-sm uppercase">Balance Due:</span>
+                              <span className="text-amber-400 font-bold text-sm uppercase">
+                                {isLiveActualSession ? "Total Balance Due (Estimate):" : "Balance Due:"}
+                              </span>
                               <span className="text-amber-300 font-black text-lg">
-                                ₹{Number(booking.balance_due).toLocaleString('en-IN')}
+                                ₹{liveSessionBalanceDue.toLocaleString('en-IN')}
                               </span>
                             </div>
+                            {isLiveActualSession && (
+                              <p className="border-t border-amber-500/20 pt-2 text-xs text-amber-200/80">
+                                Includes current play charges and food, less payments already recorded. The estimate updates while the session is active.
+                              </p>
+                            )}
                             {booking.payment_status === 'partial' && booking.unpaid_items && booking.unpaid_items.length > 0 && (
                               <div className="border-t border-amber-500/20 pt-2 space-y-1">
                                 <p className="text-xs text-amber-300/80 font-bold uppercase">
@@ -1712,14 +1872,18 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   </Button>
                 )}
 
-                {isSession && booking.status === "checked_in" && (
+                {isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length <= 1) && (
                   <Button
                     onClick={handleSessionCheckOut}
                     disabled={actionLoading}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-sm h-12 px-8 flex items-center gap-2"
                   >
                     {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
-                    Check Out &amp; Calculate Bill
+                    {booking.shared_play_enabled
+                      ? (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1
+                        ? "Check Out Participants Individually"
+                        : "Check Out & Calculate Individual Bill"
+                      : "Check Out & Calculate Bill"}
                   </Button>
                 )}
 
@@ -1734,10 +1898,10 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   </Button>
                 )}
 
-                {!isSession && booking.status === "checked_in" && (
+                {!isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length <= 1) && (
                   <Button
                     onClick={handleCheckOut}
-                    disabled={actionLoading || (Number(booking.balance_due || 0) > 0 && booking.payment_status !== 'paid')}
+                    disabled={actionLoading || (!booking.shared_play_enabled && Number(booking.balance_due || 0) > 0 && booking.payment_status !== 'paid')}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-sm h-12 px-8 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
@@ -1822,6 +1986,26 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
               Add Food & Beverages
             </DialogTitle>
           </DialogHeader>
+
+          {booking?.shared_play_enabled && (
+            <div className="px-6 pb-4">
+              <Label htmlFor="shared-food-participant" className="mb-2 block text-xs font-bold uppercase text-secondary-content">
+                Assign food to participant
+              </Label>
+              <select
+                id="shared-food-participant"
+                value={foodParticipantId}
+                onChange={(event) => setFoodParticipantId(event.target.value)}
+                className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white"
+              >
+                <option value="">Select participant</option>
+                {(booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).map((participant: any) => (
+                  <option key={participant.id} value={participant.id}>{participant.name}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-secondary-content">The food cost will be added to this participant’s checkout.</p>
+            </div>
+          )}
 
           {/* Search and Filter Controls */}
           <div className="space-y-3 px-6 pb-4 border-b border-[#27272a] flex-shrink-0">
@@ -1958,6 +2142,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
               onClick={() => {
                 setAddFoodModalOpen(false);
                 setSelectedFoodItems({});
+                setFoodParticipantId("");
                 setFoodSearchQuery("");
                 setSelectedCategory("All");
                 if (openFoodModalDirectly) {
@@ -1970,7 +2155,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
             </Button>
             <Button
               onClick={handleAddFoodItems}
-              disabled={actionLoading || Object.values(selectedFoodItems).every((qty) => qty === 0)}
+              disabled={actionLoading || Object.values(selectedFoodItems).every((qty) => qty === 0) || (booking?.shared_play_enabled && !foodParticipantId)}
               className="bg-primary hover:bg-primary-hover text-black font-black uppercase"
             >
               {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
@@ -2034,6 +2219,107 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         }
         onConfirm={confirmSessionCheckOut}
       />
+
+      <Dialog open={sitInDialogOpen} onOpenChange={setSitInDialogOpen}>
+        <DialogContent className="max-w-sm border-[#27272a] bg-[var(--surface)] text-white">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase">Sit-in time</DialogTitle>
+            <DialogDescription className="text-secondary-content">
+              Set when the selected participant{selectedParticipants.length === 1 ? " sat in" : "s sat in"}. The current time is filled in; adjust it if you are recording an earlier start.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-xs font-bold uppercase text-secondary-content">Time</Label>
+            <TimeOfDayField
+              name="shared-play-sit-in-time"
+              label="Sit-in time"
+              defaultValue={sitInClockDraft}
+              onChange={setSitInClockDraft}
+            />
+            <p className="text-xs text-secondary-content">You can enter a time up to {MAX_BACKDATED_START_HOURS} hours ago.</p>
+          </div>
+          <DialogFooter className="flex-row gap-2">
+            <Button type="button" variant="ghost" onClick={() => setSitInDialogOpen(false)} disabled={savingSharedPlay}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={confirmSitIn} disabled={savingSharedPlay || !sitInClockDraft} className="bg-emerald-600 text-white hover:bg-emerald-500">
+              {savingSharedPlay ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
+              Start timer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!participantCheckoutQuote} onOpenChange={(open) => !open && setParticipantCheckoutQuote(null)}>
+        <DialogContent className="max-w-md border-[#27272a] bg-[var(--surface)] text-white">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase">Check out {participantCheckoutQuote?.participantName}</DialogTitle>
+          </DialogHeader>
+          {participantCheckoutQuote && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-[#27272a] bg-[var(--background)] p-4 text-sm">
+                <div className="flex justify-between"><span className="text-secondary-content">Play charge ({participantCheckoutQuote.playedMinutes} min)</span><span>₹{Number(participantCheckoutQuote.deviceAmount).toFixed(2)}</span></div>
+                <div className="mt-2 flex justify-between"><span className="text-secondary-content">Assigned food</span><span>₹{Number(participantCheckoutQuote.foodAmount).toFixed(2)}</span></div>
+                {participantCheckoutQuote.foodItems.map((item: any) => (
+                  <p key={item.id} className="mt-1 text-xs text-secondary-content">{item.quantity} × {item.item_name}</p>
+                ))}
+                <div className="mt-3 flex justify-between border-t border-[#27272a] pt-3 font-black">
+                  <span>Total due</span><span className="text-primary">₹{Number(participantCheckoutQuote.totalAmount).toFixed(2)}</span>
+                </div>
+              </div>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[#27272a] p-3">
+                <input
+                  type="checkbox"
+                  checked={participantCheckoutUseWallet}
+                  disabled={!participantCheckoutQuote.customerId || participantCheckoutQuote.walletBalance <= 0}
+                  onChange={(event) => setParticipantCheckoutUseWallet(event.target.checked)}
+                  className="mt-1 h-4 w-4 accent-emerald-500"
+                />
+                <span>
+                  <span className="block text-sm font-bold">Use wallet credits</span>
+                  <span className="text-xs text-secondary-content">
+                    {participantCheckoutQuote.customerId
+                      ? `Available ₹${Number(participantCheckoutQuote.walletBalance).toFixed(2)}`
+                      : "Link this participant to a customer account to use wallet credits."}
+                  </span>
+                </span>
+              </label>
+
+              {Number(participantCheckoutQuote.totalAmount) - (participantCheckoutUseWallet
+                ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
+                : 0) > 0 && (
+                <div>
+                  <Label htmlFor="participant-payment-method" className="mb-2 block text-xs font-bold uppercase text-secondary-content">Collect remaining by</Label>
+                  <select
+                    id="participant-payment-method"
+                    value={participantCheckoutMethod}
+                    onChange={(event) => setParticipantCheckoutMethod(event.target.value as "cash" | "card" | "upi")}
+                    className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white"
+                  >
+                    <option value="upi">UPI</option>
+                    <option value="cash">Cash</option>
+                    <option value="card">Card</option>
+                  </select>
+                  <p className="mt-2 text-xs text-secondary-content">
+                    Remaining: ₹{(Number(participantCheckoutQuote.totalAmount) - (participantCheckoutUseWallet
+                      ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
+                      : 0)).toFixed(2)}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" disabled={participantCheckoutLoading} onClick={() => setParticipantCheckoutQuote(null)}>Cancel</Button>
+                <Button disabled={participantCheckoutLoading} onClick={() => void handleConfirmParticipantCheckout()} className="bg-primary font-black text-black hover:bg-primary-hover">
+                  {participantCheckoutLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogOut className="mr-2 h-4 w-4" />}
+                  Confirm checkout
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

@@ -23,7 +23,7 @@ interface AddModalProps {
 
 export function AddSubscriptionModal({ deviceTypes, onFormSuccess, open, setOpen }: AddModalProps) {
   const [isActive, setIsActive] = useState(true)
-  const [planType, setPlanType] = useState<'membership' | 'hour_pack'>('membership')
+  const planType: string = 'membership'
   const [isPending, startTransition] = useTransition()
   const { formRef, isComplete, recheck } = useRequiredFields()
 
@@ -74,20 +74,7 @@ export function AddSubscriptionModal({ deviceTypes, onFormSuccess, open, setOpen
 
           {/* Form Body */}
           <div className="flex-1 p-8 space-y-6 bg-[var(--background)] overflow-y-auto">
-            <div className="space-y-2">
-              <label className="text-xs font-black tracking-widest uppercase text-zinc-300">
-                Plan Type
-              </label>
-              <select
-                name="plan_type"
-                value={planType}
-                onChange={event => setPlanType(event.target.value as 'membership' | 'hour_pack')}
-                className="h-10 w-full rounded-md border border-[#27272a] bg-[var(--surface)] px-3 text-sm text-white"
-              >
-                <option value="membership">Discount membership</option>
-                <option value="hour_pack">Personal hour pack</option>
-              </select>
-            </div>
+            <input type="hidden" name="plan_type" value="membership" />
 
             <div className="space-y-2">
               <label className="text-xs font-black tracking-widest uppercase text-zinc-300">

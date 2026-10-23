@@ -14,6 +14,7 @@ export default function AdminCustomersDashboard() {
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [canAdjustWallet, setCanAdjustWallet] = useState(false);
 
   useEffect(() => {
     loadCustomerDatabase();
@@ -23,6 +24,7 @@ export default function AdminCustomersDashboard() {
     setLoading(true);
     setError(null);
     const res = await getLiveCustomerRegistryAction();
+    setCanAdjustWallet(res.canAdjustWallet === true);
     if (res.error) {
       toast.error(res.error);
       setError(res.error);
@@ -33,15 +35,15 @@ export default function AdminCustomersDashboard() {
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto space-y-6 text-white p-2 sm:p-6 animate-in fade-in duration-300">
+    <div className="mx-auto w-full max-w-7xl space-y-6 p-3 text-white animate-in fade-in duration-300 sm:p-6">
 
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-zinc-900 pb-5">
         <div>
           <h1 className="text-2xl font-black uppercase tracking-tight flex items-center gap-2">
             <Users className="h-6 w-6 text-primary" /> Customer Directory
           </h1>
-          <p className="text-description font-medium mt-0.5">
-            Monitor registered players, search demographics info, and verify subscription tracks.
+          <p className="mt-1 max-w-2xl text-sm text-zinc-500">
+            Search customer profiles, manage memberships, and add wallet credit.
           </p>
         </div>
         <AddCustomerModal onCreated={loadCustomerDatabase} />
@@ -64,7 +66,11 @@ export default function AdminCustomersDashboard() {
           <BreakpointLoader size="md" />
         </div>
       ) : (
-        <CustomerTable customers={customers} onSubscriptionAssigned={loadCustomerDatabase} />
+        <CustomerTable
+          customers={customers}
+          onSubscriptionAssigned={loadCustomerDatabase}
+          canAdjustWallet={canAdjustWallet}
+        />
       )}
     </div>
   );

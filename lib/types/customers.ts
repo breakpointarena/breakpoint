@@ -8,6 +8,7 @@ export interface CustomerRow {
   subscription_name: string | null;
   subscription_status: "active" | "expired" | null;
   expiry_date: string | null;
+  wallet_balance: number;
   hour_packs: Array<{
     id: string;
     name: string;

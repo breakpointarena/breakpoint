@@ -10,6 +10,7 @@ export default function Footer() {
   const footerLinks = [
     { label: 'HOME', path: '/' },
     { label: 'SUBSCRIPTIONS', path: '/subscription' },
+    { label: 'Wallet', path: '/wallet' },
     { label: 'Retrieve Booking', path: '/retrieve' },
     { label: 'Food Menu', path: '/food' },
     { label: 'Book Slot', path: '/booking' },

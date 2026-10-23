@@ -13,6 +13,7 @@ const navLinks = [
   { label: "Home", path: "/" },
   { label: "My Subscription", path: "/my-subscription" },
   { label: "Browse Plans", path: "/subscription" },
+  { label: "Wallet", path: "/wallet" },
   { label: "My Bookings", path: "/retrieve" },
   { label: "FOOD MENU", path: "/food" }
 ];

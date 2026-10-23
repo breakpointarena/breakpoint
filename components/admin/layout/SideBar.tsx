@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Calendar, Monitor, Utensils, Tag,
   PartyPopper, BarChart2, LogOut, ChevronLeft,
-  User2Icon, Crown, Clock, Loader2
+  User2Icon, Crown, Clock, Loader2, WalletCards
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -23,6 +23,7 @@ const navItems = [
   { name: "Food", href: "/admin/food", icon: Utensils },
   { name: "Customers", href: "/admin/customers", icon: User2Icon },
   { name: "Subscription", href: "/admin/subscription", icon: Crown },
+  { name: "Wallet Credits", href: "/admin/wallet-credits", icon: WalletCards },
   { name: "Promo Codes", href: "/admin/promo-code", icon: Tag },
   { name: "Happy Hours", href: "/admin/happy-hours", icon: PartyPopper },
   { name: "Reports", href: "/admin/reports", icon: BarChart2 },
@@ -49,6 +50,9 @@ export function Sidebar({ isOpen, onToggle, onClose }: SidebarProps) {
   const filteredNavItems = navItems.filter(item => {
     // Hide Reports if user is staff
     if (item.href === "/admin/reports" && userRole === "staff") {
+      return false;
+    }
+    if (item.href === "/admin/wallet-credits" && userRole === "staff") {
       return false;
     }
     return true;

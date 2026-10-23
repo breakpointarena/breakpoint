@@ -3,7 +3,7 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { formatDbTime } from "@/lib/utils/timeSlots";
 import { requireStaff } from "@/lib/auth/require-admin";
-import { arenaToday, arenaDateOffset, arenaClockTime } from "@/lib/utils/dates";
+import { arenaToday, arenaDateOffset, arenaClockTime, arenaDate } from "@/lib/utils/dates";
 import {
   MAX_LIVE_SESSION_HOURS,
   effectiveDeviceStatus,
@@ -72,6 +72,7 @@ export async function getDashboardData() {
       { data: todaySlots, error: slotsError },
       { data: touchedInWindow, error: paymentsError },
       { data: settledInWindow, error: settledError },
+      { data: walletTopUps, error: walletTopUpsError },
       { data: devices, error: devicesError },
       occupancy,
       { data: recentBookings, error: recentError },
@@ -138,6 +139,7 @@ export async function getDashboardData() {
         .select(`
           id,
           amount_paid,
+          wallet_amount,
           payment_status,
           created_at,
           updated_at,
@@ -158,6 +160,7 @@ export async function getDashboardData() {
         .select(`
           id,
           amount_paid,
+          wallet_amount,
           payment_status,
           created_at,
           updated_at,
@@ -166,6 +169,16 @@ export async function getDashboardData() {
         .in("payment_status", ["paid", "partial"])
         .neq("status", "cancelled")
         .gte("payment_groups.paid_at", revenueWindow),
+
+      // Only cash paid for wallet top-ups is a collection. Bonus credits and
+      // later wallet redemptions are not new money received.
+      supabaseAdmin
+        .from("wallet_transactions")
+        .select("paid_amount, created_at")
+        .eq("kind", "top_up")
+        .eq("direction", "credit")
+        .gt("paid_amount", 0)
+        .gte("created_at", revenueWindow),
 
       // Device availability. Every device, not just the ones stored as
       // "available" - a station in use still has that stored value, so the
@@ -243,6 +256,7 @@ export async function getDashboardData() {
     // One pass over the paid set for both windows; `paid_at` falls back the same
     // way it always has, so a booking with no payment group still counts.
     let todaysRevenue = 0;
+    let todaysBookingSettlements = 0;
     let thisWeekRevenue = 0;
 
     /**
@@ -255,11 +269,26 @@ export async function getDashboardData() {
         const paidAt = effectivePaidAt(booking);
         if (!paidAt) continue;
 
-        const day = paidAt.split("T")[0];
-        const amount = Number(booking.amount_paid || 0);
+        const day = arenaDate(new Date(paidAt));
+        // Wallet redemptions settle a booking but were recognized when the
+        // wallet was funded, so they are not new revenue on the booking date.
+        const amount = Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0));
 
-        if (day === today) todaysRevenue += amount;
+        if (day === today) {
+          todaysRevenue += amount;
+          // The alternate view counts the wallet credits redeemed on bookings,
+          // but leaves top-ups out so the two collection measures stay distinct.
+          todaysBookingSettlements += Number(booking.amount_paid || 0);
+        }
         if (day >= sevenDaysAgo) thisWeekRevenue += amount;
+      }
+      if (!walletTopUpsError) {
+        for (const topUp of (walletTopUps || []) as any[]) {
+          const day = arenaDate(new Date(topUp.created_at));
+          const amount = Number(topUp.paid_amount || 0);
+          if (day === today) todaysRevenue += amount;
+          if (day >= sevenDaysAgo) thisWeekRevenue += amount;
+        }
       }
     }
 
@@ -304,6 +333,7 @@ export async function getDashboardData() {
       stats: {
         activeSessions,
         todaysRevenue,
+        todaysBookingSettlements,
         todaysBookings: bookedToday.length,
         upcomingBookings: upcomingBookings.length,
         availableDevices,
@@ -421,6 +451,7 @@ export async function getTodaysRevenueDetails() {
         customer_phone,
         total_amount,
         amount_paid,
+        wallet_amount,
         device_subtotal,
         food_subtotal,
         subscription_discount,
@@ -481,13 +512,36 @@ export async function getTodaysRevenueDetails() {
     const filteredBookings = (data || []).filter((booking: any) => {
       const paidAt = effectivePaidAt(booking);
       if (!paidAt) return false;
-      return paidAt.split('T')[0] === today;
+      return arenaDate(new Date(paidAt)) === today;
     });
 
-    return { success: true, bookings: filteredBookings };
+    const { data: walletSales, error: walletSalesError } = await supabaseAdmin
+      .from("wallet_transactions")
+      .select(`
+        id,
+        amount,
+        paid_amount,
+        bonus_amount,
+        description,
+        source,
+        sale_payment_method,
+        created_at,
+        customer:customers(name, phone)
+      `)
+      .eq("kind", "top_up")
+      .eq("direction", "credit")
+      .gt("paid_amount", 0)
+      .gte("created_at", revenueWindow);
+    if (walletSalesError) throw walletSalesError;
+
+    const todaysWalletSales = (walletSales || []).filter(
+      (sale: any) => arenaDate(new Date(sale.created_at)) === today
+    );
+
+    return { success: true, bookings: filteredBookings, walletSales: todaysWalletSales };
   } catch (err: any) {
     console.error("Get today's revenue details error:", err);
-    return { success: false, error: err.message, bookings: [] };
+    return { success: false, error: err.message, bookings: [], walletSales: [] };
   }
 }
 
