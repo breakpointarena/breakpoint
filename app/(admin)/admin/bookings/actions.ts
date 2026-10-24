@@ -863,13 +863,19 @@ export async function setSharedPlayParticipants(
   activeNames: string[],
   rosterCustomers: Array<{ customerId: string; name: string }> = [],
   /** Optional arena-clock time for a participant who sat in earlier this shift. */
-  sitInClock: string | null = null
+  sitInClock: string | null = null,
+  /** Optional arena-clock time for a participant who sat out earlier this shift. */
+  sitOutClock: string | null = null
 ) {
   await requireStaff();
   try {
     if (sitInClock) {
       const started = resolveBackdatedStart(sitInClock);
       if (!started.ok) return { success: false, error: started.error };
+    }
+    if (sitOutClock) {
+      const ended = resolveBackdatedStart(sitOutClock);
+      if (!ended.ok) return { success: false, error: ended.error };
     }
 
     const normalize = (names: string[]) => [...new Map(
@@ -924,7 +930,8 @@ export async function setSharedPlayParticipants(
       p_enabled: enabled,
       p_roster_names: roster,
       p_active_names: active,
-      p_sit_in_clock: sitInClock
+      p_sit_in_clock: sitInClock,
+      p_sit_out_clock: sitOutClock
     });
     if (error) throw error;
 
@@ -2982,6 +2989,62 @@ export async function checkInWalkInSession(
   } catch (err: any) {
     console.error("Check-in walk-in session error:", err);
     return { success: false, error: err.message };
+  }
+}
+
+/** Correct the device on an active walk-in without ending its session. */
+export async function changeCheckedInWalkInDevice(bookingId: string, deviceTypeId: string) {
+  await requireStaff();
+
+  try {
+    const { data, error } = await supabaseAdmin.rpc("change_checked_in_walkin_device_v1", {
+      p_booking_id: bookingId,
+      p_device_type_id: deviceTypeId,
+    });
+    if (error) throw error;
+    const result = Array.isArray(data) ? data[0] : data;
+    if (!result) return { success: false, error: "Could not move the session to that device." };
+
+    return {
+      success: true,
+      stationNumber: result.station_number,
+      deviceTypeName: result.device_type_name,
+    };
+  } catch (err: any) {
+    console.error("Change checked-in walk-in device error:", err);
+    const message = String(err?.message || "Could not change the session device.");
+    return {
+      success: false,
+      error: message.includes("No station of this device type is free")
+        ? "No station of that device type is free for this session. The current device was left unchanged."
+        : message,
+    };
+  }
+}
+
+/** Correct the recorded start time on an active walk-in session. */
+export async function changeCheckedInWalkInStartTime(bookingId: string, startedClock: string) {
+  await requireStaff();
+
+  const resolved = resolveBackdatedStart(startedClock);
+  if (!resolved.ok) return { success: false, error: resolved.error };
+
+  try {
+    const { data, error } = await supabaseAdmin.rpc("change_checked_in_walkin_start_v1", {
+      p_booking_id: bookingId,
+      p_started_clock: resolved.start.clock,
+    });
+    if (error) throw error;
+    const result = Array.isArray(data) ? data[0] : data;
+    if (!result) return { success: false, error: "Could not update the session start time." };
+
+    return { success: true, checkedInAt: result.checked_in_at };
+  } catch (err: any) {
+    console.error("Change checked-in walk-in start time error:", err);
+    return {
+      success: false,
+      error: String(err?.message || "Could not update the session start time."),
+    };
   }
 }
 

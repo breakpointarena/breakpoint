@@ -32,7 +32,6 @@ import { formatDbTime, formatDbTimeRange } from "@/lib/utils/timeSlots";
 import { BookingTimingCell } from "@/components/admin/bookings/SessionTimeline";
 import { TimeOfDayField } from "@/components/ui/time-of-day-field";
 import {
-  PROVISIONAL_SESSION_HOURS,
   formatPlayedDuration,
   resolvePlannedSession
 } from "@/lib/bookings/walkInSession";
@@ -1976,8 +1975,7 @@ export default function AdminBookingsPage() {
 
                 {!checkInPlannedEnd ? (
                   <p className="text-[11px] leading-relaxed text-muted-content">
-                    Leave blank if they have not said. The station is then held for the
-                    usual {PROVISIONAL_SESSION_HOURS} hours until they check out.
+                    With no planned finish, the station is held for 1 hour plus a 30-minute buffer (90 minutes total). Add a planned finish to hold it longer.
                   </p>
                 ) : checkInPlannedEndCheck?.ok ? (
                   <p className="text-[11px] font-bold text-emerald-400">

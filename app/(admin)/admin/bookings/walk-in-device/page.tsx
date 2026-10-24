@@ -57,7 +57,6 @@ import {
   BOOKING_WINDOW_ERROR
 } from "@/lib/utils/dates";
 import {
-  PROVISIONAL_SESSION_HOURS,
   formatPlayedDuration,
   resolveBackdatedStart,
   resolvePlannedSession
@@ -149,7 +148,7 @@ export default function WalkInBookingPage() {
   /**
    * When the customer says they are leaving, if they have said.
    *
-   * Empty holds the station for `PROVISIONAL_SESSION_HOURS`, which is a
+   * Empty holds the station for 90 minutes, which is a
    * placeholder nobody chose. A time here replaces it, so the slot row and the
    * floor plan describe the window somebody actually expects.
    *
@@ -1524,8 +1523,8 @@ export default function WalkInBookingPage() {
 
                   {!plannedEnd ? (
                     <p className="text-[11px] leading-relaxed text-muted-content">
-                      When the customer says they are leaving, if they have said. The station is
-                      held that long instead of the {PROVISIONAL_SESSION_HOURS}-hour default. It
+                      When the customer says they are leaving, the station is held until then
+                      instead of the 90-minute default (1 hour plus a 30-minute buffer). It
                       does not fix the price — the bill is still worked out at checkout.
                     </p>
                   ) : plannedSessionCheck?.ok ? (
@@ -1591,8 +1590,8 @@ export default function WalkInBookingPage() {
                       </li>
                     ) : (
                       <li>
-                        With no planned end the station is held for{" "}
-                        {PROVISIONAL_SESSION_HOURS} hours, which is a placeholder rather than
+                        With no planned end the station is held for 90 minutes from now
+                        (1 hour plus a 30-minute buffer), which is a placeholder rather than
                         anything the customer said.
                       </li>
                     )}

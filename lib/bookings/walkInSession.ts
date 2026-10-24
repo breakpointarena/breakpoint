@@ -31,25 +31,22 @@ import { formatDbTime } from '@/lib/utils/timeSlots'
  * The block a walk-in claims on its station at check-in, before anybody knows
  * how long they will stay.
  *
- * Two hours, not five. Five was generous enough that a customer who played
- * forty minutes and left kept their station off the board for the rest of the
- * evening unless somebody remembered to check them out - and on a floor of
- * eight devices that is an eighth of the arena, sold to nobody.
- *
- * Shortening it is safe because it is not what protects a live session. A
- * customer still playing at the two hour mark keeps their station: occupancy
- * holds anything checked in and not checked out for `MAX_LIVE_SESSION_HOURS`,
- * whatever this row happens to say. That is what 20260826130000 exists for, and
- * it is the reason this number can be sized for the common session rather than
- * the longest imaginable one.
+ * One hour is the default booking hold. Staff can enter a longer planned finish
+ * when the customer expects to stay longer.
  *
  * A customer who says how long they want is better served than either: naming a
  * finish holds the station for exactly that, and frees the hours after it.
  */
-export const PROVISIONAL_SESSION_HOURS = 2
+/** One hour of play time plus the requested 30-minute station buffer. */
+export const PROVISIONAL_SESSION_HOURS = 1.5
+
+/** Default timeline and availability hold: one hour plus a 30-minute buffer. */
+export const WALKIN_SLOT_HOLD_HOURS = 1.5
 
 /**
- * How long after check-in a session is still believed to be live.
+ * How long after check-in a session is treated as recent by stale-session
+ * reporting. The station hold is separately controlled by
+ * `WALKIN_SLOT_HOLD_HOURS`.
  *
  * `checked_in` alone is not enough. Production currently holds eighteen bookings
  * left in that state, the oldest checked in fifty-one days ago - a checkout that
@@ -57,9 +54,8 @@ export const PROVISIONAL_SESSION_HOURS = 2
  * the station to "occupied" permanently and counts a phantom active session
  * forever.
  *
- * Twice the provisional block a walk-in claims at check-in: long enough that no
- * real session is ever cut short by it, short enough that a forgotten checkout
- * frees the station by the next day rather than never.
+ * Kept longer than the default station hold so staff can spot sessions left
+ * open after their initial booking window.
  */
 export const MAX_LIVE_SESSION_HOURS = 12
 
@@ -443,9 +439,8 @@ export interface SessionClaimWindow {
  *
  * This is the same arithmetic `checkin_walkin_session` does in SQL, kept here so
  * the two can be read against each other: the block runs from the start, for the
- * planned window if one was named and `PROVISIONAL_SESSION_HOURS` if not, and it
- * is dated by the day the session *starts* - which is not today's date for a
- * session backdated across midnight.
+ * planned window if one was named. Otherwise, the default hold runs for 90 minutes
+ * from now, even when the entered session start is backdated across midnight.
  *
  * Unreadable clocks fall back to the plain "now, for the placeholder" window
  * rather than refusing. This is the warning, not the guard: the form has already
@@ -458,6 +453,7 @@ export function sessionClaimWindow(
 ): SessionClaimWindow {
   let minutesAgo = 0
   let heldMinutes = PROVISIONAL_SESSION_HOURS * 60
+  let hasPlannedFinish = false
 
   /**
    * The start stands on its own and the planned end refines it, rather than the
@@ -479,16 +475,21 @@ export function sessionClaimWindow(
     if (planned.ok) {
       minutesAgo = planned.session.start.minutesAgo
       heldMinutes = planned.session.plannedMinutes
+      hasPlannedFinish = true
     }
   }
 
   const startedAt = new Date(now.getTime() - minutesAgo * 60_000)
   const start = arenaMinuteOfDay(startedAt)
+  const holdEndsAt = new Date(
+    (hasPlannedFinish ? startedAt : now).getTime() + heldMinutes * 60_000
+  )
+  const endDayOffset = daysBetweenDates(arenaDate(startedAt), arenaDate(holdEndsAt)) ?? 0
 
   return {
     slotDate: arenaDate(startedAt),
     start,
-    end: start + heldMinutes,
+    end: endDayOffset * MINUTES_PER_DAY + arenaMinuteOfDay(holdEndsAt),
   }
 }
 
@@ -578,12 +579,9 @@ const MINUTES_PER_DAY = 24 * 60
 /**
  * When a live walk-in stops holding its station, on a slot date's timeline.
  *
- * A session has no end until somebody checks it out, but the slot row carries
- * the `PROVISIONAL_SESSION_HOURS` placeholder claimed at check-in. Reading that
- * as the end is what let a station be sold out from under a customer still
- * sitting at it: `lib/devices/occupancy.ts` calls the session live for
- * `MAX_LIVE_SESSION_HOURS`, while the overlap test called it finished after five,
- * so between those two hours the floor plan and the booking flow disagreed.
+ * A session has no billing end until checkout, but its station hold defaults to
+ * one hour. A planned finish can extend that hold. The UI and database use the
+ * same 90-minute fallback so the timeline and booking picker agree.
  *
  * Returns minutes from midnight of `slotDate`, the same timeline
  * `fetchOccupiedRanges` normalises every other window onto - so a session
@@ -616,19 +614,14 @@ export function liveSessionEndMinutes(
   /**
    * A stated finish that has not arrived yet is better information than the cap.
    *
-   * The twelve hours below exist because a session with no stated end could be
-   * over in ten minutes or run all evening, and the row could not say which. When
-   * the customer has said, holding the station until the small hours blocks an
-   * evening of bookings on the strength of nothing - the arena saw exactly that:
-   * one walk-in, and the device type read fully booked for the rest of the day.
+   * A stated finish takes precedence over the 90-minute default hold. When the
+   * customer has said how long they expect to play, the row carries that window.
    *
    * Returning null leaves the row's own window standing, which for a session like
    * this *is* the planned end. So the hours after it are sellable.
    *
-   * Only while it is still ahead of us. At one minute past their stated finish,
-   * with no checkout, the customer is overrunning rather than gone - the cap
-   * comes back and the station is held again, which is the case
-   * `20260826130000` was written for.
+   * Only while it is still ahead of us. After the planned finish, the station
+   * falls back to the 90-minute hold from check-in.
    */
   if (session.plannedEnd) {
     const plannedEnd = new Date(session.plannedEnd)
@@ -640,7 +633,10 @@ export function liveSessionEndMinutes(
   const startedAt = new Date(session.checkedInAt)
   if (Number.isNaN(startedAt.getTime())) return null
 
-  const liveUntil = new Date(startedAt.getTime() + MAX_LIVE_SESSION_HOURS * 60 * 60 * 1000)
+  // The check-in writes this fixed 90-minute hold to the slot row. Keep this
+  // fallback start-based too; deriving it from each request's `now` would move
+  // the end forward forever and never release the station.
+  const liveUntil = new Date(startedAt.getTime() + WALKIN_SLOT_HOLD_HOURS * 60 * 60 * 1000)
 
   // Which day the cap lands on, counted between two arena calendar dates so no
   // host offset can move it - the same reason `arenaDate` exists at all.

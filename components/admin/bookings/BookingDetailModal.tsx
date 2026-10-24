@@ -18,13 +18,14 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, checkOutSharedPlayParticipant } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, checkOutSharedPlayParticipant, changeCheckedInWalkInDevice, changeCheckedInWalkInStartTime } from "@/app/(admin)/admin/bookings/actions";
+import { getDeviceTypes } from "@/app/(admin)/admin/devices/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
 import { Label } from "@/components/ui/label";
 import { QRCodeSVG } from "qrcode.react";
 import {
-  User, Phone, Mail, Calendar, Clock, IndianRupee,
+  User, Phone, Mail, Calendar, Clock, IndianRupee, Pencil, X,
   Loader2, CheckCircle2, LogIn, LogOut,
   UtensilsCrossed, QrCode, MapPin, Gamepad2, Plus, Minus, Search, Filter, Trash2, Play, Pause, UserPlus, ChevronDown
 } from "lucide-react";
@@ -101,6 +102,14 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   /** 24-hour `HH:MM` being typed. Empty means "take the plan off". */
   const [plannedEndDraft, setPlannedEndDraft] = useState("");
   const [savingPlannedEnd, setSavingPlannedEnd] = useState(false);
+  const [deviceEditOpen, setDeviceEditOpen] = useState(false);
+  const [deviceTypeOptions, setDeviceTypeOptions] = useState<any[]>([]);
+  const [selectedDeviceTypeId, setSelectedDeviceTypeId] = useState("");
+  const [loadingDeviceTypes, setLoadingDeviceTypes] = useState(false);
+  const [savingDeviceChange, setSavingDeviceChange] = useState(false);
+  const [editingStartTime, setEditingStartTime] = useState(false);
+  const [startTimeDraft, setStartTimeDraft] = useState("");
+  const [savingStartTime, setSavingStartTime] = useState(false);
   const [sharedRoster, setSharedRoster] = useState<string[]>([]);
   const [activePlayers, setActivePlayers] = useState<string[]>([]);
   const [newParticipantCustomerId, setNewParticipantCustomerId] = useState("");
@@ -114,6 +123,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [savingSharedPlay, setSavingSharedPlay] = useState(false);
   const [sitInDialogOpen, setSitInDialogOpen] = useState(false);
   const [sitInClockDraft, setSitInClockDraft] = useState("");
+  const [sitOutDialogOpen, setSitOutDialogOpen] = useState(false);
+  const [sitOutClockDraft, setSitOutClockDraft] = useState("");
   const [participantCustomerDrafts, setParticipantCustomerDrafts] = useState<Record<string, string>>({});
   const [linkingParticipantCustomer, setLinkingParticipantCustomer] = useState<string | null>(null);
   const [sharedPlayNow, setSharedPlayNow] = useState(() => new Date());
@@ -505,7 +516,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     activeOverride?: string[],
     successMessage?: string,
     rosterCustomers: Array<{ customerId: string; name: string }> = [],
-    sitInClock: string | null = null
+    sitInClock: string | null = null,
+    sitOutClock: string | null = null
   ): Promise<boolean> => {
     if (!bookingId) return false;
     const roster = rosterOverride ?? sharedRoster;
@@ -517,7 +529,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       roster,
       active,
       rosterCustomers,
-      sitInClock
+      sitInClock,
+      sitOutClock
     );
     setSavingSharedPlay(false);
     if (!result.success) {
@@ -633,7 +646,11 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     await handleAddSharedParticipant(createdCustomer);
   };
 
-  const handleSetSelectedParticipantsPlaying = async (sitIn: boolean, sitInClock: string | null = null) => {
+  const handleSetSelectedParticipantsPlaying = async (
+    sitIn: boolean,
+    sitInClock: string | null = null,
+    sitOutClock: string | null = null
+  ) => {
     if (savingSharedPlay) return;
     const selectedNames = sharedRoster.filter((name) =>
       selectedParticipants.some((selected) => selected.toLowerCase() === name.toLowerCase())
@@ -659,11 +676,13 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       nextActive,
       `${selectedNames.length} player${selectedNames.length === 1 ? "" : "s"} ${sitIn ? "sat in" : "marked sitting out"}`,
       [],
-      sitInClock
+      sitInClock,
+      sitOutClock
     );
     if (saved) {
       setSelectedParticipants([]);
       if (sitIn) setSitInDialogOpen(false);
+      else if (sitOutClock) setSitOutDialogOpen(false);
     }
   };
 
@@ -681,7 +700,84 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     void handleSetSelectedParticipantsPlaying(true, sitInClockDraft);
   };
 
+  const openSitOutDialog = () => {
+    setSitOutClockDraft(arenaClockTime(sharedPlayNow).slice(0, 5));
+    setSitOutDialogOpen(true);
+  };
+
+  const confirmSitOut = () => {
+    const ended = resolveBackdatedStart(sitOutClockDraft, sharedPlayNow);
+    if (!ended.ok) {
+      toast.error("Check the sit-out time", { description: ended.error });
+      return;
+    }
+    void handleSetSelectedParticipantsPlaying(false, null, sitOutClockDraft);
+  };
+
   const deviceSlot = booking?.booking_device_slots?.[0];
+  const isActiveActualWalkIn = booking?.billed_on_actual_time === true &&
+    booking.status === "checked_in" &&
+    Boolean(booking.checked_in_at);
+  const liveSessionDuration = useMemo(() => {
+    if (!isActiveActualWalkIn) return null;
+    return formatPlayedDuration(playedMinutes({
+      startedAt: new Date(booking.checked_in_at),
+      endedAt: sharedPlayNow,
+    }));
+  }, [isActiveActualWalkIn, booking?.checked_in_at, sharedPlayNow]);
+  const canChangeActiveWalkInDevice = booking?.billed_on_actual_time === true &&
+    booking.status === "checked_in" &&
+    !booking.completed_at &&
+    !booking.shared_play_enabled &&
+    booking.booking_device_slots?.length === 1;
+
+  const openDeviceEditor = async () => {
+    if (!canChangeActiveWalkInDevice) return;
+    setLoadingDeviceTypes(true);
+    const types = await getDeviceTypes();
+    setDeviceTypeOptions(types);
+    setSelectedDeviceTypeId(deviceSlot?.devices?.device_type?.id || "");
+    setLoadingDeviceTypes(false);
+    setDeviceEditOpen(true);
+  };
+
+  const saveDeviceChange = async () => {
+    if (!bookingId || !selectedDeviceTypeId) return;
+    setSavingDeviceChange(true);
+    const result = await changeCheckedInWalkInDevice(bookingId, selectedDeviceTypeId);
+    setSavingDeviceChange(false);
+    if (!result.success) {
+      toast.error("Could not change device", { description: result.error });
+      return;
+    }
+    setDeviceEditOpen(false);
+    toast.success("Session device updated", {
+      description: `${result.deviceTypeName} #${result.stationNumber}. Its rate will be used for the session at checkout.`
+    });
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+
+  const openStartTimeEditor = () => {
+    if (!canChangeActiveWalkInDevice || !booking?.checked_in_at) return;
+    setStartTimeDraft(arenaClockTime(new Date(booking.checked_in_at)).slice(0, 5));
+    setEditingStartTime(true);
+  };
+
+  const saveStartTimeChange = async () => {
+    if (!bookingId || !startTimeDraft) return;
+    setSavingStartTime(true);
+    const result = await changeCheckedInWalkInStartTime(bookingId, startTimeDraft);
+    setSavingStartTime(false);
+    if (!result.success) {
+      toast.error("Could not change start time", { description: result.error });
+      return;
+    }
+    setEditingStartTime(false);
+    toast.success("Session start time updated");
+    await loadBookingDetails();
+    onUpdate?.();
+  };
   const isFiSimulator =
     booking?.walk_in_device_type_name?.trim().toLowerCase() === "fi simulator" ||
     ["fi_simulator", "other"].includes(deviceSlot?.devices?.device_type?.name) ||
@@ -792,7 +888,58 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       {booking.checked_in_at && (
                         <div className="flex items-center gap-1 text-green-500">
                           <LogIn className="h-3.5 w-3.5" />
-                          <span>In: {new Date(booking.checked_in_at).toLocaleString()}</span>
+                          {editingStartTime ? (
+                            <>
+                              <span>In:</span>
+                              <TimeOfDayField
+                                name="booking-start-time"
+                                label="Session start time"
+                                defaultValue={startTimeDraft}
+                                onChange={setStartTimeDraft}
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Save start time"
+                                title="Save start time"
+                                onClick={() => void saveStartTimeChange()}
+                                disabled={savingStartTime || !startTimeDraft}
+                                className="h-8 w-8 shrink-0 text-emerald-400 hover:text-emerald-300"
+                              >
+                                {savingStartTime ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Cancel start time change"
+                                title="Cancel start time change"
+                                onClick={() => setEditingStartTime(false)}
+                                disabled={savingStartTime}
+                                className="h-8 w-8 shrink-0 text-secondary-content hover:text-white"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <span>In: {new Date(booking.checked_in_at).toLocaleString()}</span>
+                              {canChangeActiveWalkInDevice && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  aria-label="Edit session start time"
+                                  title="Edit session start time"
+                                  onClick={openStartTimeEditor}
+                                  className="h-7 w-7 text-secondary-content hover:text-primary"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </>
+                          )}
                         </div>
                       )}
                       {/* Sessions get the full timeline below instead: for those,
@@ -858,9 +1005,70 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       <MapPin className="h-4 w-4 text-primary mt-0.5" />
                       <div className="flex-1">
                         <p className="text-label-enhanced text-muted-content mb-1">Device</p>
-                        <p className="text-base font-bold text-white">
-                          {deviceSlot?.device_type} #{deviceSlot?.device_station_number}
-                        </p>
+                        <div className="flex w-full items-center gap-2">
+                          {deviceEditOpen ? (
+                            <>
+                              <select
+                                aria-label="Device type"
+                                value={selectedDeviceTypeId}
+                                onChange={(event) => setSelectedDeviceTypeId(event.target.value)}
+                                className="h-9 min-w-0 max-w-[280px] flex-1 rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm font-semibold text-white"
+                              >
+                                {deviceTypeOptions.map((type) => (
+                                  <option key={type.id} value={type.id}>
+                                    {type.display_name} · ₹{Number(type.regular_hourly_rate || 0).toFixed(0)}/hour
+                                  </option>
+                                ))}
+                              </select>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Save device change"
+                                title="Save device change"
+                                onClick={() => void saveDeviceChange()}
+                                disabled={savingDeviceChange || !selectedDeviceTypeId || selectedDeviceTypeId === deviceSlot?.devices?.device_type?.id}
+                                className="h-8 w-8 shrink-0 text-emerald-400 hover:text-emerald-300"
+                              >
+                                {savingDeviceChange ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Cancel device change"
+                                title="Cancel device change"
+                                onClick={() => setDeviceEditOpen(false)}
+                                disabled={savingDeviceChange}
+                                className="h-8 w-8 shrink-0 text-secondary-content hover:text-white"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-base font-bold text-white">
+                                {deviceSlot?.device_type} #{deviceSlot?.device_station_number}
+                              </p>
+                              {canChangeActiveWalkInDevice && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  aria-label="Edit device"
+                                  title="Edit device"
+                                  onClick={() => void openDeviceEditor()}
+                                  disabled={loadingDeviceTypes}
+                                  className="h-7 w-7 text-secondary-content hover:text-primary"
+                                >
+                                  {loadingDeviceTypes
+                                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                                    : <Pencil className="h-4 w-4" />}
+                                </Button>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-start gap-3">
@@ -877,11 +1085,15 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       <div className="flex-1">
                         <p className="text-label-enhanced text-muted-content mb-1">Time Slot</p>
                         <p className="text-base text-white font-semibold">
-                          {formatDbTimeRange(deviceSlot?.slot_start_time, deviceSlot?.slot_end_time)}
+                          {isActiveActualWalkIn
+                            ? `Playing for ${liveSessionDuration}`
+                            : formatDbTimeRange(deviceSlot?.slot_start_time, deviceSlot?.slot_end_time)}
                         </p>
-                        <p className="text-sm-enhanced text-secondary-content mt-1">
-                          Duration: {deviceSlot?.duration_hours}h
-                        </p>
+                        {!isActiveActualWalkIn && (
+                          <p className="text-sm-enhanced text-secondary-content mt-1">
+                            Duration: {deviceSlot?.duration_hours}h
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -926,7 +1138,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                             <div>
                               <p className="text-sm font-black text-white">{slot.device_type}</p>
                               <p className="text-sm font-semibold text-secondary-content">
-                                {slot.duration_hours}h × ₹{Number(slot.hourly_rate).toLocaleString('en-IN')}/hr
+                                {isActiveActualWalkIn
+                                  ? `Playing for ${liveSessionDuration} · ₹${Number(slot.hourly_rate).toLocaleString('en-IN')}/hr`
+                                  : `${slot.duration_hours}h × ₹${Number(slot.hourly_rate).toLocaleString('en-IN')}/hr`}
                               </p>
                             </div>
                             <div className="text-right">
@@ -1037,7 +1251,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   {booking.shared_play_enabled && (
                     <div className="space-y-3 border-t border-[#27272a] pt-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="min-w-0 flex-1 text-xs text-secondary-content">Add one or more names, select players, then choose Sit in to start their timers together.</p>
+                        <p className="min-w-0 flex-1 text-xs text-secondary-content">Select players, then choose Sit in or Sit out and set when the change happened.</p>
                         {booking.status === "checked_in" && (
                           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 pr-3">
                             {selectedParticipants.length > 0 && (
@@ -1059,7 +1273,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                               size="sm"
                               variant="outline"
                               disabled={savingSharedPlay || selectedParticipants.length === 0}
-                              onClick={() => void handleSetSelectedParticipantsPlaying(false)}
+                              onClick={openSitOutDialog}
                               className="border-zinc-700 text-secondary-content"
                             >
                               <Pause className="mr-1 h-3 w-3" /> Sit out
@@ -2245,6 +2459,36 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
             <Button type="button" onClick={confirmSitIn} disabled={savingSharedPlay || !sitInClockDraft} className="bg-emerald-600 text-white hover:bg-emerald-500">
               {savingSharedPlay ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
               Start timer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={sitOutDialogOpen} onOpenChange={setSitOutDialogOpen}>
+        <DialogContent className="max-w-sm border-[#27272a] bg-[var(--surface)] text-white">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase">Sit-out time</DialogTitle>
+            <DialogDescription className="text-secondary-content">
+              Set when the selected participant{selectedParticipants.length === 1 ? " stopped playing" : "s stopped playing"}. The current time is filled in; adjust it if they sat out earlier.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-xs font-bold uppercase text-secondary-content">Time</Label>
+            <TimeOfDayField
+              name="shared-play-sit-out-time"
+              label="Sit-out time"
+              defaultValue={sitOutClockDraft}
+              onChange={setSitOutClockDraft}
+            />
+            <p className="text-xs text-secondary-content">You can enter a time up to {MAX_BACKDATED_START_HOURS} hours ago.</p>
+          </div>
+          <DialogFooter className="flex-row gap-2">
+            <Button type="button" variant="ghost" onClick={() => setSitOutDialogOpen(false)} disabled={savingSharedPlay}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={confirmSitOut} disabled={savingSharedPlay || !sitOutClockDraft} className="border-zinc-700 text-white" variant="outline">
+              {savingSharedPlay ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pause className="mr-2 h-4 w-4" />}
+              Save sit-out time
             </Button>
           </DialogFooter>
         </DialogContent>
