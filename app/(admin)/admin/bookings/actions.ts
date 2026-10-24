@@ -964,7 +964,11 @@ export async function setSharedPlayParticipants(
   }
 }
 
-async function sharedPlayParticipantCheckoutQuote(bookingId: string, participantId: string) {
+async function sharedPlayParticipantCheckoutQuote(
+  bookingId: string,
+  participantId: string,
+  checkoutAt = new Date()
+) {
   const { data: booking, error: bookingError } = await supabaseAdmin
     .from("bookings")
     .select("id, status, shared_play_enabled, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, booking_device_slots(hourly_rate, included_players, extra_player_charge), shared_play_participants(id, name, customer_id, checked_out_at, shared_play_periods(id, participant_id, started_at, ended_at))")
@@ -981,7 +985,7 @@ async function sharedPlayParticipantCheckoutQuote(bookingId: string, participant
   const slot = booking.booking_device_slots?.[0];
   if (!slot) throw new Error("The booking has no active board.");
 
-  const now = new Date();
+  const now = checkoutAt;
   const periods = (booking.shared_play_participants || []).flatMap((row: any) =>
     (row.shared_play_periods || []).map((period: any) => ({
       ...period,
@@ -1049,6 +1053,91 @@ export async function getSharedPlayParticipantCheckoutQuote(bookingId: string, p
   } catch (error: any) {
     console.error("Shared-play participant checkout quote error:", error);
     return { success: false as const, error: error.message || "Could not calculate this participant's bill." };
+  }
+}
+
+export async function getSharedPlayCheckoutAllQuotes(bookingId: string) {
+  await requireStaff();
+  try {
+    const { data: participants, error } = await supabaseAdmin
+      .from("shared_play_participants")
+      .select("id, checked_out_at")
+      .eq("booking_id", bookingId)
+      .is("checked_out_at", null)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    if (!participants?.length) throw new Error("There are no participants left to check out.");
+
+    const checkoutAt = new Date();
+    const quotes = await Promise.all(participants.map((participant) =>
+      sharedPlayParticipantCheckoutQuote(bookingId, participant.id, checkoutAt)
+    ));
+    return { success: true as const, quotes };
+  } catch (error: any) {
+    console.error("Shared-play checkout-all quote error:", error);
+    return { success: false as const, error: error.message || "Could not calculate the participants' bills." };
+  }
+}
+
+export async function checkOutAllSharedPlayParticipants(input: {
+  bookingId: string;
+  useWalletFor: string[];
+  paymentMethod: "cash" | "card" | "upi";
+  idempotencyKey: string;
+}) {
+  await requireStaff();
+  const settledParticipants: string[] = [];
+  try {
+    if (!input.idempotencyKey || input.idempotencyKey.length < 12) {
+      throw new Error("Checkout request expired. Reopen checkout all.");
+    }
+    if (!Array.isArray(input.useWalletFor) || !["cash", "card", "upi"].includes(input.paymentMethod)) {
+      throw new Error("Choose a valid payment method and wallet selection.");
+    }
+
+    const { data: participants, error } = await supabaseAdmin
+      .from("shared_play_participants")
+      .select("id, checked_out_at")
+      .eq("booking_id", input.bookingId)
+      .is("checked_out_at", null)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    if (!participants?.length) throw new Error("There are no participants left to check out.");
+
+    // Calculate everyone against the same instant so nobody is charged for the
+    // few seconds it takes to process the rest of the group.
+    const checkoutAt = new Date();
+    const quotes = await Promise.all(participants.map((participant) =>
+      sharedPlayParticipantCheckoutQuote(input.bookingId, participant.id, checkoutAt)
+    ));
+
+    for (const quote of quotes) {
+      const useWallet = input.useWalletFor.includes(quote.participantId);
+      const walletAmount = useWallet ? Math.min(quote.totalAmount, quote.walletBalance) : 0;
+      const externalAmount = roundToTwo(quote.totalAmount - walletAmount);
+      const { error: settleError } = await supabaseAdmin.rpc("wallet_settle_shared_play_participant", {
+        p_booking_id: input.bookingId,
+        p_participant_id: quote.participantId,
+        p_charge_amount: quote.totalAmount,
+        p_cash_amount: input.paymentMethod === "cash" ? externalAmount : 0,
+        p_card_amount: input.paymentMethod === "card" ? externalAmount : 0,
+        p_upi_amount: input.paymentMethod === "upi" ? externalAmount : 0,
+        p_use_wallet: useWallet,
+        p_checkout_at: checkoutAt.toISOString(),
+        p_idempotency_key: `${input.idempotencyKey}:${quote.participantId}`
+      });
+      if (settleError) throw settleError;
+      settledParticipants.push(quote.participantName);
+    }
+
+    return { success: true as const, settledParticipants };
+  } catch (error: any) {
+    console.error("Shared-play checkout-all error:", error);
+    return {
+      success: false as const,
+      error: error.message || "Could not check out all participants.",
+      settledParticipants
+    };
   }
 }
 

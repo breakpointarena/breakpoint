@@ -18,7 +18,7 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, checkOutSharedPlayParticipant, changeCheckedInWalkInDevice, changeCheckedInWalkInStartTime } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInWalkInStartTime } from "@/app/(admin)/admin/bookings/actions";
 import { getDeviceTypes } from "@/app/(admin)/admin/devices/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
@@ -84,6 +84,11 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [participantCheckoutUseWallet, setParticipantCheckoutUseWallet] = useState(false);
   const [participantCheckoutKey, setParticipantCheckoutKey] = useState("");
   const [participantCheckoutLoading, setParticipantCheckoutLoading] = useState(false);
+  const [checkoutAllQuotes, setCheckoutAllQuotes] = useState<any[]>([]);
+  const [checkoutAllOpen, setCheckoutAllOpen] = useState(false);
+  const [checkoutAllWalletIds, setCheckoutAllWalletIds] = useState<string[]>([]);
+  const [checkoutAllMethod, setCheckoutAllMethod] = useState<"cash" | "card" | "upi">("upi");
+  const [checkoutAllKey, setCheckoutAllKey] = useState("");
   const [updatingPlayerCount, setUpdatingPlayerCount] = useState(false);
   const [foodItemToRemove, setFoodItemToRemove] = useState<any>(null);
   const [removingFoodItem, setRemovingFoodItem] = useState(false);
@@ -304,6 +309,58 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setParticipantCheckoutKey(crypto.randomUUID());
   };
 
+  const handleOpenCheckoutAll = async () => {
+    if (!bookingId) return;
+    setParticipantCheckoutLoading(true);
+    const result = await getSharedPlayCheckoutAllQuotes(bookingId);
+    setParticipantCheckoutLoading(false);
+    if (!result.success) {
+      toast.error("Could not calculate group bill", { description: result.error });
+      return;
+    }
+    setCheckoutAllQuotes(result.quotes);
+    setCheckoutAllWalletIds([]);
+    setCheckoutAllMethod("upi");
+    setCheckoutAllKey(crypto.randomUUID());
+    setCheckoutAllOpen(true);
+  };
+
+  const handleConfirmCheckoutAll = async () => {
+    if (!bookingId || checkoutAllQuotes.length === 0) return;
+    setParticipantCheckoutLoading(true);
+    const result = await checkOutAllSharedPlayParticipants({
+      bookingId,
+      useWalletFor: checkoutAllWalletIds,
+      paymentMethod: checkoutAllMethod,
+      idempotencyKey: checkoutAllKey
+    });
+    setParticipantCheckoutLoading(false);
+    if (!result.success) {
+      setCheckoutAllOpen(false);
+      toast.error(result.settledParticipants.length
+        ? `Checked out ${result.settledParticipants.length} participant${result.settledParticipants.length === 1 ? "" : "s"}; the rest are still active`
+        : "Checkout all failed", { description: result.error });
+      await loadBookingDetails();
+      onUpdate?.();
+      return;
+    }
+
+    setCheckoutAllOpen(false);
+    setCheckoutAllQuotes([]);
+    const closeResult = booking?.billed_on_actual_time
+      ? await checkOutWalkInSession(bookingId)
+      : await checkOutBooking(bookingId);
+    if (!closeResult.success) {
+      toast.error("Everyone paid, but the booking could not be closed", { description: closeResult.error });
+    } else {
+      toast.success("Everyone checked out", {
+        description: `${result.settledParticipants.length} participants settled.`
+      });
+    }
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+
   const handleConfirmParticipantCheckout = async () => {
     if (!bookingId || !participantCheckoutQuote) return;
     setParticipantCheckoutLoading(true);
@@ -376,9 +433,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         (participant: any) => !participant.checked_out_at
       );
       if (remainingParticipants.length > 1) {
-        toast.error("Check out each participant separately", {
-          description: "Use the Check out button beside each person to show and settle their individual bill."
-        });
+        void handleOpenCheckoutAll();
         return;
       }
       if (remainingParticipants.length === 1) {
@@ -430,9 +485,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         return;
       }
       if (remainingParticipants.length > 1) {
-        toast.error("Check out each participant separately", {
-          description: "Choose the participant who is leaving so only their played time and wallet are charged."
-        });
+        await handleOpenCheckoutAll();
         return;
       }
     }
@@ -1288,7 +1341,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                         <p className="text-xs font-semibold text-amber-300">Everyone is sitting out. Player timers are paused until someone sits in.</p>
                       )}
                       {booking.status === "checked_in" && (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1 && (
-                        <p className="text-xs font-semibold text-secondary-content">Check out each participant separately. Each person pays only their own play and assigned food, using their own wallet if selected.</p>
+                        <p className="text-xs font-semibold text-secondary-content">Check out each person beside their name, or use Checkout All to review everyone’s play and assigned food together.</p>
                       )}
                       <div className="space-y-2">
                         {sharedRoster.map((name) => {
@@ -2086,7 +2139,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   </Button>
                 )}
 
-                {isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length <= 1) && (
+                {isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).some((participant: any) => !participant.checked_out_at)) && (
                   <Button
                     onClick={handleSessionCheckOut}
                     disabled={actionLoading}
@@ -2095,7 +2148,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                     {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
                     {booking.shared_play_enabled
                       ? (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1
-                        ? "Check Out Participants Individually"
+                        ? "Checkout All Participants"
                         : "Check Out & Calculate Individual Bill"
                       : "Check Out & Calculate Bill"}
                   </Button>
@@ -2112,14 +2165,16 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   </Button>
                 )}
 
-                {!isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length <= 1) && (
+                {!isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).some((participant: any) => !participant.checked_out_at)) && (
                   <Button
                     onClick={handleCheckOut}
                     disabled={actionLoading || (!booking.shared_play_enabled && Number(booking.balance_due || 0) > 0 && booking.payment_status !== 'paid')}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-sm h-12 px-8 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
-                    Check Out Customer
+                    {booking.shared_play_enabled && (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1
+                      ? "Checkout All Participants"
+                      : "Check Out Customer"}
                   </Button>
                 )}
 
@@ -2491,6 +2546,102 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
               Save sit-out time
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={checkoutAllOpen} onOpenChange={(open) => !open && setCheckoutAllOpen(false)}>
+        <DialogContent className="max-w-2xl border-[#27272a] bg-[var(--surface)] text-white">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase">Checkout All Participants</DialogTitle>
+            <DialogDescription className="text-secondary-content">
+              Review each person’s play charge and assigned food together. The server settles everyone at the same checkout time.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[55vh] space-y-3 overflow-y-auto pr-1">
+            {checkoutAllQuotes.map((quote: any) => {
+              const useWallet = checkoutAllWalletIds.includes(quote.participantId);
+              const walletUsed = useWallet ? Math.min(Number(quote.totalAmount), Number(quote.walletBalance)) : 0;
+              const remaining = Math.max(0, Number(quote.totalAmount) - walletUsed);
+              return (
+                <div key={quote.participantId} className="rounded-lg border border-[#27272a] bg-[var(--background)] p-4">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-white">{quote.participantName}</p>
+                      <p className="mt-1 text-xs text-secondary-content">Play charge · {quote.playedMinutes} min: ₹{Number(quote.deviceAmount).toFixed(2)}</p>
+                    </div>
+                    <span className="shrink-0 text-sm font-black text-primary">₹{Number(quote.totalAmount).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-secondary-content">
+                    <span>Assigned food</span><span>₹{Number(quote.foodAmount).toFixed(2)}</span>
+                  </div>
+                  {quote.foodItems.map((item: any) => (
+                    <div key={item.id} className="mt-1 flex justify-between gap-3 text-xs text-secondary-content">
+                      <span>{item.quantity} × {item.item_name}</span>
+                      <span>₹{Number(item.line_total).toFixed(2)}</span>
+                    </div>
+                  ))}
+                  <label className="mt-3 flex cursor-pointer items-start gap-2 border-t border-[#27272a] pt-3">
+                    <input
+                      type="checkbox"
+                      checked={useWallet}
+                      disabled={!quote.customerId || Number(quote.walletBalance) <= 0 || participantCheckoutLoading}
+                      onChange={(event) => setCheckoutAllWalletIds((current) => event.target.checked
+                        ? [...current, quote.participantId]
+                        : current.filter((id) => id !== quote.participantId))}
+                      className="mt-0.5 h-4 w-4 accent-emerald-500"
+                    />
+                    <span className="text-xs text-secondary-content">
+                      Use {quote.participantName}’s wallet · available ₹{Number(quote.walletBalance).toFixed(2)}
+                      <span className="ml-2 font-semibold text-white">Due after wallet ₹{remaining.toFixed(2)}</span>
+                    </span>
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+
+          {(() => {
+            const total = checkoutAllQuotes.reduce((sum, quote) => sum + Number(quote.totalAmount || 0), 0);
+            const walletTotal = checkoutAllQuotes.reduce((sum, quote) => checkoutAllWalletIds.includes(quote.participantId)
+              ? sum + Math.min(Number(quote.totalAmount || 0), Number(quote.walletBalance || 0))
+              : sum, 0);
+            const remaining = Math.max(0, total - walletTotal);
+            return (
+              <div className="space-y-3 rounded-lg border border-primary/30 bg-[var(--background)] p-4">
+                <div className="flex justify-between text-base font-black">
+                  <span>Total for everyone (play + food)</span><span className="text-primary">₹{total.toFixed(2)}</span>
+                </div>
+                {walletTotal > 0 && <div className="flex justify-between text-xs text-emerald-300"><span>Wallet credits</span><span>−₹{walletTotal.toFixed(2)}</span></div>}
+                <div className="flex justify-between border-t border-[#27272a] pt-3 text-sm font-bold">
+                  <span>Collect now</span><span>₹{remaining.toFixed(2)}</span>
+                </div>
+                {remaining > 0 && (
+                  <div>
+                    <Label htmlFor="checkout-all-payment-method" className="mb-2 block text-xs font-bold uppercase text-secondary-content">Collect everyone’s remaining amount by</Label>
+                    <select
+                      id="checkout-all-payment-method"
+                      value={checkoutAllMethod}
+                      disabled={participantCheckoutLoading}
+                      onChange={(event) => setCheckoutAllMethod(event.target.value as "cash" | "card" | "upi")}
+                      className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm text-white"
+                    >
+                      <option value="upi">UPI</option>
+                      <option value="cash">Cash</option>
+                      <option value="card">Card</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" disabled={participantCheckoutLoading} onClick={() => setCheckoutAllOpen(false)}>Cancel</Button>
+            <Button disabled={participantCheckoutLoading || checkoutAllQuotes.length === 0} onClick={() => void handleConfirmCheckoutAll()} className="bg-primary font-black text-black hover:bg-primary-hover">
+              {participantCheckoutLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogOut className="mr-2 h-4 w-4" />}
+              Checkout everyone
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 
