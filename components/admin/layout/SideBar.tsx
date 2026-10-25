@@ -52,9 +52,6 @@ export function Sidebar({ isOpen, onToggle, onClose }: SidebarProps) {
     if (item.href === "/admin/reports" && userRole === "staff") {
       return false;
     }
-    if (item.href === "/admin/wallet-credits" && userRole === "staff") {
-      return false;
-    }
     return true;
   });
 

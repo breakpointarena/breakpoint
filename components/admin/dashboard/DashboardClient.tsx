@@ -246,7 +246,8 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
           <div className="flex items-start justify-between">
             <div className="flex-1">
               <p className="text-stat-label text-green-400 mb-1">
-                Today's Collections
+                <span className="inline xl:block">Today's</span>{' '}
+                <span className="inline xl:block">Collections</span>
               </p>
               <h3 className="text-2xl font-black text-white mb-1">
                 <RevealAmount amount={stats?.todaysRevenue || 0} label="today's collections" />

@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { requireAdmin } from '@/lib/auth/require-admin'
+import { requireStaff } from '@/lib/auth/require-admin'
 import { supabaseAdmin } from '@/lib/supabase/server'
 
 export interface WalletOfferInput {
@@ -22,7 +22,7 @@ function validAmount(value: number, allowZero = false) {
 }
 
 export async function getWalletOffersAction() {
-  await requireAdmin()
+  await requireStaff()
   const { data, error } = await supabaseAdmin
     .from('wallet_offers')
     .select('id, name, price, paid_credits, bonus_credits, bonus_validity_days, display_order, is_active, created_at, updated_at')
@@ -34,7 +34,7 @@ export async function getWalletOffersAction() {
 }
 
 export async function saveWalletOfferAction(input: WalletOfferInput) {
-  await requireAdmin()
+  await requireStaff()
 
   const name = String(input.name || '').trim()
   const price = Number(input.price)
@@ -89,7 +89,7 @@ export async function saveWalletOfferAction(input: WalletOfferInput) {
 }
 
 export async function deleteWalletOfferAction(id: string) {
-  await requireAdmin()
+  await requireStaff()
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
     return { success: false as const, error: 'The selected wallet offer is invalid.' }
   }
@@ -101,7 +101,7 @@ export async function deleteWalletOfferAction(id: string) {
 }
 
 export async function setWalletOfferActiveAction(id: string, isActive: boolean) {
-  await requireAdmin()
+  await requireStaff()
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
     return { success: false as const, error: 'The selected wallet offer is invalid.' }
   }
