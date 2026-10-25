@@ -54,10 +54,16 @@ export function InstallAppButton() {
       return;
     }
 
-    await installPrompt.prompt();
-    const choice = await installPrompt.userChoice;
-    setInstallPrompt(null);
-    if (choice.outcome === "accepted") setIsStandalone(true);
+    try {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      setInstallPrompt(null);
+      if (choice.outcome === "accepted") setIsStandalone(true);
+    } catch (error) {
+      console.error("Could not open the browser install prompt:", error);
+      setInstallPrompt(null);
+      setShowInstructions(true);
+    }
   };
 
   if (isStandalone) return null;
@@ -74,7 +80,7 @@ export function InstallAppButton() {
       </button>
 
       <Dialog open={showInstructions} onOpenChange={setShowInstructions}>
-        <DialogContent className="border-zinc-800 bg-[#111] text-white sm:max-w-md">
+        <DialogContent className="z-[200] border-zinc-800 bg-[#111] text-white sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-lg font-black uppercase">Add Break Point Arena to your phone</DialogTitle>
             <DialogDescription className="text-sm leading-relaxed text-zinc-400">
