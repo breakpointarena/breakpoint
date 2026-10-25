@@ -1069,7 +1069,7 @@ export async function getSharedPlayCheckoutAllQuotes(bookingId: string) {
     if (!participants?.length) throw new Error("There are no participants left to check out.");
 
     const checkoutAt = new Date();
-    const quotes = await Promise.all(participants.map((participant) =>
+    const quotes = await Promise.all(participants.map((participant: { id: string }) =>
       sharedPlayParticipantCheckoutQuote(bookingId, participant.id, checkoutAt)
     ));
     return { success: true as const, quotes };
@@ -1107,7 +1107,7 @@ export async function checkOutAllSharedPlayParticipants(input: {
     // Calculate everyone against the same instant so nobody is charged for the
     // few seconds it takes to process the rest of the group.
     const checkoutAt = new Date();
-    const quotes = await Promise.all(participants.map((participant) =>
+    const quotes = await Promise.all(participants.map((participant: { id: string }) =>
       sharedPlayParticipantCheckoutQuote(input.bookingId, participant.id, checkoutAt)
     ));
 
