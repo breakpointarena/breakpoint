@@ -15,6 +15,11 @@ export const metadata: Metadata = {
   title: 'Break Point Arena - Gaming Café',
   description: 'Book your gaming slot at Break Point Arena',
   manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    title: 'BreakPoint',
+    statusBarStyle: 'black-translucent',
+  },
   icons: {
     icon: [
       { url: '/favicon-16x16.png', sizes: '16x16', type: 'image/png' },

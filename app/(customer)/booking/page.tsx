@@ -19,6 +19,21 @@ export default function GamingStationPage() {
   const [deviceTypes, setDeviceTypes] = useState<any[]>([]);
   const [activeFilter, setActiveFilter] = useState("All Devices");
 
+  const deviceFilters = [
+    { label: "Console", matches: (type: any) => type.name === "ps5" },
+    { label: "PC", matches: (type: any) => type.name === "gaming_pc" },
+    { label: "Snooker", matches: (type: any) => type.name?.includes("snooker") },
+    { label: "American Pool", matches: (type: any) => type.name === "american_pool" || type.name === "american_snooker" },
+    { label: "F1 Simulator", matches: (type: any) => type.name === "other" || type.name === "f1_simulator" || /f1 simulator|fi simulator/i.test(type.display_name || "") },
+  ];
+  const visibleFilters = [
+    "All Devices",
+    ...deviceFilters
+      .filter((filter) => deviceTypes.some((type) => filter.matches(type) && Number(type.total_devices_count) > 0))
+      .map((filter) => filter.label),
+  ];
+  const selectedDeviceFilter = deviceFilters.find((filter) => filter.label === activeFilter);
+
   useEffect(() => {
     // Reset booking state when starting a new booking
     dispatch(resetBooking());
@@ -88,7 +103,7 @@ export default function GamingStationPage() {
 
       <div className="flex items-center justify-between border-b border-zinc-900 pb-4">
         <div className="flex flex-wrap gap-2">
-          {["All Devices", "Console", "PC", "Snooker"].map((tag) => (
+          {visibleFilters.map((tag) => (
             <button
               key={tag}
               onClick={() => setActiveFilter(tag)}
@@ -106,12 +121,7 @@ export default function GamingStationPage() {
       {/* DEVICE TYPES GRID CONTAINER */}
       <div className="max-w-7xl mx-auto w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
         {deviceTypes
-          .filter(type => {
-            if (activeFilter === "Console") return type.name === "ps5";
-            if (activeFilter === "PC") return type.name === "gaming_pc";
-            if (activeFilter === "Snooker") return type.name?.includes("snooker");
-            return true;
-          })
+          .filter((type) => !selectedDeviceFilter || selectedDeviceFilter.matches(type))
           .map((deviceType) => {
             const isAvail = deviceType.available_devices_count > 0;
             return (

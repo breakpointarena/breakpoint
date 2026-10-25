@@ -117,8 +117,7 @@ function WalletContent() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0d0a14] px-4 py-6 text-white sm:px-6">
-      <div className="mx-auto max-w-5xl space-y-8">
+    <div className="mx-auto max-w-5xl space-y-8">
         <Breadcrumb items={[{ label: 'Home', href: '/' }, { label: 'Wallet' }]} />
         <header>
           <h1 className="text-3xl font-black tracking-tight">Your Wallet</h1>
@@ -230,18 +229,19 @@ function WalletContent() {
             Wallet information is temporarily unavailable. Please try again later.
           </p>
         )}
-      </div>
-    </main>
+    </div>
   )
 }
 
 export default function WalletPage() {
   return (
-    <CustomerAuthGate
-      title="View Your Wallet"
-      description="Verify your number to view your balance and wallet offers."
-    >
-      {() => <WalletContent />}
-    </CustomerAuthGate>
+    <main className="min-h-screen bg-[#0d0a14] px-4 py-12 text-white">
+      <CustomerAuthGate
+        title="View Your Wallet"
+        description="Verify your number to view your balance and wallet offers."
+      >
+        {() => <WalletContent />}
+      </CustomerAuthGate>
+    </main>
   )
 }
