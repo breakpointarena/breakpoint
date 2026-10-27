@@ -1082,7 +1082,9 @@ export async function getSharedPlayCheckoutAllQuotes(bookingId: string) {
 export async function checkOutAllSharedPlayParticipants(input: {
   bookingId: string;
   useWalletFor: string[];
-  paymentMethod: "cash" | "card" | "upi";
+  cashAmount: number;
+  upiAmount: number;
+  cardAmount: number;
   idempotencyKey: string;
 }) {
   await requireStaff();
@@ -1091,8 +1093,8 @@ export async function checkOutAllSharedPlayParticipants(input: {
     if (!input.idempotencyKey || input.idempotencyKey.length < 12) {
       throw new Error("Checkout request expired. Reopen checkout all.");
     }
-    if (!Array.isArray(input.useWalletFor) || !["cash", "card", "upi"].includes(input.paymentMethod)) {
-      throw new Error("Choose a valid payment method and wallet selection.");
+    if (!Array.isArray(input.useWalletFor)) {
+      throw new Error("Choose a valid wallet selection.");
     }
 
     const { data: participants, error } = await supabaseAdmin
@@ -1111,17 +1113,40 @@ export async function checkOutAllSharedPlayParticipants(input: {
       sharedPlayParticipantCheckoutQuote(input.bookingId, participant.id, checkoutAt)
     ));
 
+    let cashRemaining = roundToTwo(Number(input.cashAmount));
+    let upiRemaining = roundToTwo(Number(input.upiAmount));
+    let cardRemaining = roundToTwo(Number(input.cardAmount));
+    if (![cashRemaining, upiRemaining, cardRemaining].every(Number.isFinite) || cashRemaining < 0 || upiRemaining < 0 || cardRemaining < 0) {
+      throw new Error("Enter valid cash, UPI, and card amounts.");
+    }
+    const totalExternalDue = roundToTwo(quotes.reduce((sum, quote) => {
+      const wallet = input.useWalletFor.includes(quote.participantId)
+        ? Math.min(quote.totalAmount, quote.walletBalance)
+        : 0;
+      return sum + roundToTwo(quote.totalAmount - wallet);
+    }, 0));
+    if (roundToTwo(cashRemaining + upiRemaining + cardRemaining) !== totalExternalDue) {
+      throw new Error(`Cash, UPI, and card must add up to the remaining amount of ₹${totalExternalDue.toFixed(2)}.`);
+    }
+
     for (const quote of quotes) {
       const useWallet = input.useWalletFor.includes(quote.participantId);
       const walletAmount = useWallet ? Math.min(quote.totalAmount, quote.walletBalance) : 0;
       const externalAmount = roundToTwo(quote.totalAmount - walletAmount);
+      const cashAmount = roundToTwo(Math.min(cashRemaining, externalAmount));
+      cashRemaining = roundToTwo(cashRemaining - cashAmount);
+      const upiAmount = roundToTwo(Math.min(upiRemaining, externalAmount - cashAmount));
+      upiRemaining = roundToTwo(upiRemaining - upiAmount);
+      const cardAmount = roundToTwo(externalAmount - cashAmount - upiAmount);
+      if (cardAmount > cardRemaining + 0.005) throw new Error("The payment split could not be allocated.");
+      cardRemaining = roundToTwo(cardRemaining - cardAmount);
       const { error: settleError } = await supabaseAdmin.rpc("wallet_settle_shared_play_participant", {
         p_booking_id: input.bookingId,
         p_participant_id: quote.participantId,
         p_charge_amount: quote.totalAmount,
-        p_cash_amount: input.paymentMethod === "cash" ? externalAmount : 0,
-        p_card_amount: input.paymentMethod === "card" ? externalAmount : 0,
-        p_upi_amount: input.paymentMethod === "upi" ? externalAmount : 0,
+        p_cash_amount: cashAmount,
+        p_card_amount: cardAmount,
+        p_upi_amount: upiAmount,
         p_use_wallet: useWallet,
         p_checkout_at: checkoutAt.toISOString(),
         p_idempotency_key: `${input.idempotencyKey}:${quote.participantId}`
@@ -1189,7 +1214,9 @@ export async function checkOutSharedPlayParticipant(input: {
   bookingId: string;
   participantId: string;
   useWallet: boolean;
-  paymentMethod: "cash" | "card" | "upi";
+  cashAmount: number;
+  upiAmount: number;
+  cardAmount: number;
   idempotencyKey: string;
 }) {
   await requireStaff();
@@ -1200,13 +1227,22 @@ export async function checkOutSharedPlayParticipant(input: {
     const quote = await sharedPlayParticipantCheckoutQuote(input.bookingId, input.participantId);
     const walletAmount = input.useWallet ? Math.min(quote.totalAmount, quote.walletBalance) : 0;
     const externalAmount = roundToTwo(quote.totalAmount - walletAmount);
+    const cashAmount = roundToTwo(Number(input.cashAmount));
+    const upiAmount = roundToTwo(Number(input.upiAmount));
+    const cardAmount = roundToTwo(Number(input.cardAmount));
+    if (![cashAmount, upiAmount, cardAmount].every(Number.isFinite) || cashAmount < 0 || upiAmount < 0 || cardAmount < 0) {
+      throw new Error("Enter valid cash, UPI, and card amounts.");
+    }
+    if (roundToTwo(cashAmount + upiAmount + cardAmount) !== externalAmount) {
+      throw new Error(`Cash, UPI, and card must add up to the remaining amount of ₹${externalAmount.toFixed(2)}.`);
+    }
     const { data, error } = await supabaseAdmin.rpc("wallet_settle_shared_play_participant", {
       p_booking_id: input.bookingId,
       p_participant_id: input.participantId,
       p_charge_amount: quote.totalAmount,
-      p_cash_amount: input.paymentMethod === "cash" ? externalAmount : 0,
-      p_card_amount: input.paymentMethod === "card" ? externalAmount : 0,
-      p_upi_amount: input.paymentMethod === "upi" ? externalAmount : 0,
+      p_cash_amount: cashAmount,
+      p_card_amount: cardAmount,
+      p_upi_amount: upiAmount,
       p_use_wallet: input.useWallet,
       p_checkout_at: quote.checkoutAt,
       p_idempotency_key: input.idempotencyKey

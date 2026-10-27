@@ -80,15 +80,34 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [selectedFoodItems, setSelectedFoodItems] = useState<Record<string, number>>({});
   const [foodParticipantId, setFoodParticipantId] = useState("");
   const [participantCheckoutQuote, setParticipantCheckoutQuote] = useState<any>(null);
-  const [participantCheckoutMethod, setParticipantCheckoutMethod] = useState<"cash" | "card" | "upi">("upi");
+  const [participantCheckoutCashAmount, setParticipantCheckoutCashAmount] = useState("0");
+  const [participantCheckoutUpiAmount, setParticipantCheckoutUpiAmount] = useState("0");
+  const [participantCheckoutCardAmount, setParticipantCheckoutCardAmount] = useState("0");
   const [participantCheckoutUseWallet, setParticipantCheckoutUseWallet] = useState(false);
   const [participantCheckoutKey, setParticipantCheckoutKey] = useState("");
   const [participantCheckoutLoading, setParticipantCheckoutLoading] = useState(false);
+  const participantExternalDue = participantCheckoutQuote
+    ? Number(participantCheckoutQuote.totalAmount) - (participantCheckoutUseWallet
+      ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
+      : 0)
+    : 0;
+  const participantSplitTotal = Number(participantCheckoutCashAmount || 0) + Number(participantCheckoutUpiAmount || 0) + Number(participantCheckoutCardAmount || 0);
+  const participantSplitValid = Number.isFinite(participantSplitTotal) && Math.abs(participantSplitTotal - participantExternalDue) < 0.005;
   const [checkoutAllQuotes, setCheckoutAllQuotes] = useState<any[]>([]);
   const [checkoutAllOpen, setCheckoutAllOpen] = useState(false);
   const [checkoutAllWalletIds, setCheckoutAllWalletIds] = useState<string[]>([]);
-  const [checkoutAllMethod, setCheckoutAllMethod] = useState<"cash" | "card" | "upi">("upi");
+  const [checkoutAllCashAmount, setCheckoutAllCashAmount] = useState("0");
+  const [checkoutAllUpiAmount, setCheckoutAllUpiAmount] = useState("0");
+  const [checkoutAllCardAmount, setCheckoutAllCardAmount] = useState("0");
   const [checkoutAllKey, setCheckoutAllKey] = useState("");
+  const checkoutAllRemaining = checkoutAllQuotes.reduce((sum, quote) => {
+    const wallet = checkoutAllWalletIds.includes(quote.participantId)
+      ? Math.min(Number(quote.totalAmount || 0), Number(quote.walletBalance || 0))
+      : 0;
+    return sum + Math.max(0, Number(quote.totalAmount || 0) - wallet);
+  }, 0);
+  const checkoutAllSplitTotal = Number(checkoutAllCashAmount || 0) + Number(checkoutAllUpiAmount || 0) + Number(checkoutAllCardAmount || 0);
+  const checkoutAllSplitValid = Number.isFinite(checkoutAllSplitTotal) && Math.abs(checkoutAllSplitTotal - checkoutAllRemaining) < 0.005;
   const [updatingPlayerCount, setUpdatingPlayerCount] = useState(false);
   const [foodItemToRemove, setFoodItemToRemove] = useState<any>(null);
   const [removingFoodItem, setRemovingFoodItem] = useState(false);
@@ -305,7 +324,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
     setParticipantCheckoutQuote(result.quote);
     setParticipantCheckoutUseWallet(false);
-    setParticipantCheckoutMethod("upi");
+    setParticipantCheckoutCashAmount("0");
+    setParticipantCheckoutUpiAmount(Number(result.quote.totalAmount).toFixed(2));
+    setParticipantCheckoutCardAmount("0");
     setParticipantCheckoutKey(crypto.randomUUID());
   };
 
@@ -320,7 +341,10 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
     setCheckoutAllQuotes(result.quotes);
     setCheckoutAllWalletIds([]);
-    setCheckoutAllMethod("upi");
+    const due = result.quotes.reduce((sum: number, quote: any) => sum + Number(quote.totalAmount || 0), 0);
+    setCheckoutAllCashAmount("0");
+    setCheckoutAllUpiAmount(due.toFixed(2));
+    setCheckoutAllCardAmount("0");
     setCheckoutAllKey(crypto.randomUUID());
     setCheckoutAllOpen(true);
   };
@@ -331,7 +355,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     const result = await checkOutAllSharedPlayParticipants({
       bookingId,
       useWalletFor: checkoutAllWalletIds,
-      paymentMethod: checkoutAllMethod,
+      cashAmount: Number(checkoutAllCashAmount),
+      upiAmount: Number(checkoutAllUpiAmount),
+      cardAmount: Number(checkoutAllCardAmount),
       idempotencyKey: checkoutAllKey
     });
     setParticipantCheckoutLoading(false);
@@ -368,7 +394,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       bookingId,
       participantId: participantCheckoutQuote.participantId,
       useWallet: participantCheckoutUseWallet,
-      paymentMethod: participantCheckoutMethod,
+      cashAmount: Number(participantCheckoutCashAmount),
+      upiAmount: Number(participantCheckoutUpiAmount),
+      cardAmount: Number(participantCheckoutCardAmount),
       idempotencyKey: participantCheckoutKey
     });
     setParticipantCheckoutLoading(false);
@@ -378,7 +406,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
     const walletUsed = Number(result.payment?.wallet_amount || 0);
     toast.success(`${participantCheckoutQuote.participantName} checked out`, {
-      description: `₹${Number(result.quote.totalAmount).toFixed(2)} collected${walletUsed > 0 ? ` (₹${walletUsed.toFixed(2)} from wallet)` : ""}.`
+      description: `₹${Number(result.quote.totalAmount).toFixed(2)} total (UPI ₹${Number(participantCheckoutUpiAmount).toFixed(2)}, cash ₹${Number(participantCheckoutCashAmount).toFixed(2)}, card ₹${Number(participantCheckoutCardAmount).toFixed(2)})${walletUsed > 0 ? `; ₹${walletUsed.toFixed(2)} from wallet` : ""}.`
     });
     setParticipantCheckoutQuote(null);
     const remainingParticipants = (booking.shared_play_participants || []).filter(
@@ -2580,17 +2608,27 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       <span>₹{Number(item.line_total).toFixed(2)}</span>
                     </div>
                   ))}
-                  <label className="mt-3 flex cursor-pointer items-start gap-2 border-t border-[#27272a] pt-3">
+                  <label className="mt-3 flex w-full min-w-0 cursor-pointer flex-wrap items-start gap-x-2 gap-y-1 border-t border-[#27272a] pt-3">
                     <input
                       type="checkbox"
                       checked={useWallet}
                       disabled={!quote.customerId || Number(quote.walletBalance) <= 0 || participantCheckoutLoading}
-                      onChange={(event) => setCheckoutAllWalletIds((current) => event.target.checked
-                        ? [...current, quote.participantId]
-                        : current.filter((id) => id !== quote.participantId))}
-                      className="mt-0.5 h-4 w-4 accent-emerald-500"
+                      onChange={(event) => {
+                        const nextWalletIds = event.target.checked
+                          ? [...checkoutAllWalletIds, quote.participantId]
+                          : checkoutAllWalletIds.filter((id) => id !== quote.participantId);
+                        setCheckoutAllWalletIds(nextWalletIds);
+                        const nextDue = checkoutAllQuotes.reduce((sum, row) => {
+                          const wallet = nextWalletIds.includes(row.participantId)
+                            ? Math.min(Number(row.totalAmount || 0), Number(row.walletBalance || 0))
+                            : 0;
+                          return sum + Math.max(0, Number(row.totalAmount || 0) - wallet);
+                        }, 0);
+                        setCheckoutAllUpiAmount(Math.max(0, nextDue - Number(checkoutAllCashAmount || 0) - Number(checkoutAllCardAmount || 0)).toFixed(2));
+                      }}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500"
                     />
-                    <span className="text-xs text-secondary-content">
+                    <span className="min-w-0 flex-1 break-words text-xs text-secondary-content">
                       Use {quote.participantName}’s wallet · available ₹{Number(quote.walletBalance).toFixed(2)}
                       <span className="ml-2 font-semibold text-white">Due after wallet ₹{remaining.toFixed(2)}</span>
                     </span>
@@ -2617,18 +2655,13 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 </div>
                 {remaining > 0 && (
                   <div>
-                    <Label htmlFor="checkout-all-payment-method" className="mb-2 block text-xs font-bold uppercase text-secondary-content">Collect everyone’s remaining amount by</Label>
-                    <select
-                      id="checkout-all-payment-method"
-                      value={checkoutAllMethod}
-                      disabled={participantCheckoutLoading}
-                      onChange={(event) => setCheckoutAllMethod(event.target.value as "cash" | "card" | "upi")}
-                      className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm text-white"
-                    >
-                      <option value="upi">UPI</option>
-                      <option value="cash">Cash</option>
-                      <option value="card">Card</option>
-                    </select>
+                    <p className="mb-2 text-xs font-bold uppercase text-secondary-content">Split everyone&apos;s remaining amount</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div><Label htmlFor="checkout-all-cash" className="mb-1 block text-xs text-secondary-content">Cash (INR)</Label><input id="checkout-all-cash" type="number" min="0" step="0.01" disabled={participantCheckoutLoading} value={checkoutAllCashAmount} onChange={(event) => setCheckoutAllCashAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm text-white" /></div>
+                      <div><Label htmlFor="checkout-all-upi" className="mb-1 block text-xs text-secondary-content">UPI (INR)</Label><input id="checkout-all-upi" type="number" min="0" step="0.01" disabled={participantCheckoutLoading} value={checkoutAllUpiAmount} onChange={(event) => setCheckoutAllUpiAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm text-white" /></div>
+                      <div><Label htmlFor="checkout-all-card" className="mb-1 block text-xs text-secondary-content">Card (INR)</Label><input id="checkout-all-card" type="number" min="0" step="0.01" disabled={participantCheckoutLoading} value={checkoutAllCardAmount} onChange={(event) => setCheckoutAllCardAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm text-white" /></div>
+                    </div>
+                    <p className="mt-2 text-xs text-secondary-content">Entered INR {checkoutAllSplitTotal.toFixed(2)} of INR {remaining.toFixed(2)}{!checkoutAllSplitValid && "; amounts must match"}</p>
                   </div>
                 )}
               </div>
@@ -2637,7 +2670,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
 
           <div className="flex justify-end gap-2">
             <Button variant="ghost" disabled={participantCheckoutLoading} onClick={() => setCheckoutAllOpen(false)}>Cancel</Button>
-            <Button disabled={participantCheckoutLoading || checkoutAllQuotes.length === 0} onClick={() => void handleConfirmCheckoutAll()} className="bg-primary font-black text-black hover:bg-primary-hover">
+            <Button disabled={participantCheckoutLoading || checkoutAllQuotes.length === 0 || !checkoutAllSplitValid} onClick={() => void handleConfirmCheckoutAll()} className="bg-primary font-black text-black hover:bg-primary-hover">
               {participantCheckoutLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogOut className="mr-2 h-4 w-4" />}
               Checkout everyone
             </Button>
@@ -2663,15 +2696,22 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 </div>
               </div>
 
-              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[#27272a] p-3">
+              <label className="flex w-full min-w-0 cursor-pointer items-start gap-3 rounded-lg border border-[#27272a] p-3">
                 <input
                   type="checkbox"
                   checked={participantCheckoutUseWallet}
                   disabled={!participantCheckoutQuote.customerId || participantCheckoutQuote.walletBalance <= 0}
-                  onChange={(event) => setParticipantCheckoutUseWallet(event.target.checked)}
-                  className="mt-1 h-4 w-4 accent-emerald-500"
+                  onChange={(event) => {
+                    const useWallet = event.target.checked;
+                    setParticipantCheckoutUseWallet(useWallet);
+                    const due = Number(participantCheckoutQuote.totalAmount) - (useWallet
+                      ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
+                      : 0);
+                    setParticipantCheckoutUpiAmount(Math.max(0, due - Number(participantCheckoutCashAmount || 0) - Number(participantCheckoutCardAmount || 0)).toFixed(2));
+                  }}
+                  className="mt-1 h-4 w-4 shrink-0 accent-emerald-500"
                 />
-                <span>
+                <span className="min-w-0 flex-1 break-words">
                   <span className="block text-sm font-bold">Use wallet credits</span>
                   <span className="text-xs text-secondary-content">
                     {participantCheckoutQuote.customerId
@@ -2681,32 +2721,21 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 </span>
               </label>
 
-              {Number(participantCheckoutQuote.totalAmount) - (participantCheckoutUseWallet
-                ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
-                : 0) > 0 && (
-                <div>
-                  <Label htmlFor="participant-payment-method" className="mb-2 block text-xs font-bold uppercase text-secondary-content">Collect remaining by</Label>
-                  <select
-                    id="participant-payment-method"
-                    value={participantCheckoutMethod}
-                    onChange={(event) => setParticipantCheckoutMethod(event.target.value as "cash" | "card" | "upi")}
-                    className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white"
-                  >
-                    <option value="upi">UPI</option>
-                    <option value="cash">Cash</option>
-                    <option value="card">Card</option>
-                  </select>
-                  <p className="mt-2 text-xs text-secondary-content">
-                    Remaining: ₹{(Number(participantCheckoutQuote.totalAmount) - (participantCheckoutUseWallet
-                      ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
-                      : 0)).toFixed(2)}
-                  </p>
+              {participantExternalDue > 0 && (
+                <div className="space-y-3 rounded-lg border border-[#27272a] p-3">
+                  <p className="text-xs font-bold uppercase text-secondary-content">Split remaining payment</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><Label htmlFor="participant-cash-amount" className="mb-1 block text-xs text-secondary-content">Cash (INR)</Label><input id="participant-cash-amount" type="number" min="0" step="0.01" value={participantCheckoutCashAmount} onChange={(event) => setParticipantCheckoutCashAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white" /></div>
+                    <div><Label htmlFor="participant-upi-amount" className="mb-1 block text-xs text-secondary-content">UPI (INR)</Label><input id="participant-upi-amount" type="number" min="0" step="0.01" value={participantCheckoutUpiAmount} onChange={(event) => setParticipantCheckoutUpiAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white" /></div>
+                    <div><Label htmlFor="participant-card-amount" className="mb-1 block text-xs text-secondary-content">Card (INR)</Label><input id="participant-card-amount" type="number" min="0" step="0.01" value={participantCheckoutCardAmount} onChange={(event) => setParticipantCheckoutCardAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white" /></div>
+                  </div>
+                  <p className="text-xs text-secondary-content">Remaining INR {participantExternalDue.toFixed(2)}; entered INR {participantSplitTotal.toFixed(2)}{!participantSplitValid && "; amounts must match"}</p>
                 </div>
               )}
 
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" disabled={participantCheckoutLoading} onClick={() => setParticipantCheckoutQuote(null)}>Cancel</Button>
-                <Button disabled={participantCheckoutLoading} onClick={() => void handleConfirmParticipantCheckout()} className="bg-primary font-black text-black hover:bg-primary-hover">
+                <Button disabled={participantCheckoutLoading || !participantSplitValid} onClick={() => void handleConfirmParticipantCheckout()} className="bg-primary font-black text-black hover:bg-primary-hover">
                   {participantCheckoutLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogOut className="mr-2 h-4 w-4" />}
                   Confirm checkout
                 </Button>

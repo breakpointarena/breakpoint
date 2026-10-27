@@ -1843,13 +1843,13 @@ export default function AdminBookingsPage() {
               </div>
 
               {/* Quick Fill Buttons */}
-              <div className="flex gap-2 pt-2">
+              <div className="grid grid-cols-2 gap-2 pt-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue, walletAmount: 0 })}
-                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                  className="w-full whitespace-nowrap text-xs h-8 border-zinc-700 hover:bg-zinc-800"
                 >
                   All UPI
                 </Button>
@@ -1858,7 +1858,7 @@ export default function AdminBookingsPage() {
                   variant="outline"
                   size="sm"
                   onClick={() => setPaymentSplit({ cashAmount: pendingPaymentModal.balanceDue, cardAmount: 0, upiAmount: 0, walletAmount: 0 })}
-                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                  className="w-full whitespace-nowrap text-xs h-8 border-zinc-700 hover:bg-zinc-800"
                 >
                   All Cash
                 </Button>
@@ -1867,7 +1867,7 @@ export default function AdminBookingsPage() {
                   variant="outline"
                   size="sm"
                   onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: pendingPaymentModal.balanceDue, upiAmount: 0, walletAmount: 0 })}
-                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                  className="w-full whitespace-nowrap text-xs h-8 border-zinc-700 hover:bg-zinc-800"
                 >
                   All Card
                 </Button>
@@ -1880,7 +1880,7 @@ export default function AdminBookingsPage() {
                     const walletAmount = Math.min(pendingPaymentModal.walletBalance, pendingPaymentModal.balanceDue);
                     setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue - walletAmount, walletAmount });
                   }}
-                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                  className="w-full whitespace-nowrap text-xs h-8 border-zinc-700 hover:bg-zinc-800"
                 >
                   Use Wallet
                 </Button>
