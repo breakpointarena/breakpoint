@@ -2070,6 +2070,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   completedAt={booking.completed_at}
                   plannedEndAt={booking.walk_in_planned_end}
                   totalAmount={booking.total_amount}
+                  sharedPlayEnabled={booking.shared_play_enabled}
+                  sharedPlayParticipants={booking.shared_play_participants || []}
                 />
               )}
 

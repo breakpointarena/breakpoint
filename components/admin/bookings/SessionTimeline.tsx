@@ -296,8 +296,31 @@ export function SessionTimeline({
   checkedInAt,
   completedAt,
   plannedEndAt,
-  totalAmount
-}: SessionTimes & { status: string; totalAmount?: number | null }) {
+  totalAmount,
+  sharedPlayEnabled = false,
+  sharedPlayParticipants = []
+}: SessionTimes & {
+  status: string;
+  totalAmount?: number | null;
+  sharedPlayEnabled?: boolean | null;
+  sharedPlayParticipants?: Array<{ id: string; shared_play_periods?: SharedPlayPeriod[] }>;
+}) {
+  const sharedPlayPeriods = sharedPlayParticipants.flatMap((participant) =>
+    (participant.shared_play_periods || []).map((period) => ({
+      ...period,
+      participant_id: participant.id
+    }))
+  );
+  const sharedPlayHasOpenPeriod = sharedPlayPeriods.some((period) => !period.ended_at);
+  const sharedPlayBillingEnd = sharedPlayEnabled
+    ? sharedPlayPeriods.reduce<string | null>((latest, period) => {
+        const periodEnd = period.ended_at || (sharedPlayHasOpenPeriod ? completedAt : null);
+        if (!periodEnd) return latest;
+        return !latest || new Date(periodEnd).getTime() > new Date(latest).getTime()
+          ? periodEnd
+          : latest;
+      }, null) || completedAt
+    : completedAt;
   const steps: Array<{
     icon: React.ReactNode;
     label: string;
@@ -362,15 +385,14 @@ export function SessionTimeline({
       icon: <LogOut className="h-3.5 w-3.5" />,
       label: "Checked out",
       value: timeOnly(completedAt),
-      note: "Billing stops here",
+      note: sharedPlayEnabled
+        ? "Session closed; shared billing follows player sit-out times"
+        : "Billing stops here",
       tone: "text-blue-400"
     });
   }
 
-  const played =
-    checkedInAt && (completedAt || status === "checked_in")
-      ? formatPlayedDuration(sessionMinutes(checkedInAt, completedAt))
-      : null;
+  const played = Boolean(checkedInAt && (completedAt || status === "checked_in"));
 
   return (
     <div className="bg-[var(--background)]/40 border border-zinc-900 rounded-xl p-4 space-y-3">
@@ -399,19 +421,21 @@ export function SessionTimeline({
         <div className="border-t border-zinc-900 pt-3 space-y-1">
           <div className="flex items-baseline justify-between">
             <span className="text-xs font-black uppercase tracking-wider text-white">
-              {completedAt ? "Billed on" : "Billing on"}
+              {sharedPlayBillingEnd || completedAt ? "Billed on" : "Billing on"}
             </span>
             <span className="text-sm font-bold text-primary font-mono">
-              {timeOnly(checkedInAt)} – {completedAt ? timeOnly(completedAt) : "now"}
+              {timeOnly(checkedInAt)} – {sharedPlayBillingEnd ? timeOnly(sharedPlayBillingEnd) : "now"}
             </span>
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-xs text-secondary-content">Actual usage</span>
             <span className="text-sm font-black text-white">
-              {status === "checked_in" && !completedAt ? (
+              {sharedPlayEnabled ? (
+                <SharedPlayTimer participants={sharedPlayParticipants} completedAt={completedAt} />
+              ) : status === "checked_in" && !completedAt ? (
                 <SessionTimer checkedInAt={checkedInAt} />
               ) : (
-                played
+                formatPlayedDuration(sessionMinutes(checkedInAt, completedAt))
               )}
             </span>
           </div>
