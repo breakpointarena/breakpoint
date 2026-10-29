@@ -111,9 +111,19 @@ export async function updateDevice(formData: FormData) {
   // query agree on what "this station has no picture" means.
   const image_url = (formData.get('image_url') as string) || null;
   const hourly_rate = formData.get('hourly_rate') as string;
+  const extra_player_charge = formData.get('extra_player_charge') as string;
 
   if (!id) {
     return { success: false, error: "Missing required device identifier target." };
+  }
+
+  const parsedHourlyRate = Number(hourly_rate);
+  const parsedExtraPlayerCharge = Number(extra_player_charge);
+  if (!Number.isFinite(parsedHourlyRate) || parsedHourlyRate < 0) {
+    return { success: false, error: "Hourly rate must be zero or greater." };
+  }
+  if (!Number.isFinite(parsedExtraPlayerCharge) || parsedExtraPlayerCharge < 0) {
+    return { success: false, error: "Extra player rate must be zero or greater." };
   }
 
   const { error } = await supabaseAdmin
@@ -131,11 +141,12 @@ export async function updateDevice(formData: FormData) {
     return { success: false, error: describeDeviceError(error) };
   }
 
-  if (device_type_id && hourly_rate) {
+  if (device_type_id) {
     const { error: rateError } = await supabaseAdmin
       .from('device_types')
       .update({
-        regular_hourly_rate: parseFloat(hourly_rate)
+        regular_hourly_rate: parsedHourlyRate,
+        extra_player_charge: parsedExtraPlayerCharge,
       })
       .eq('id', device_type_id);
 

@@ -27,6 +27,7 @@ export function EditDeviceModal({ device, onFormSuccess, onClose }: EditModalPro
   const [editStation, setEditStation] = useState(device.station_number || "");
   const [editStatus, setEditStatus] = useState(device.status || "available");
   const [hourlyRate, setHourlyRate] = useState(device.device_type?.regular_hourly_rate || "");
+  const [extraPlayerRate, setExtraPlayerRate] = useState(device.device_type?.extra_player_charge ?? "");
   const [localFile, setLocalFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -175,6 +176,26 @@ export function EditDeviceModal({ device, onFormSuccess, onClose }: EditModalPro
                   required
                 />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-[#a1a1aa] uppercase tracking-wider">Extra Player Rate (per player / hour) <span className="text-red-500">*</span></label>
+              <div className="relative rounded-md shadow-sm">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <span className="text-[#a1a1aa] text-base">₹</span>
+                </div>
+                <input
+                  type="number"
+                  name="extra_player_charge"
+                  min="0"
+                  step="0.01"
+                  value={extraPlayerRate}
+                  onChange={(e) => setExtraPlayerRate(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-[#27272a] bg-[var(--surface)] pl-7 pr-3 text-base focus:ring-1 focus:ring-primary focus:border-primary outline-none text-white [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
+                  required
+                />
+              </div>
+              <p className="text-xs text-[#a1a1aa]">Applies to every device of this type and new shared play sessions.</p>
             </div>
 
             {/*  Replaced simple input line with modern  field component */}
