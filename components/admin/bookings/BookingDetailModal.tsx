@@ -2598,14 +2598,15 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       </Dialog>
 
       <Dialog open={checkoutAllOpen} onOpenChange={(open) => !open && setCheckoutAllOpen(false)}>
-        <DialogContent className="max-w-2xl border-[#27272a] bg-[var(--surface)] text-white">
+        <DialogContent className="flex max-h-[90dvh] w-[calc(100%-2rem)] max-w-2xl flex-col overflow-hidden border-[#27272a] bg-[var(--surface)] text-white">
           <DialogHeader>
             <DialogTitle className="text-lg font-black uppercase">Checkout All Participants</DialogTitle>
             <DialogDescription className="text-secondary-content">
               Review each person’s play charge and assigned food together. The server settles everyone at the same checkout time.
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-[55vh] space-y-3 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          <div className="space-y-3">
             {checkoutAllQuotes.map((quote: any) => {
               const useWallet = checkoutAllWalletIds.includes(quote.participantId);
               const walletUsed = useWallet ? Math.min(Number(quote.totalAmount), Number(quote.walletBalance)) : 0;
@@ -2687,8 +2688,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
               </div>
             );
           })()}
+          </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex shrink-0 flex-col-reverse justify-end gap-2 border-t border-[#27272a] pt-3 sm:flex-row">
             <Button variant="ghost" disabled={participantCheckoutLoading} onClick={() => setCheckoutAllOpen(false)}>Cancel</Button>
             <Button disabled={participantCheckoutLoading || checkoutAllQuotes.length === 0 || !checkoutAllSplitValid} onClick={() => void handleConfirmCheckoutAll()} className="bg-primary font-black text-black hover:bg-primary-hover">
               {participantCheckoutLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogOut className="mr-2 h-4 w-4" />}
