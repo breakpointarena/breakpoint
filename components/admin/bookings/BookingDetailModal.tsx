@@ -18,7 +18,7 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInWalkInStartTime } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime } from "@/app/(admin)/admin/bookings/actions";
 import { getDeviceTypes } from "@/app/(admin)/admin/devices/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
@@ -811,9 +811,15 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     !booking.completed_at &&
     !booking.shared_play_enabled &&
     booking.booking_device_slots?.length === 1;
+  const canChangeActiveSharedPlayDevice = booking?.shared_play_enabled === true &&
+    booking.status === "checked_in" &&
+    !booking.completed_at &&
+    booking.booking_device_slots?.length === 1 &&
+    activePlayers.length > 0;
+  const canChangeActiveSessionDevice = canChangeActiveWalkInDevice || canChangeActiveSharedPlayDevice;
 
   const openDeviceEditor = async () => {
-    if (!canChangeActiveWalkInDevice) return;
+    if (!canChangeActiveSessionDevice) return;
     setLoadingDeviceTypes(true);
     const types = await getDeviceTypes();
     setDeviceTypeOptions(types);
@@ -825,7 +831,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const saveDeviceChange = async () => {
     if (!bookingId || !selectedDeviceTypeId) return;
     setSavingDeviceChange(true);
-    const result = await changeCheckedInWalkInDevice(bookingId, selectedDeviceTypeId);
+    const result = booking.shared_play_enabled
+      ? await changeCheckedInSharedPlayDevice(bookingId, selectedDeviceTypeId)
+      : await changeCheckedInWalkInDevice(bookingId, selectedDeviceTypeId);
     setSavingDeviceChange(false);
     if (!result.success) {
       toast.error("Could not change device", { description: result.error });
@@ -833,7 +841,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
     setDeviceEditOpen(false);
     toast.success("Session device updated", {
-      description: `${result.deviceTypeName} #${result.stationNumber}. Its rate will be used for the session at checkout.`
+      description: booking.shared_play_enabled
+        ? `${result.deviceTypeName} #${result.stationNumber}. The existing booking rate and charges are unchanged.`
+        : `${result.deviceTypeName} #${result.stationNumber}. Its rate will be used for the session at checkout.`
     });
     await loadBookingDetails();
     onUpdate?.();
@@ -1097,7 +1107,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                               >
                                 {deviceTypeOptions.map((type) => (
                                   <option key={type.id} value={type.id}>
-                                    {type.display_name} · ₹{Number(type.regular_hourly_rate || 0).toFixed(0)}/hour
+                                    {booking.shared_play_enabled
+                                      ? type.display_name
+                                      : `${type.display_name} · ₹${Number(type.regular_hourly_rate || 0).toFixed(0)}/hour`}
                                   </option>
                                 ))}
                               </select>
@@ -1131,13 +1143,13 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                               <p className="text-base font-bold text-white">
                                 {deviceSlot?.device_type} #{deviceSlot?.device_station_number}
                               </p>
-                              {canChangeActiveWalkInDevice && (
+                              {canChangeActiveSessionDevice && (
                                 <Button
                                   type="button"
                                   variant="ghost"
                                   size="icon"
                                   aria-label="Edit device"
-                                  title="Edit device"
+                                  title={booking.shared_play_enabled ? "Change device without changing charges" : "Edit device"}
                                   onClick={() => void openDeviceEditor()}
                                   disabled={loadingDeviceTypes}
                                   className="h-7 w-7 text-secondary-content hover:text-primary"

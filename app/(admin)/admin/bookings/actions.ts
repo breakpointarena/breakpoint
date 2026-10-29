@@ -3147,6 +3147,36 @@ export async function changeCheckedInWalkInDevice(bookingId: string, deviceTypeI
   }
 }
 
+/** Move an active shared-play booking to another station without changing its bill. */
+export async function changeCheckedInSharedPlayDevice(bookingId: string, deviceTypeId: string) {
+  await requireStaff();
+
+  try {
+    const { data, error } = await supabaseAdmin.rpc("change_checked_in_shared_play_device_v1", {
+      p_booking_id: bookingId,
+      p_device_type_id: deviceTypeId,
+    });
+    if (error) throw error;
+    const result = Array.isArray(data) ? data[0] : data;
+    if (!result) return { success: false, error: "Could not move the session to that device." };
+
+    return {
+      success: true,
+      stationNumber: result.station_number,
+      deviceTypeName: result.device_type_name,
+    };
+  } catch (err: any) {
+    console.error("Change checked-in shared-play device error:", err);
+    const message = String(err?.message || "Could not change the session device.");
+    return {
+      success: false,
+      error: message.includes("No station of this device type is free")
+        ? "No station of that device type is free for this session. The current device and charges were left unchanged."
+        : message,
+    };
+  }
+}
+
 /** Correct the recorded start time on an active walk-in session. */
 export async function changeCheckedInWalkInStartTime(bookingId: string, startedClock: string) {
   await requireStaff();
