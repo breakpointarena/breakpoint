@@ -815,6 +815,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     booking.status === "checked_in" &&
     !booking.completed_at &&
     booking.booking_device_slots?.length === 1 &&
+    ["standard_snooker", "medium_snooker", "american_pool"].includes(
+      booking.booking_device_slots?.[0]?.devices?.device_type?.name
+    ) &&
     activePlayers.length > 0;
   const canChangeActiveSessionDevice = canChangeActiveWalkInDevice || canChangeActiveSharedPlayDevice;
 
@@ -822,7 +825,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     if (!canChangeActiveSessionDevice) return;
     setLoadingDeviceTypes(true);
     const types = await getDeviceTypes();
-    setDeviceTypeOptions(types);
+    setDeviceTypeOptions(booking?.shared_play_enabled
+      ? types.filter((type: any) => ["standard_snooker", "medium_snooker", "american_pool"].includes(type.name))
+      : types);
     setSelectedDeviceTypeId(deviceSlot?.devices?.device_type?.id || "");
     setLoadingDeviceTypes(false);
     setDeviceEditOpen(true);
@@ -842,7 +847,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setDeviceEditOpen(false);
     toast.success("Session device updated", {
       description: booking.shared_play_enabled
-        ? `${result.deviceTypeName} #${result.stationNumber}. The existing booking rate and charges are unchanged.`
+        ? `${result.deviceTypeName} #${result.stationNumber}. Earlier play keeps the old rate; the new rate starts now.`
         : `${result.deviceTypeName} #${result.stationNumber}. Its rate will be used for the session at checkout.`
     });
     await loadBookingDetails();
@@ -880,6 +885,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         participant_id: participant.id,
         started_at: period.started_at,
         ended_at: period.ended_at,
+        hourly_rate: period.hourly_rate,
+        extra_player_rate: period.extra_player_rate,
+        included_players: period.included_players,
       }))
     ),
     [booking?.shared_play_participants]
@@ -1107,9 +1115,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                               >
                                 {deviceTypeOptions.map((type) => (
                                   <option key={type.id} value={type.id}>
-                                    {booking.shared_play_enabled
-                                      ? type.display_name
-                                      : `${type.display_name} · ₹${Number(type.regular_hourly_rate || 0).toFixed(0)}/hour`}
+                                    {type.display_name} · ₹{Number(type.regular_hourly_rate || 0).toFixed(0)}/hour
                                   </option>
                                 ))}
                               </select>
@@ -1149,7 +1155,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                                   variant="ghost"
                                   size="icon"
                                   aria-label="Edit device"
-                                  title={booking.shared_play_enabled ? "Change device without changing charges" : "Edit device"}
+                                  title={booking.shared_play_enabled ? "Change device and update shared-play rates" : "Edit device"}
                                   onClick={() => void openDeviceEditor()}
                                   disabled={loadingDeviceTypes}
                                   className="h-7 w-7 text-secondary-content hover:text-primary"

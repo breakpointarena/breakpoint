@@ -278,7 +278,7 @@ async function attachSharedPlayPeriods(bookings: any[]) {
 
   const { data: participants, error } = await supabaseAdmin
     .from("shared_play_participants")
-    .select("id, booking_id, name, customer_id, customer:customers(id, name, phone, email), shared_play_periods(id, started_at, ended_at)")
+    .select("id, booking_id, name, customer_id, customer:customers(id, name, phone, email), shared_play_periods(id, started_at, ended_at, hourly_rate, extra_player_rate, included_players)")
     .in("booking_id", sharedBookingIds);
   if (error) throw error;
 
@@ -438,7 +438,7 @@ export async function getBookingDetails(bookingId: string) {
     if (data.shared_play_enabled || data.status === "checked_in") {
       const { data: participants, error: participantError } = await supabaseAdmin
         .from("shared_play_participants")
-        .select("id, name, customer_id, customer:customers(id, name, phone, email), billed_amount, checked_out_at, settled_amount, wallet_amount, shared_play_periods(id, started_at, ended_at, amount)")
+        .select("id, name, customer_id, customer:customers(id, name, phone, email), billed_amount, checked_out_at, settled_amount, wallet_amount, shared_play_periods(id, started_at, ended_at, amount, hourly_rate, extra_player_rate, included_players)")
         .eq("booking_id", bookingId)
         .order("created_at", { ascending: true });
       if (participantError) throw participantError;
@@ -971,7 +971,7 @@ async function sharedPlayParticipantCheckoutQuote(
 ) {
   const { data: booking, error: bookingError } = await supabaseAdmin
     .from("bookings")
-    .select("id, status, shared_play_enabled, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, booking_device_slots(hourly_rate, included_players, extra_player_charge), shared_play_participants(id, name, customer_id, checked_out_at, shared_play_periods(id, participant_id, started_at, ended_at))")
+    .select("id, status, shared_play_enabled, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, booking_device_slots(hourly_rate, included_players, extra_player_charge), shared_play_participants(id, name, customer_id, checked_out_at, shared_play_periods(id, participant_id, started_at, ended_at, hourly_rate, extra_player_rate, included_players))")
     .eq("id", bookingId)
     .maybeSingle();
   if (bookingError) throw bookingError;
@@ -1551,7 +1551,7 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
 
   const { data: periodRows, error: periodsError } = await supabaseAdmin
     .from("shared_play_periods")
-    .select("id, participant_id, started_at, ended_at")
+    .select("id, participant_id, started_at, ended_at, hourly_rate, extra_player_rate, included_players")
     .in("participant_id", participantIds);
   if (periodsError) throw periodsError;
   let periods = periodRows || [];
@@ -1569,7 +1569,7 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
         started_at: booking.checked_in_at,
         ended_at: endedAt.toISOString()
       })
-      .select("id, participant_id, started_at, ended_at")
+      .select("id, participant_id, started_at, ended_at, hourly_rate, extra_player_rate, included_players")
       .single();
     if (insertPeriodError) throw insertPeriodError;
     periods = [period];
@@ -3147,7 +3147,7 @@ export async function changeCheckedInWalkInDevice(bookingId: string, deviceTypeI
   }
 }
 
-/** Move an active shared-play booking to another station without changing its bill. */
+/** Move an active shared-play booking to a supported station and device rate. */
 export async function changeCheckedInSharedPlayDevice(bookingId: string, deviceTypeId: string) {
   await requireStaff();
 
@@ -3426,7 +3426,7 @@ export async function checkOutWalkInSession(
 
       const { data: periods, error: periodsError } = await supabaseAdmin
         .from("shared_play_periods")
-        .select("id, participant_id, started_at, ended_at")
+        .select("id, participant_id, started_at, ended_at, hourly_rate, extra_player_rate, included_players")
         .in("participant_id", participantIds);
       if (periodsError) throw periodsError;
 

@@ -27,6 +27,13 @@ BEGIN
   );
 
   IF v_updated_definition = v_definition THEN
+    -- Local or remote databases may already have this guard from a manually
+    -- applied copy of the change. Treat that as success so migration replay is
+    -- safe, but still fail if neither guard is present.
+    IF position('b2.status NOT IN (''cancelled'', ''expired'', ''completed'')' IN v_definition) > 0
+       AND position('b.status IN (''cancelled'', ''expired'', ''completed'')' IN v_definition) > 0 THEN
+      RETURN;
+    END IF;
     RAISE EXCEPTION 'Could not update the completed-slot guards in assign_device_slot';
   END IF;
 

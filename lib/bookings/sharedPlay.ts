@@ -5,6 +5,9 @@ export interface SharedPlayPeriod {
   participant_id: string;
   started_at: string;
   ended_at: string | null;
+  hourly_rate?: number | string | null;
+  extra_player_rate?: number | string | null;
+  included_players?: number | string | null;
 }
 
 export interface SharedPlayParticipantShare {
@@ -70,9 +73,8 @@ export function getSharedPlaySessions(
 
 /**
  * Splits each board-time interval equally between the people playing then.
- * Active players share the reserved base charge by play time. Each active
- * player above the device's included count adds its configured hourly fee to
- * that interval, using the same rounding rule as ordinary bookings.
+ * Device rates are read from each period so a device change affects only time
+ * after the change. Older periods fall back to the booking's current rates.
  */
 export function calculateSharedPlayShares(
   periods: SharedPlayPeriod[],
@@ -91,7 +93,14 @@ export function calculateSharedPlayShares(
   });
   const edges = [...new Set(valid.flatMap((period) => [period.start, period.end]))].sort((a, b) => a - b);
   const centsByParticipant = new Map<string, number>();
-  const segments: Array<{ start: number; end: number; hours: number; activeIds: string[]; extraCents: number }> = [];
+  const segments: Array<{
+    start: number;
+    end: number;
+    hours: number;
+    activeIds: string[];
+    baseCents: number;
+    extraCents: number;
+  }> = [];
   const sessions: Array<SharedPlaySession & { amountCents: number }> = [];
   let trackedHours = 0;
   let extraPlayersTotal = 0;
@@ -100,29 +109,37 @@ export function calculateSharedPlayShares(
     const start = edges[index];
     const end = edges[index + 1];
     const midpoint = start + (end - start) / 2;
-    const activeIds = [...new Set(
-      valid.filter((period) => period.start <= midpoint && period.end > midpoint)
-        .map((period) => period.participant_id)
-    )].sort();
+    const activePeriods = valid.filter((period) => period.start <= midpoint && period.end > midpoint);
+    const activeIds = [...new Set(activePeriods.map((period) => period.participant_id))].sort();
     if (activeIds.length === 0) continue;
 
     const hours = (end - start) / 3_600_000;
-    const extraCount = Math.max(0, activeIds.length - Math.max(1, includedPlayers));
-    const extraAmount = extraPlayersCharge(extraCount, extraPlayerRate, hours);
+    const pricingPeriod = activePeriods.find((period) => period.hourly_rate != null);
+    const segmentHourlyRate = Number(pricingPeriod?.hourly_rate ?? hourlyRate);
+    const segmentExtraPlayerRate = Number(pricingPeriod?.extra_player_rate ?? extraPlayerRate);
+    const segmentIncludedPlayers = Number(pricingPeriod?.included_players ?? includedPlayers);
+    const baseCents = Math.round(segmentHourlyRate * hours * 100);
+    const extraCount = Math.max(0, activeIds.length - Math.max(1, segmentIncludedPlayers));
+    const extraAmount = extraPlayersCharge(extraCount, segmentExtraPlayerRate, hours);
     const extraCents = Math.round(extraAmount * 100);
     trackedHours += hours;
     extraPlayersTotal = round2(extraPlayersTotal + extraAmount);
-    segments.push({ start, end, hours, activeIds, extraCents });
+    segments.push({ start, end, hours, activeIds, baseCents, extraCents });
   }
 
   let allocatedBaseCents = 0;
-  const totalBaseCents = Math.round((reservedBaseAmount ?? hourlyRate * trackedHours) * 100);
+  const calculatedBaseCents = segments.reduce((total, segment) => total + segment.baseCents, 0);
+  const totalBaseCents = reservedBaseAmount == null
+    ? calculatedBaseCents
+    : Math.round(reservedBaseAmount * 100);
   segments.forEach((segment, index) => {
-    const baseCents = index === segments.length - 1
-      ? totalBaseCents - allocatedBaseCents
-      : trackedHours > 0
-        ? Math.round(totalBaseCents * segment.hours / trackedHours)
-        : 0;
+    const baseCents = reservedBaseAmount == null
+      ? segment.baseCents
+      : index === segments.length - 1
+        ? totalBaseCents - allocatedBaseCents
+        : calculatedBaseCents > 0
+          ? Math.round(totalBaseCents * segment.baseCents / calculatedBaseCents)
+          : 0;
     allocatedBaseCents += baseCents;
     const extraBaseShare = Math.floor(segment.extraCents / segment.activeIds.length);
     const extraRemainder = segment.extraCents - extraBaseShare * segment.activeIds.length;
