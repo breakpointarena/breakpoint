@@ -59,8 +59,6 @@ DECLARE
   v_assignment RECORD;
   v_new_slot public.booking_device_slots%ROWTYPE;
   v_active_players INTEGER;
-  v_active_participant_ids UUID[];
-  v_now TIMESTAMPTZ := clock_timestamp();
 BEGIN
   SELECT * INTO v_booking
   FROM public.bookings
@@ -94,8 +92,7 @@ BEGIN
     RAISE EXCEPTION 'Shared-play device changes are only available for Standard Snooker, Medium Snooker, and American Pool';
   END IF;
 
-  SELECT array_agg(sp.id ORDER BY sp.created_at), count(*)::INTEGER
-  INTO v_active_participant_ids, v_active_players
+  SELECT count(*)::INTEGER INTO v_active_players
   FROM public.shared_play_periods pp
   JOIN public.shared_play_participants sp ON sp.id = pp.participant_id
   WHERE sp.booking_id = p_booking_id
@@ -162,20 +159,9 @@ BEGIN
 
   DELETE FROM public.booking_device_slots WHERE id = v_new_slot.id;
 
-  -- Split each active participant's play interval at the instant of the move.
-  -- The insert trigger snapshots the newly selected device rates for the new
-  -- intervals, so earlier play keeps its original rate.
-  UPDATE public.shared_play_periods pp
-  SET ended_at = v_now
-  FROM public.shared_play_participants sp
-  WHERE pp.participant_id = sp.id
-    AND sp.booking_id = p_booking_id
-    AND sp.checked_out_at IS NULL
-    AND pp.ended_at IS NULL;
-
-  -- The type's rates apply from the device change onward. Existing participant
-  -- settlements, earlier period rates, duration, discounts, payments, and food
-  -- remain untouched.
+  -- Recalculate the whole unsettled shared-play session at the newly selected
+  -- device's rates. A participant who has already checked out keeps their
+  -- settled amount and historical rates unchanged.
   UPDATE public.booking_device_slots
   SET device_id = v_new_slot.device_id,
       device_type = v_type.display_name,
@@ -191,9 +177,15 @@ BEGIN
       updated_at = NOW()
   WHERE id = p_booking_id;
 
-  INSERT INTO public.shared_play_periods (participant_id, started_at)
-  SELECT active.participant_id, v_now
-  FROM unnest(v_active_participant_ids) AS active(participant_id);
+  UPDATE public.shared_play_periods pp
+  SET hourly_rate = v_type.regular_hourly_rate,
+      extra_player_rate = v_type.extra_player_charge,
+      included_players = v_type.included_players
+  FROM public.shared_play_participants sp
+  WHERE pp.participant_id = sp.id
+    AND sp.booking_id = p_booking_id
+    AND sp.checked_out_at IS NULL
+    AND sp.settled_amount = 0;
 
   RETURN QUERY SELECT v_assignment.station_number::TEXT, v_type.display_name::TEXT;
 END;

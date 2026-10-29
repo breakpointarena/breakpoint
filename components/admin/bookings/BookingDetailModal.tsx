@@ -847,7 +847,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setDeviceEditOpen(false);
     toast.success("Session device updated", {
       description: booking.shared_play_enabled
-        ? `${result.deviceTypeName} #${result.stationNumber}. Earlier play keeps the old rate; the new rate starts now.`
+        ? `${result.deviceTypeName} #${result.stationNumber}. Unsettled shared-play charges are recalculated at this device's rates.`
         : `${result.deviceTypeName} #${result.stationNumber}. Its rate will be used for the session at checkout.`
     });
     await loadBookingDetails();
@@ -1155,7 +1155,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                                   variant="ghost"
                                   size="icon"
                                   aria-label="Edit device"
-                                  title={booking.shared_play_enabled ? "Change device and update shared-play rates" : "Edit device"}
+                                  title={booking.shared_play_enabled ? "Change device and recalculate shared-play charges" : "Edit device"}
                                   onClick={() => void openDeviceEditor()}
                                   disabled={loadingDeviceTypes}
                                   className="h-7 w-7 text-secondary-content hover:text-primary"
