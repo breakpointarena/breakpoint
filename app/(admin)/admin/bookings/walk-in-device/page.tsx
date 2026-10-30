@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import {
   createWalkInBooking,
   createWalkInSession,
   getWalkInDeviceAvailability,
+  getWalkInStationOptions,
   lookupWalkInCustomer,
   type WalkInDeviceAvailability
 } from "../actions";
@@ -86,6 +87,9 @@ export default function WalkInBookingPage() {
   const [selectedDeviceType, setSelectedDeviceType] = useState<any>(null);
   const [loadingDevices, setLoadingDevices] = useState(true);
   const [deviceLoadError, setDeviceLoadError] = useState<string | null>(null);
+  const [walkInStations, setWalkInStations] = useState<Array<{ id: string; station_number: string }>>([]);
+  const [selectedWalkInStationId, setSelectedWalkInStationId] = useState("");
+  const [loadingWalkInStations, setLoadingWalkInStations] = useState(false);
 
   // Slot selection
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -302,6 +306,44 @@ export default function WalkInBookingPage() {
     loadDeviceTypes();
   }, []);
 
+  useEffect(() => {
+    const mediumType = deviceTypes.find((deviceType) => deviceType.name === "medium_snooker");
+    if (mode !== "session" || !mediumType) {
+      setWalkInStations([]);
+      setSelectedWalkInStationId("");
+      setLoadingWalkInStations(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingWalkInStations(true);
+    getWalkInStationOptions(mediumType.id)
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.success) {
+          setWalkInStations([]);
+          setSelectedWalkInStationId("");
+          toast.error("Could not load Medium Snooker tables", { description: result.error });
+          return;
+        }
+        setWalkInStations(result.stations || []);
+        setSelectedWalkInStationId("");
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setWalkInStations([]);
+          setSelectedWalkInStationId("");
+          console.error("Could not load walk-in stations:", error);
+          toast.error("Could not load Medium Snooker tables");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingWalkInStations(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [deviceTypes, mode]);
+
   /**
    * One fetch per date and device type. Deliberately not keyed on the duration:
    * `availableStartTimes` below derives that from occupancy already in hand.
@@ -417,9 +459,10 @@ export default function WalkInBookingPage() {
     }
   };
 
-  const handleSelectDeviceType = (deviceType: any) => {
+  const handleSelectDeviceType = (deviceType: any, stationId?: string) => {
     setSelectedDeviceType(deviceType);
     setPlayerCount(deviceType.included_players || 1);
+    setSelectedWalkInStationId(stationId || "");
     // A walk-in has no slot to pick: the clock starts when the customer is
     // checked in, so the date and duration step is skipped entirely.
     setStep(mode === "session" ? 3 : 2);
@@ -550,6 +593,10 @@ export default function WalkInBookingPage() {
       toast.error("Invalid Date of Birth", { description: DOB_ERROR });
       return;
     }
+    if (selectedDeviceType?.name === "medium_snooker" && !selectedWalkInStationId) {
+      toast.error("Choose Medium Snooker table 1 or 2");
+      return;
+    }
 
     // Refused here as well as on the server. The server's copy is the one that
     // decides, but a desk with a customer in front of them should not have to
@@ -609,6 +656,7 @@ export default function WalkInBookingPage() {
       deviceTypeId: selectedDeviceType.id,
       deviceTypeName: selectedDeviceType.display_name,
       playerCount,
+      preferredDeviceId: selectedDeviceType.name === "medium_snooker" ? selectedWalkInStationId : null,
       startedClock,
       plannedEndClock
     });
@@ -1031,6 +1079,48 @@ export default function WalkInBookingPage() {
                     : deviceType.total_devices_count ?? deviceType.available_devices_count ?? 0;
                   const isAvailable = availableCount > 0;
                   const canPick = isAvailable || !bookingNow;
+
+                  if (bookingNow && deviceType.name === "medium_snooker") {
+                    return (
+                      <Fragment key={`medium-tables-${deviceType.id}`}>
+                        {loadingWalkInStations ? (
+                          <Card className="border border-zinc-800 bg-[var(--surface)] p-4 text-sm text-muted-content">
+                            Loading Medium Snooker tables…
+                          </Card>
+                        ) : walkInStations.length === 0 ? (
+                          <Card className="border border-zinc-800 bg-[var(--surface)] p-4 text-sm text-muted-content">
+                            No Medium Snooker tables are configured.
+                          </Card>
+                        ) : walkInStations.map((station, stationIndex) => (
+                          <Card
+                            key={station.id}
+                            className={`bg-[var(--surface)] border p-4 transition-all ${canPick
+                              ? "cursor-pointer border-zinc-900 hover:border-primary"
+                              : "cursor-not-allowed border-zinc-900 opacity-50"
+                              }`}
+                            onClick={() => canPick && handleSelectDeviceType(deviceType, station.id)}
+                          >
+                            <div className="space-y-3">
+                              <div className="flex justify-between items-start gap-2">
+                                <div>
+                                  <h3 className="font-black text-sm uppercase">Medium Snooker Table {stationIndex + 1}</h3>
+                                  <p className="text-label mt-1">{station.station_number}</p>
+                                </div>
+                                <span className={`rounded px-2 py-1 text-xs font-black ${canPick ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"}`}>
+                                  {canPick ? "SELECT TABLE" : "UNAVAILABLE"}
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-lg font-black text-primary">₹{Number(deviceType.regular_hourly_rate)}</span>
+                                <span className="text-xs text-muted-content">/hour</span>
+                              </div>
+                            </div>
+                          </Card>
+                        ))}
+                      </Fragment>
+                    );
+                  }
+
                   return (
                     <Card
                       key={deviceType.id}
@@ -1401,6 +1491,14 @@ export default function WalkInBookingPage() {
                   <span className="text-secondary-content">Device Configuration:</span>
                   <span className="text-white font-bold uppercase">{selectedDeviceType.display_name}</span>
                 </div>
+                {mode === "session" && selectedDeviceType.name === "medium_snooker" && (
+                  <div className="flex justify-between border-b border-zinc-900/60 pb-2">
+                    <span className="text-secondary-content">Assigned Table:</span>
+                    <span className="font-bold text-primary">
+                      {walkInStations.find((station) => station.id === selectedWalkInStationId)?.station_number || "Select a table"}
+                    </span>
+                  </div>
+                )}
                 {mode === "advance" && (
                   <>
                     <div className="flex justify-between border-b border-zinc-900/60 pb-2">
@@ -1785,6 +1883,7 @@ export default function WalkInBookingPage() {
                   // window nobody chose - so the button waits rather than guess.
                   disabled={
                     submitting ||
+                    (mode === "session" && selectedDeviceType.name === "medium_snooker" && (loadingWalkInStations || !selectedWalkInStationId)) ||
                     (mode === "session" && startMode === "manual" && !manualStartCheck?.ok) ||
                     (mode === "session" &&
                       startMode === "manual" &&

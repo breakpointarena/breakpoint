@@ -42,6 +42,7 @@ BEGIN
   INSERT INTO public.devices (device_type_id, station_number, status, specs) VALUES
     (v_standard_snooker_id, 'SS-001', 'available', 'Full size standard snooker table with professional grade cloth. Includes cues, balls, and triangle. Up to 8 players (4 included in base rate).'),
     (v_medium_snooker_id, 'MS-001', 'available', 'Medium size snooker table perfect for casual play. Includes all accessories. Up to 8 players (4 included in base rate).'),
+    (v_medium_snooker_id, 'MS-002', 'available', 'Medium size snooker table perfect for casual play. Includes all accessories. Up to 8 players (4 included in base rate).'),
     (v_american_pool_id, 'AP-001', 'available', 'Professional American pool table with aramith balls. Includes cues and chalk. Up to 8 players (4 included in base rate).'),
     (v_ps5_id, 'PS5-001', 'available', 'PlayStation 5 console with DualSense controller, 4K gaming, and latest game library. Solo rate ₹200/hour; groups ₹150/player/hour.'),
     (v_other_id, 'BG-001', 'available', 'FI simulator experience. Contact staff for details.');

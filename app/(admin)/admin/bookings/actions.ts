@@ -202,6 +202,8 @@ const BOOKING_LIST_SELECT = `
         lock_expires_at,
         billed_on_actual_time,
         shared_play_enabled,
+        walk_in_device_type_id,
+        walk_in_preferred_device_id,
         walk_in_pending_start_time,
         walk_in_pending_end_time,
         walk_in_planned_end,
@@ -212,6 +214,7 @@ const BOOKING_LIST_SELECT = `
           slot_date,
           slot_start_time,
           slot_end_time,
+          device_id,
           device_type,
           device_station_number,
           duration_hours,
@@ -577,6 +580,122 @@ export async function checkInBooking(bookingId: string) {
   } catch (err: any) {
     console.error("Check-in booking error:", err);
     return { success: false, error: err.message };
+  }
+}
+
+/** Medium Snooker is selected by type for customers; staff choose a table at check-in. */
+export async function getBookingStationOptions(bookingId: string) {
+  await requireStaff();
+
+  try {
+    const { data: booking, error: bookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("billed_on_actual_time, walk_in_device_type_id, walk_in_preferred_device_id")
+      .eq("id", bookingId)
+      .maybeSingle();
+    if (bookingError) throw bookingError;
+    if (!booking) return { success: false as const, error: "Booking not found." };
+
+    let deviceTypeId = booking.walk_in_device_type_id as string | null;
+    let currentDeviceId: string | null = booking.walk_in_preferred_device_id ?? null;
+
+    if (!booking.billed_on_actual_time) {
+      const { data: slot, error: slotError } = await supabaseAdmin
+        .from("booking_device_slots")
+        .select("device_id")
+        .eq("booking_id", bookingId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (slotError) throw slotError;
+      if (!slot) return { success: true as const, requiresStationSelection: false as const, stations: [], currentDeviceId: null };
+      currentDeviceId = slot.device_id;
+
+      const { data: device, error: deviceError } = await supabaseAdmin
+        .from("devices")
+        .select("device_type_id")
+        .eq("id", slot.device_id)
+        .maybeSingle();
+      if (deviceError) throw deviceError;
+      deviceTypeId = device?.device_type_id ?? null;
+    }
+
+    if (!deviceTypeId) return { success: true as const, requiresStationSelection: false as const, stations: [], currentDeviceId };
+
+    const { data: deviceType, error: typeError } = await supabaseAdmin
+      .from("device_types")
+      .select("name")
+      .eq("id", deviceTypeId)
+      .maybeSingle();
+    if (typeError) throw typeError;
+    if (deviceType?.name !== "medium_snooker") {
+      return { success: true as const, requiresStationSelection: false as const, stations: [], currentDeviceId };
+    }
+
+    const { data: stations, error: stationsError } = await supabaseAdmin
+      .from("devices")
+      .select("id, station_number")
+      .eq("device_type_id", deviceTypeId)
+      .eq("status", "available")
+      .order("station_number", { ascending: true });
+    if (stationsError) throw stationsError;
+
+    return {
+      success: true as const,
+      requiresStationSelection: true as const,
+      stations: stations || [],
+      currentDeviceId,
+      preferredDeviceId: booking.walk_in_preferred_device_id ?? null,
+    };
+  } catch (err: any) {
+    console.error("Get booking station options error:", err);
+    return { success: false as const, error: err.message || "Could not load Medium Snooker tables." };
+  }
+}
+
+/** Check in a fixed Medium booking after atomically assigning its physical table. */
+export async function checkInBookingOnStation(bookingId: string, deviceId: string) {
+  await requireStaff();
+
+  try {
+    if (!deviceId) return { success: false as const, error: "Choose a Medium Snooker table." };
+    const { data, error } = await supabaseAdmin.rpc("checkin_booking_on_medium_station_v1", {
+      p_booking_id: bookingId,
+      p_device_id: deviceId,
+    });
+    if (error) throw error;
+    const result = Array.isArray(data) ? data[0] : data;
+    if (!result) return { success: false as const, error: "This booking changed before check-in. Refresh and try again." };
+    return { success: true as const, stationNumber: result.station_number as string };
+  } catch (err: any) {
+    console.error("Check in Medium Snooker booking error:", err);
+    const message = String(err?.message || "Could not check in this booking.");
+    return {
+      success: false as const,
+      error: message.includes("already booked") || message.includes("already in use")
+        ? "That table is already booked for this time. Choose the other Medium Snooker table."
+        : message,
+    };
+  }
+}
+
+/** Tables staff may select for an admin-created walk-in. */
+export async function getWalkInStationOptions(deviceTypeId: string) {
+  await requireStaff();
+  if (!deviceTypeId) return { success: false as const, error: "Choose a device type first.", stations: [] };
+
+  try {
+    const { data: stations, error } = await supabaseAdmin
+      .from("devices")
+      .select("id, station_number")
+      .eq("device_type_id", deviceTypeId)
+      .eq("status", "available")
+      .order("station_number", { ascending: true });
+    if (error) throw error;
+    return { success: true as const, stations: stations || [] };
+  } catch (err: any) {
+    console.error("Get walk-in station options error:", err);
+    return { success: false as const, error: err.message || "Could not load device stations.", stations: [] };
   }
 }
 
@@ -2912,6 +3031,7 @@ export async function createWalkInSession(payload: {
   deviceTypeId: string;
   deviceTypeName: string;
   playerCount: number;
+  preferredDeviceId?: string | null;
   /**
    * 24-hour `HH:MM` the customer started playing, for a walk-in that was already
    * under way before the desk typed it in. Null - the ordinary case - creates the
@@ -2954,6 +3074,28 @@ export async function createWalkInSession(payload: {
   }
 
   try {
+    const { data: deviceType, error: deviceTypeError } = await supabaseAdmin
+      .from("device_types")
+      .select("id, name")
+      .eq("id", payload.deviceTypeId)
+      .maybeSingle();
+    if (deviceTypeError) throw deviceTypeError;
+    if (!deviceType) return { success: false, error: "That device type is no longer available." };
+    if (deviceType.name === "medium_snooker" && !payload.preferredDeviceId) {
+      return { success: false, error: "Choose Medium Snooker table 1 or 2." };
+    }
+    if (payload.preferredDeviceId) {
+      const { data: preferredDevice, error: preferredDeviceError } = await supabaseAdmin
+        .from("devices")
+        .select("id")
+        .eq("id", payload.preferredDeviceId)
+        .eq("device_type_id", payload.deviceTypeId)
+        .eq("status", "available")
+        .maybeSingle();
+      if (preferredDeviceError) throw preferredDeviceError;
+      if (!preferredDevice) return { success: false, error: "Choose a valid station for this device type." };
+    }
+
     const { data: customerId, error: customerError } = await supabaseAdmin
       .rpc("get_or_create_customer", {
         p_phone: payload.customerPhone,
@@ -2994,6 +3136,7 @@ export async function createWalkInSession(payload: {
         walk_in_device_type_id: payload.deviceTypeId,
         walk_in_device_type_name: payload.deviceTypeName,
         walk_in_player_count: payload.playerCount,
+        walk_in_preferred_device_id: payload.preferredDeviceId || null,
         walk_in_pending_start_time: payload.startedClock || null,
         walk_in_pending_end_time: payload.startedClock ? payload.plannedEndClock || null : null,
         lock_expires_at: null
@@ -3024,7 +3167,8 @@ export async function createWalkInSession(payload: {
       const checkIn = await checkInWalkInSession(
         booking.id,
         payload.startedClock,
-        payload.plannedEndClock
+        payload.plannedEndClock,
+        payload.preferredDeviceId
       );
       if (checkIn.success) {
         checkedIn = true;
@@ -3078,7 +3222,8 @@ export async function checkInWalkInSession(
    * wants. It decides how long the station is claimed for and nothing else - the
    * bill still comes from checkout.
    */
-  plannedEndClock?: string | null
+  plannedEndClock?: string | null,
+  preferredDeviceId?: string | null
 ) {
   await requireStaff();
 
@@ -3088,7 +3233,8 @@ export async function checkInWalkInSession(
       .select(
         `status, checked_in_at, billed_on_actual_time,
          walk_in_device_type_id, walk_in_device_type_name, walk_in_player_count,
-         walk_in_pending_start_time, walk_in_pending_end_time`
+         walk_in_pending_start_time, walk_in_pending_end_time,
+         walk_in_preferred_device_id`
       )
       .eq("id", bookingId)
       .maybeSingle();
@@ -3135,7 +3281,11 @@ export async function checkInWalkInSession(
     if (deviceTypeError) throw deviceTypeError;
     if (!deviceType) return { success: false, error: "That device type no longer exists." };
 
-    const { data, error } = await supabaseAdmin.rpc("checkin_walkin_session", {
+    const selectedDeviceId = preferredDeviceId || booking.walk_in_preferred_device_id || null;
+    const rpcName = selectedDeviceId
+      ? "checkin_walkin_session_on_medium_station_v1"
+      : "checkin_walkin_session";
+    const { data, error } = await supabaseAdmin.rpc(rpcName, {
       p_booking_id: bookingId,
       p_device_type_id: deviceType.id,
       p_device_type: booking.walk_in_device_type_name || deviceType.display_name,
@@ -3152,7 +3302,8 @@ export async function checkInWalkInSession(
       p_started_clock: startedFrom,
       p_max_backdate_hours: MAX_BACKDATED_START_HOURS,
       p_planned_end: plannedEnd,
-      p_max_session_hours: MAX_PLANNED_SESSION_HOURS
+      p_max_session_hours: MAX_PLANNED_SESSION_HOURS,
+      ...(selectedDeviceId ? { p_device_id: selectedDeviceId } : {}),
     });
 
     if (error) throw error;

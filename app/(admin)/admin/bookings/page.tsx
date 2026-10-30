@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Calendar as CalendarPicker } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -19,7 +18,7 @@ import { RevealAmount } from "@/components/admin/dashboard/RevealAmount";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { CheckoutModal } from "@/components/admin/bookings/CheckoutModal";
 import { CheckOutSessionDialog, type CheckOutTarget } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, deleteBooking, type BookingFilters } from "./actions";
+import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkInBookingOnStation, getBookingStationOptions, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, deleteBooking, type BookingFilters } from "./actions";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2, LogIn, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -87,6 +86,9 @@ export default function AdminBookingsPage() {
   const [cancelTarget, setCancelTarget] = useState<any>(null);
   /** The waiting walk-in about to be started, while the dialog is open. */
   const [checkInTarget, setCheckInTarget] = useState<any>(null);
+  const [checkInStations, setCheckInStations] = useState<Array<{ id: string; station_number: string }>>([]);
+  const [checkInStationId, setCheckInStationId] = useState("");
+  const [checkInNeedsStation, setCheckInNeedsStation] = useState(false);
   /** 24-hour `HH:MM` the customer says they will finish. Empty means they did not say. */
   const [checkInPlannedEnd, setCheckInPlannedEnd] = useState("");
 
@@ -557,9 +559,9 @@ export default function AdminBookingsPage() {
    * it the only way to record that was the New Walk-In form, so a booking taken
    * earlier in the evening could never be given one at all.
    */
-  const startWalkInSession = (bookingId: string, plannedEndClock: string | null) => {
+  const startWalkInSession = (bookingId: string, plannedEndClock: string | null, stationId: string | null) => {
     startTransition(async () => {
-      const result = await checkInWalkInSession(bookingId, null, plannedEndClock);
+      const result = await checkInWalkInSession(bookingId, null, plannedEndClock, stationId);
       if (result.success) {
         toast.success("Checked in — playing now", {
           description:
@@ -571,6 +573,9 @@ export default function AdminBookingsPage() {
         });
         setCheckInTarget(null);
         setCheckInPlannedEnd("");
+        setCheckInStations([]);
+        setCheckInStationId("");
+        setCheckInNeedsStation(false);
         refreshAll();
       } else {
         toast.error("Check-in failed", { description: result.error });
@@ -586,6 +591,23 @@ export default function AdminBookingsPage() {
     if (booking.billed_on_actual_time) {
       setCheckInPlannedEnd("");
       setCheckInTarget(booking);
+      setCheckInStations([]);
+      setCheckInStationId("");
+      setCheckInNeedsStation(false);
+      const stationOptions = await getBookingStationOptions(bookingId);
+      if (!stationOptions.success) {
+        toast.error("Could not load table assignment", { description: stationOptions.error });
+        return;
+      }
+      if (stationOptions.requiresStationSelection) {
+        setCheckInStations(stationOptions.stations);
+        setCheckInNeedsStation(true);
+        setCheckInStationId(
+          stationOptions.preferredDeviceId ||
+          stationOptions.currentDeviceId ||
+          stationOptions.stations[0]?.id || ""
+        );
+      }
       return;
     }
 
@@ -608,12 +630,48 @@ export default function AdminBookingsPage() {
       }
     }
 
+    const stationOptions = await getBookingStationOptions(bookingId);
+    if (!stationOptions.success) {
+      toast.error("Could not load table assignment", { description: stationOptions.error });
+      return;
+    }
+    if (stationOptions.requiresStationSelection) {
+      setCheckInTarget(booking);
+      setCheckInStations(stationOptions.stations);
+      setCheckInNeedsStation(true);
+      setCheckInStationId(stationOptions.currentDeviceId || stationOptions.stations[0]?.id || "");
+      return;
+    }
+
     startTransition(async () => {
       const result = await checkInBooking(bookingId);
       if (result.success) {
         toast.success("Customer checked in successfully", {
           description: `Booking ${bookingNumber} is now active`
         });
+        refreshAll();
+      } else {
+        toast.error("Check-in failed", { description: result.error });
+      }
+    });
+  };
+
+  const checkInMediumBooking = () => {
+    const target = checkInTarget;
+    if (!target || !checkInStationId) {
+      toast.error("Choose Medium Snooker table 1 or 2.");
+      return;
+    }
+
+    startTransition(async () => {
+      const result = await checkInBookingOnStation(target.id, checkInStationId);
+      if (result.success) {
+        toast.success("Customer checked in successfully", {
+          description: `Booking ${target.booking_number} · Station ${result.stationNumber}`
+        });
+        setCheckInTarget(null);
+        setCheckInStations([]);
+        setCheckInStationId("");
         refreshAll();
       } else {
         toast.error("Check-in failed", { description: result.error });
@@ -1977,6 +2035,9 @@ export default function AdminBookingsPage() {
           if (!open) {
             setCheckInTarget(null);
             setCheckInPlannedEnd("");
+            setCheckInStations([]);
+            setCheckInStationId("");
+            setCheckInNeedsStation(false);
           }
         }}
       >
@@ -1987,9 +2048,11 @@ export default function AdminBookingsPage() {
               Check In
             </DialogTitle>
             <DialogDescription className="text-sm text-secondary-content">
-              {checkInTarget?.walk_in_pending_start_time
-                ? `Billing starts at ${formatDbTime(String(checkInTarget.walk_in_pending_start_time))} as entered on the new walk-in form.`
-                : "The clock starts now."} The bill is worked out at checkout from the time actually played.
+              {checkInTarget?.billed_on_actual_time
+                ? <>{checkInTarget?.walk_in_pending_start_time
+                    ? `Billing starts at ${formatDbTime(String(checkInTarget.walk_in_pending_start_time))} as entered on the new walk-in form.`
+                    : "The clock starts now."} The bill is worked out at checkout from the time actually played.</>
+                : "Choose the Medium Snooker table for this customer, then confirm check-in."}
             </DialogDescription>
           </DialogHeader>
 
@@ -2001,11 +2064,45 @@ export default function AdminBookingsPage() {
                 </p>
                 <p className="text-sm text-white">{checkInTarget.customer_name}</p>
                 <p className="text-label">
-                  {checkInTarget.walk_in_device_type_name || "Walk-in session"}
+                  {checkInTarget.walk_in_device_type_name || checkInTarget.booking_device_slots?.[0]?.device_type || "Walk-in session"}
                 </p>
               </div>
 
-              <div className="space-y-2">
+              {checkInNeedsStation && (
+                <div className="space-y-2">
+                  <Label className="text-label text-muted-content">Assign Medium Snooker Table</Label>
+                  {checkInStations.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {checkInStations.map((station, index) => {
+                        const isSelected = checkInStationId === station.id;
+                        return (
+                          <button
+                            key={station.id}
+                            type="button"
+                            onClick={() => setCheckInStationId(station.id)}
+                            aria-pressed={isSelected}
+                            className={`rounded-xl border-2 p-4 text-left transition-colors ${isSelected
+                              ? "border-primary bg-primary/10"
+                              : "border-zinc-800 bg-[var(--surface)] hover:border-zinc-600"
+                              }`}
+                          >
+                            <span className={`block text-sm font-black uppercase ${isSelected ? "text-primary" : "text-white"}`}>
+                              Medium {index + 1}
+                            </span>
+                            <span className="mt-1 block text-xs text-muted-content">{station.station_number}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300">
+                      No Medium Snooker tables are available to assign.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {checkInTarget?.billed_on_actual_time && <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <Label className="text-label text-muted-content">
                     Planned end <span className="text-muted-content/60">(optional)</span>
@@ -2044,7 +2141,7 @@ export default function AdminBookingsPage() {
                     {checkInPlannedEndCheck?.error}
                   </p>
                 )}
-              </div>
+              </div>}
             </div>
           )}
 
@@ -2060,16 +2157,22 @@ export default function AdminBookingsPage() {
               Cancel
             </Button>
             <Button
-              onClick={() =>
-                startWalkInSession(
-                  checkInTarget.id,
-                  checkInPlannedEndCheck?.ok ? checkInPlannedEndCheck.session.end.clock : null
-                )
+              onClick={() => checkInTarget?.billed_on_actual_time
+                ? startWalkInSession(
+                    checkInTarget.id,
+                    checkInPlannedEndCheck?.ok ? checkInPlannedEndCheck.session.end.clock : null,
+                    checkInNeedsStation ? checkInStationId : null
+                  )
+                : checkInMediumBooking()
               }
-              disabled={isPending || (!!checkInPlannedEnd && !checkInPlannedEndCheck?.ok)}
+              disabled={
+                isPending ||
+                (checkInNeedsStation && !checkInStationId) ||
+                (checkInTarget?.billed_on_actual_time && !!checkInPlannedEnd && !checkInPlannedEndCheck?.ok)
+              }
               className="flex-1 bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] font-black uppercase text-xs h-10 rounded-lg disabled:opacity-50"
             >
-              {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Start Session"}
+              {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : checkInTarget?.billed_on_actual_time ? "Start Session" : "Check In"}
             </Button>
           </DialogFooter>
         </DialogContent>
