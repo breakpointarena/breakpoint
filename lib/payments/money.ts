@@ -29,6 +29,18 @@ export function deviceCharge(hourlyRate: number, durationHours: number): number 
   return roundRupees(hourlyRate * durationHours)
 }
 
+/** Resolve the hourly base for solo pricing overrides such as Private PS5. */
+export function hourlyRateForPlayerCount(
+  deviceTypeName: string | null | undefined,
+  groupHourlyRate: number,
+  singlePlayerHourlyRate: number | null | undefined,
+  playerCount: number
+): number {
+  return Boolean(deviceTypeName) && playerCount === 1 && singlePlayerHourlyRate != null && Number.isFinite(Number(singlePlayerHourlyRate))
+    ? Number(singlePlayerHourlyRate)
+    : groupHourlyRate
+}
+
 /**
  * What the extra players cost for the session.
  *

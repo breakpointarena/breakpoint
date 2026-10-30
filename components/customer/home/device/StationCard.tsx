@@ -8,6 +8,7 @@ import { Loader2 } from 'lucide-react';
 
 export function StationCard({ station, motionProps }: { station: Station; motionProps: object }) {
     const avail = station.isAvailable
+    const isPlayStation = station.name.toLowerCase().includes("ps5")
     const [isLoading, setIsLoading] = useState(false)
 
     const router = useRouter()
@@ -17,21 +18,23 @@ export function StationCard({ station, motionProps }: { station: Station; motion
         dispatch(resetBooking());
 
         const hourlyRate = Number(station.regular_hourly_rate) || 0;
+        const singlePlayerHourlyRate = Number(station.single_player_hourly_rate ?? hourlyRate) || 0;
 
         dispatch(setDeviceType({
             id: station.device_type_id,
             name: station.name,
             hourlyRate: hourlyRate,
+            singlePlayerHourlyRate,
             includedPlayers: station.included_players,
             maxPlayers: station.max_players,
             extraPlayerCharge: Number(station.extra_player_charge)
         }));
 
         dispatch(setPricing({
-            subtotal: hourlyRate,
+            subtotal: singlePlayerHourlyRate,
             subscriptionDiscount: 0,
             promoDiscount: 0,
-            total: hourlyRate
+            total: singlePlayerHourlyRate
         }));
 
         router.push('/booking/slots-v2')
@@ -91,23 +94,29 @@ export function StationCard({ station, motionProps }: { station: Station; motion
                             className="text-white font-black text-xl min-[581px]:text-2xl leading-none"
                             style={{ fontFamily: "'Rajdhani', sans-serif" }}
                         >
-                            ₹{station.regular_hourly_rate}
+                            ₹{station.single_player_hourly_rate ?? station.regular_hourly_rate}
                         </span>
                         <span className="text-white/65 text-[11px] font-semibold uppercase tracking-widest">
-                            / hr
+                            {isPlayStation ? "/ hr solo" : "/ hr"}
                         </span>
                     </div>
 
                     {/* Meta Pills */}
                     <div className="flex flex-wrap gap-1 min-[581px]:gap-1.5 mb-2 min-[581px]:mb-3">
+                        {!isPlayStation && (
                         <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
                             Incl. <span className="text-white font-semibold">{station.included_players}</span>{' '}
                             players
                         </span>
+                        )}
                         <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
                             Max <span className="text-white font-semibold">{station.max_players}</span>
                         </span>
-                        {station.extra_player_charge > 0 ? (
+                        {isPlayStation ? (
+                            <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
+                                Group rate <span className="text-white font-semibold">{station.regular_hourly_rate}</span>/player/hr
+                            </span>
+                        ) : station.extra_player_charge > 0 ? (
                             <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
                                 +<span className="text-white font-semibold">₹{station.extra_player_charge}</span>
                                 /extra

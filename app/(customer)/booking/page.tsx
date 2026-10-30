@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Users, Sparkles } from 'lucide-react';
 import { getDeviceTypesWithAvailability } from "./actions";
 import Link from "next/link";
+import { hourlyRateForPlayerCount } from "@/lib/payments/money";
 
 export default function GamingStationPage() {
   const router = useRouter();
@@ -20,7 +21,7 @@ export default function GamingStationPage() {
   const [activeFilter, setActiveFilter] = useState("All Devices");
 
   const deviceFilters = [
-    { label: "Console", matches: (type: any) => type.name === "ps5" },
+    { label: "Console", matches: (type: any) => type.name === "ps5" || type.name === "private_ps5" },
     { label: "PC", matches: (type: any) => type.name === "gaming_pc" },
     { label: "Snooker", matches: (type: any) => type.name?.includes("snooker") },
     { label: "American Pool", matches: (type: any) => type.name === "american_pool" || type.name === "american_snooker" },
@@ -47,12 +48,15 @@ export default function GamingStationPage() {
   }, [dispatch]);
 
   const handleSelectAndProceed = (deviceType: any) => {
-    const hourlyRate = Number(deviceType.regular_hourly_rate) || 0;
+    const groupHourlyRate = Number(deviceType.regular_hourly_rate) || 0;
+    const singlePlayerHourlyRate = Number(deviceType.single_player_hourly_rate ?? groupHourlyRate) || 0;
+    const hourlyRate = hourlyRateForPlayerCount(deviceType.name, groupHourlyRate, singlePlayerHourlyRate, 1);
 
     dispatch(setDeviceType({
       id: deviceType.id,
       name: deviceType.display_name,
-      hourlyRate: hourlyRate,
+      hourlyRate: groupHourlyRate,
+      singlePlayerHourlyRate,
       includedPlayers: deviceType.included_players,
       maxPlayers: deviceType.max_players,
       extraPlayerCharge: Number(deviceType.extra_player_charge)
@@ -161,14 +165,19 @@ export default function GamingStationPage() {
                         </h4>
                         <p className="text-min text-secondary-content font-bold mt-0.5 flex items-center gap-1">
                           <Users className="h-3 w-3" />
-                          {deviceType.included_players} included • Max {deviceType.max_players}
+                          {deviceType.name?.includes("ps5") ? "Group priced per player" : `${deviceType.included_players} included`} • Max {deviceType.max_players}
                         </p>
                       </div>
                       <div className="text-right flex-shrink-0 flex items-baseline gap-1 mt-1">
-                        <span className="text-lg font-black text-primary">₹{Number(deviceType.regular_hourly_rate)}</span>
+                        <span className="text-lg font-black text-primary">₹{Number(deviceType.single_player_hourly_rate ?? deviceType.regular_hourly_rate)}</span>
                         <span className="text-xs text-zinc-300 font-bold">/hr</span>
                       </div>
                     </div>
+                    {deviceType.name?.includes("ps5") && (
+                      <p className="text-xs font-semibold text-secondary-content text-right">
+                        Group rate: ₹{Number(deviceType.regular_hourly_rate)} per player / hour
+                      </p>
+                    )}
 
                     {/* No clamp: the card is normal flow inside a grid, so rows equalise
                         height and `justify-between` keeps the buttons aligned. Clamping to

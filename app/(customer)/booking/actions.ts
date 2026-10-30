@@ -39,6 +39,7 @@ export async function getDeviceTypesWithAvailability() {
         name,
         display_name,
         regular_hourly_rate,
+        single_player_hourly_rate,
         included_players,
         max_players,
         extra_player_charge,
@@ -114,6 +115,7 @@ export async function getLiveDevicesFromInventory() {
           name,
           display_name,
           regular_hourly_rate,
+          single_player_hourly_rate,
           included_players,
           max_players,
           extra_player_charge

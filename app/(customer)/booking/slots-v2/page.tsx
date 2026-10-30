@@ -32,12 +32,12 @@ import {
 import { availableStartMinutes, type DeviceTypeOccupancy } from "@/lib/bookings/slotAvailability";
 import { useHappyHours } from "@/lib/hooks/useHappyHours";
 import { formatCurrency } from "@/lib/currency";
-import { extraPlayersCharge, perExtraPlayerCharge } from "@/lib/payments/money";
+import { extraPlayersCharge, hourlyRateForPlayerCount, perExtraPlayerCharge } from "@/lib/payments/money";
 
 export default function FlexibleSlotBookingPage() {
   const router = useRouter();
   const dispatch = useAppDispatch();
-  const { deviceTypeId, deviceTypeName, hourlyRate, addons, playerCount, includedPlayers, maxPlayers, extraPlayerCharge, hydrated, bookingId, holdToken } = useAppSelector((state) => state.booking);
+  const { deviceTypeId, deviceTypeName, hourlyRate, singlePlayerHourlyRate, addons, playerCount, includedPlayers, maxPlayers, extraPlayerCharge, hydrated, bookingId, holdToken } = useAppSelector((state) => state.booking);
 
   const [calendarDay, setCalendarDay] = useState<Date | undefined>(undefined);
   const confirmButtonRef = useRef<HTMLDivElement>(null);
@@ -293,7 +293,8 @@ export default function FlexibleSlotBookingPage() {
   // checkout then disagrees with.
   const extraPlayersTotal = extraPlayersCharge(extraPlayersCount, extraPlayerCharge, durationHours);
   const perPlayerCharge = perExtraPlayerCharge(extraPlayerCharge, durationHours);
-  const baselineSubtotal = calculatePrice(hourlyRate || 0, selectedDuration);
+  const effectiveHourlyRate = hourlyRateForPlayerCount(deviceTypeName, hourlyRate || 0, singlePlayerHourlyRate, playerCount);
+  const baselineSubtotal = calculatePrice(effectiveHourlyRate, selectedDuration);
 
   // Check for Happy Hour discount
   const happyHourInfo = useMemo(() => {

@@ -18,7 +18,7 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
 import { getDeviceTypes } from "@/app/(admin)/admin/devices/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
@@ -47,6 +47,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { formatPlayedDuration, MAX_BACKDATED_START_HOURS, playedMinutes, priceSession, resolveBackdatedStart, resolvePlannedSession } from "@/lib/bookings/walkInSession";
 import { calculateSharedPlayShares, getSharedPlaySessions } from "@/lib/bookings/sharedPlay";
 import type { SharedPlayCustomer, SharedPlayParticipant } from "@/lib/types/shared-play";
+import { getUserRole } from "@/lib/auth/roles";
 
 interface BookingDetailModalProps {
   bookingId: string | null;
@@ -72,6 +73,9 @@ interface BookingDetailModalProps {
 
 export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoodModalDirectly, onPendingPayment, variant = "modal", headerSlot }: BookingDetailModalProps) {
   const [booking, setBooking] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [deleteBookingOpen, setDeleteBookingOpen] = useState(false);
+  const [deletingBooking, setDeletingBooking] = useState(false);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [checkOutOpen, setCheckOutOpen] = useState(false);
@@ -152,6 +156,14 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [participantCustomerDrafts, setParticipantCustomerDrafts] = useState<Record<string, string>>({});
   const [linkingParticipantCustomer, setLinkingParticipantCustomer] = useState<string | null>(null);
   const [sharedPlayNow, setSharedPlayNow] = useState(() => new Date());
+
+  useEffect(() => {
+    let active = true;
+    void getUserRole().then((role) => {
+      if (active) setIsAdmin(role === "admin");
+    });
+    return () => { active = false; };
+  }, []);
 
   /**
    * The draft, read the way the server will read it: forwards from now, since a
@@ -240,6 +252,21 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     // Set on failure too, so a booking that cannot be fetched falls through to
     // the empty state instead of spinning forever.
     setHasLoaded(true);
+  };
+
+  const handleDeleteBooking = async () => {
+    if (!bookingId || deletingBooking) return;
+    setDeletingBooking(true);
+    const result = await deleteBooking(bookingId);
+    setDeletingBooking(false);
+    if (!result.success) {
+      toast.error("Could not delete booking", { description: result.error });
+      return;
+    }
+    toast.success(`Booking ${result.bookingNumber} deleted`);
+    setDeleteBookingOpen(false);
+    onUpdate?.();
+    onClose();
   };
 
   const loadMenuItems = async () => {
@@ -878,6 +905,18 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     booking?.walk_in_device_type_name?.trim().toLowerCase() === "fi simulator" ||
     ["fi_simulator", "other"].includes(deviceSlot?.devices?.device_type?.name) ||
     deviceSlot?.devices?.device_type?.display_name?.trim().toLowerCase() === "fi simulator";
+  const supportsSharedPlay = (() => {
+    const supported = (value: unknown) => [
+      "standard_snooker", "medium_snooker", "american_pool",
+      "standard snooker", "medium snooker", "american pool", "american snooker",
+      "standard snooker table", "medium snooker table", "american pool table",
+    ].includes(String(value || "").trim().toLowerCase());
+    return supported(booking?.walk_in_device_type_name) || booking?.booking_device_slots?.some((slot: any) =>
+      supported(slot.devices?.device_type?.name) ||
+      supported(slot.devices?.device_type?.display_name) ||
+      supported(slot.device_type)
+    );
+  })();
   const sharedPlayPeriods = useMemo(
     () => (booking?.shared_play_participants || []).flatMap((participant: any) =>
       (participant.shared_play_periods || []).map((period: any) => ({
@@ -1053,6 +1092,16 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       )}
                     </div>
                   </div>
+                  {isAdmin && booking.status !== "completed" && !booking.completed_at && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setDeleteBookingOpen(true)}
+                      className="shrink-0 border-red-900/70 text-red-400 hover:bg-red-950/50 hover:text-red-300"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" /> Delete booking
+                    </Button>
+                  )}
                 </div>
               </Card>
 
@@ -1311,7 +1360,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 </Card>
               )}
 
-              {booking.billed_on_actual_time === true &&
+              {booking.billed_on_actual_time === true && (supportsSharedPlay || booking.shared_play_enabled) &&
                 !isFiSimulator &&
                 booking.booking_device_slots?.length === 1 &&
                 (booking.status === "checked_in" || (booking.status === "completed" && booking.shared_play_enabled)) && (
@@ -1340,7 +1389,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                         className="h-10 rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm font-bold text-white"
                       >
                         <option value="standard">Standard play</option>
-                        <option value="shared">Shared play</option>
+                        {(supportsSharedPlay || booking.shared_play_enabled) && <option value="shared">Shared play</option>}
                       </select>
                     ) : (
                       <span className="rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 py-2 text-sm font-bold text-white">Shared play</span>
@@ -2481,6 +2530,33 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteBookingOpen} onOpenChange={(open) => !deletingBooking && setDeleteBookingOpen(open)}>
+        <AlertDialogContent className="border-[#27272a] bg-[var(--surface)] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-xl font-bold">Delete booking permanently?</AlertDialogTitle>
+            <AlertDialogDescription className="text-muted-content">
+              Booking {booking?.booking_number} and its booking details will be permanently deleted. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingBooking} className="border-zinc-700 bg-[#27272a] text-white hover:bg-zinc-800">
+              Keep booking
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void handleDeleteBooking();
+              }}
+              disabled={deletingBooking}
+              className="inline-flex items-center justify-center gap-2 whitespace-nowrap bg-red-600 font-semibold text-white hover:bg-red-700"
+            >
+              {deletingBooking && <Loader2 className="h-4 w-4 animate-spin" />}
+              Delete Booking
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Remove Food Item Confirmation Dialog */}
       <AlertDialog

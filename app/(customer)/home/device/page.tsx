@@ -13,6 +13,7 @@ export interface Station {
   name: string
   station_num: string
   regular_hourly_rate: number
+  single_player_hourly_rate?: number | null
   included_players: number
   max_players: number
   extra_player_charge: number
@@ -253,6 +254,7 @@ export default function DevicePage({ initialDevices }: DevicePageProps = {}) {
                   name: device.device_type?.display_name || 'Unknown Station',
                   station_num: device.station_number,
                   regular_hourly_rate: device.device_type?.regular_hourly_rate || 0,
+                  single_player_hourly_rate: device.device_type?.single_player_hourly_rate ?? device.device_type?.regular_hourly_rate ?? 0,
                   included_players: device.device_type?.included_players || 1,
                   max_players: device.device_type?.max_players || 1,
                   extra_player_charge: device.device_type?.extra_player_charge || 0,

@@ -15,7 +15,7 @@ import {
 import { countAvailableDevicesForRange, toRequestedRange } from './availability'
 import { holdMatchesSlot, loadLiveHold } from '@/lib/bookings/slotHold'
 import { resolveHappyHour } from './happyHour'
-import { round2, deviceCharge, extraPlayersCharge } from './money'
+import { round2, deviceCharge, extraPlayersCharge, hourlyRateForPlayerCount } from './money'
 
 const MIN_DURATION_MINUTES = 30
 const MAX_DURATION_MINUTES = 5 * 60
@@ -389,7 +389,7 @@ export async function quoteDeviceBooking(
     const { data: deviceType, error: deviceTypeError } = await supabaseAdmin
       .from('device_types')
       .select(
-        'id, name, display_name, regular_hourly_rate, included_players, max_players, extra_player_charge, is_active'
+        'id, name, display_name, regular_hourly_rate, single_player_hourly_rate, included_players, max_players, extra_player_charge, is_active'
       )
       .eq('id', input.deviceTypeId)
       .single()
@@ -439,7 +439,12 @@ export async function quoteDeviceBooking(
 
     // --- Charges ---
     const durationHours = durationMinutes / 60
-    const hourlyRate = Number(deviceType.regular_hourly_rate) || 0
+    const hourlyRate = hourlyRateForPlayerCount(
+      deviceType.name,
+      Number(deviceType.regular_hourly_rate) || 0,
+      deviceType.single_player_hourly_rate,
+      playerCount
+    )
     const extraPlayerCharge = Number(deviceType.extra_player_charge) || 0
 
     // Whole rupees, and the extra players rounded one at a time - see money.ts.

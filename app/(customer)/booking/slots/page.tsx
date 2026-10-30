@@ -11,6 +11,7 @@ import { DateSelector } from "@/components/booking/DateSelector";
 import { Clock, ChevronRight, X, Users, Plus, Minus } from 'lucide-react';
 import { toast } from "sonner";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
+import { hourlyRateForPlayerCount } from "@/lib/payments/money";
 import {
   formatLocalDate,
   isDateWithinBookingWindow,
@@ -30,7 +31,7 @@ const staticDaylightSchedulesMatrix = [
 export default function SlotBookingPage() {
   const router = useRouter();
   const dispatch = useAppDispatch();
-  const { deviceTypeId, deviceTypeName, hourlyRate, addons, playerCount, includedPlayers, maxPlayers, extraPlayerCharge } = useAppSelector((state) => state.booking);
+  const { deviceTypeId, deviceTypeName, hourlyRate, singlePlayerHourlyRate, addons, playerCount, includedPlayers, maxPlayers, extraPlayerCharge } = useAppSelector((state) => state.booking);
 
   const [calendarDay, setCalendarDay] = useState<Date | undefined>(undefined);
   const [selectedSlotNode, setSelectedSlotNode] = useState<typeof staticDaylightSchedulesMatrix[0] | null>(null);
@@ -101,7 +102,7 @@ export default function SlotBookingPage() {
 
   const extraPlayersCount = Math.max(0, playerCount - includedPlayers);
   const extraPlayersCharge = extraPlayersCount * extraPlayerCharge;
-  const baselineSubtotal = hourlyRate || 0;
+  const baselineSubtotal = hourlyRateForPlayerCount(deviceTypeName, hourlyRate || 0, singlePlayerHourlyRate, playerCount);
   const deviceAndPlayersSubtotal = baselineSubtotal + extraPlayersCharge;
   const aggregatedPayableTotal = deviceAndPlayersSubtotal + additivesCostAggregated;
 

@@ -75,7 +75,7 @@ import {
 import { useHappyHours } from "@/lib/hooks/useHappyHours";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { bookingNotificationId } from "@/lib/hooks/useAdminNotificationPolling";
-import { extraPlayersCharge, perExtraPlayerCharge, round2 } from "@/lib/payments/money";
+import { extraPlayersCharge, hourlyRateForPlayerCount, perExtraPlayerCharge, round2 } from "@/lib/payments/money";
 
 export default function WalkInBookingPage() {
   const router = useRouter();
@@ -85,6 +85,7 @@ export default function WalkInBookingPage() {
   const [deviceTypes, setDeviceTypes] = useState<any[]>([]);
   const [selectedDeviceType, setSelectedDeviceType] = useState<any>(null);
   const [loadingDevices, setLoadingDevices] = useState(true);
+  const [deviceLoadError, setDeviceLoadError] = useState<string | null>(null);
 
   // Slot selection
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -377,11 +378,22 @@ export default function WalkInBookingPage() {
 
   const loadDeviceTypes = async () => {
     setLoadingDevices(true);
-    const result = await getDeviceTypesWithAvailability();
-    if (result.success) {
+    setDeviceLoadError(null);
+    try {
+      const result = await getDeviceTypesWithAvailability();
+      if (!result.success) {
+        setDeviceTypes([]);
+        setDeviceLoadError(result.error || "Could not load device types.");
+        return;
+      }
       setDeviceTypes(result.deviceTypes || []);
+    } catch (error) {
+      console.error("Error loading walk-in device types:", error);
+      setDeviceTypes([]);
+      setDeviceLoadError("Could not load device types. Please try again.");
+    } finally {
+      setLoadingDevices(false);
     }
-    setLoadingDevices(false);
   };
 
   const loadAvailability = async () => {
@@ -661,7 +673,7 @@ export default function WalkInBookingPage() {
     const extraPlayersCount = Math.max(0, playerCount - (selectedDeviceType?.included_players || 1));
     const durationHours = selectedDuration / 60;
     const extraPlayerCharge = extraPlayersCharge(extraPlayersCount, Number(selectedDeviceType?.extra_player_charge) || 0, durationHours);
-    const baseRate = calculatePrice(Number(selectedDeviceType?.regular_hourly_rate) || 0, selectedDuration);
+    const baseRate = calculatePrice(hourlyRateForPlayerCount(selectedDeviceType?.name, Number(selectedDeviceType?.regular_hourly_rate) || 0, selectedDeviceType?.single_player_hourly_rate, playerCount), selectedDuration);
     const subtotal = baseRate + extraPlayerCharge;
     const subscriptionDiscount = activeSubscription
       ? round2((subtotal * activeSubscription.discount_percentage) / 100)
@@ -743,7 +755,7 @@ export default function WalkInBookingPage() {
   const extraPlayersCount = Math.max(0, playerCount - (selectedDeviceType?.included_players || 1));
   const durationHours = selectedDuration / 60;
   const extraPlayerCharge = extraPlayersCharge(extraPlayersCount, Number(selectedDeviceType?.extra_player_charge) || 0, durationHours);
-  const baseRate = calculatePrice(Number(selectedDeviceType?.regular_hourly_rate) || 0, selectedDuration);
+  const baseRate = calculatePrice(hourlyRateForPlayerCount(selectedDeviceType?.name, Number(selectedDeviceType?.regular_hourly_rate) || 0, selectedDeviceType?.single_player_hourly_rate, playerCount), selectedDuration);
   const subtotal = baseRate + extraPlayerCharge;
   const subscriptionDiscount = activeSubscription
     ? round2((subtotal * activeSubscription.discount_percentage) / 100)
@@ -981,6 +993,22 @@ export default function WalkInBookingPage() {
               <div className="flex items-center justify-center h-64">
                 <BreakpointLoader size="lg" />
               </div>
+            ) : deviceLoadError ? (
+              <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-6 text-center">
+                <p className="font-bold text-red-400">Could not load device types</p>
+                <p className="mt-2 text-sm text-muted-content">{deviceLoadError}</p>
+                <Button type="button" variant="outline" className="mt-4" onClick={loadDeviceTypes}>
+                  <RefreshCw className="mr-2 h-4 w-4" /> Try again
+                </Button>
+              </div>
+            ) : deviceTypes.length === 0 ? (
+              <div className="rounded-lg border border-zinc-800 bg-[var(--surface)] p-6 text-center">
+                <p className="font-bold text-muted-content">No active device types available</p>
+                <p className="mt-2 text-sm text-muted-content">Activate a device type in Device Configuration, then try again.</p>
+                <Button type="button" variant="outline" className="mt-4" onClick={loadDeviceTypes}>
+                  <RefreshCw className="mr-2 h-4 w-4" /> Refresh
+                </Button>
+              </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {deviceTypes.map((deviceType) => {
@@ -1062,7 +1090,7 @@ export default function WalkInBookingPage() {
                 <div className="space-y-1.5 max-h-96 overflow-y-auto pr-1">
                   {filteredDurations.map((duration) => {
                     const isSelected = selectedDuration === duration.value;
-                    const price = calculatePrice(Number(selectedDeviceType.regular_hourly_rate) || 0, duration.value);
+                    const price = calculatePrice(hourlyRateForPlayerCount(selectedDeviceType.name, Number(selectedDeviceType.regular_hourly_rate) || 0, selectedDeviceType.single_player_hourly_rate, playerCount), duration.value);
                     return (
                       <button
                         key={duration.value}

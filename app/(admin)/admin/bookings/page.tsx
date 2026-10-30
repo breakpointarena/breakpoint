@@ -19,9 +19,9 @@ import { RevealAmount } from "@/components/admin/dashboard/RevealAmount";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { CheckoutModal } from "@/components/admin/bookings/CheckoutModal";
 import { CheckOutSessionDialog, type CheckOutTarget } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, type BookingFilters } from "./actions";
+import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, deleteBooking, type BookingFilters } from "./actions";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
-import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2, LogIn } from "lucide-react";
+import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2, LogIn, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { useDebounce } from "@/lib/hooks/useDebounce";
@@ -29,6 +29,7 @@ import { CountUp } from "@/components/shared/CountUp";
 import { roundToTwo, formatCurrency } from "@/lib/currency";
 import { liveSessionEstimate } from "@/lib/bookings/liveSessionAmount";
 import { formatDbTime, formatDbTimeRange } from "@/lib/utils/timeSlots";
+import { getUserRole } from "@/lib/auth/roles";
 import { BookingTimingCell } from "@/components/admin/bookings/SessionTimeline";
 import { TimeOfDayField } from "@/components/ui/time-of-day-field";
 import {
@@ -79,6 +80,9 @@ export default function AdminBookingsPage() {
   const [dateTo, setDateTo] = useState(() => arenaToday());
   const [activeQuickFilter, setActiveQuickFilter] = useState<string>("today");
   const [selectedBooking, setSelectedBooking] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deletingBooking, setDeletingBooking] = useState(false);
   const [openFoodModal, setOpenFoodModal] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<any>(null);
   /** The waiting walk-in about to be started, while the dialog is open. */
@@ -89,6 +93,14 @@ export default function AdminBookingsPage() {
   useEffect(() => {
     const timer = window.setInterval(() => setLiveNow(Date.now()), 10_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void getUserRole().then((role) => {
+      if (active) setIsAdmin(role === "admin");
+    });
+    return () => { active = false; };
   }, []);
   /**
    * The entered finish, read the way the server will read it.
@@ -435,6 +447,27 @@ export default function AdminBookingsPage() {
    */
   const canCancelBooking = (booking: any) =>
     booking?.status === "confirmed" && !booking?.checked_in_at && !booking?.completed_at;
+  const canDeleteBooking = (booking: any) =>
+    booking?.status !== "completed" && !booking?.completed_at;
+
+  const confirmDeleteBooking = async () => {
+    if (!deleteTarget || deletingBooking) return;
+    setDeletingBooking(true);
+    try {
+      const result = await deleteBooking(deleteTarget.id);
+      if (!result.success) {
+        toast.error("Could not delete booking", { description: result.error });
+        return;
+      }
+      toast.success(`Booking ${result.bookingNumber} deleted`);
+      setDeleteTarget(null);
+      refreshAll();
+    } catch (error: any) {
+      toast.error("Could not delete booking", { description: error?.message || "Please try again." });
+    } finally {
+      setDeletingBooking(false);
+    }
+  };
 
   const handleCancelBooking = () => {
     if (!cancelTarget) return;
@@ -1493,6 +1526,18 @@ export default function AdminBookingsPage() {
                                   <Undo2 className="h-4 w-4" />
                                 </Button>
                               )}
+                              {isAdmin && canDeleteBooking(firstBooking) && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setDeleteTarget(firstBooking)}
+                                  className="h-8 w-8 p-0 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                                  title={`Delete booking ${firstBooking.booking_number}`}
+                                  aria-label={`Delete booking ${firstBooking.booking_number}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -1658,6 +1703,18 @@ export default function AdminBookingsPage() {
                                     title="Mark as refunded"
                                   >
                                     <Undo2 className="h-4 w-4" />
+                                  </Button>
+                                )}
+                                {isAdmin && canDeleteBooking(booking) && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => setDeleteTarget(booking)}
+                                    className="h-8 w-8 p-0 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                                    title={`Delete booking ${booking.booking_number}`}
+                                    aria-label={`Delete booking ${booking.booking_number}`}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
                                   </Button>
                                 )}
                                 <Button
@@ -2013,6 +2070,41 @@ export default function AdminBookingsPage() {
               className="flex-1 bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] font-black uppercase text-xs h-10 rounded-lg disabled:opacity-50"
             >
               {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Start Session"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Admin-only permanent deletion from the booking table. */}
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => { if (!open && !deletingBooking) setDeleteTarget(null); }}
+      >
+        <DialogContent className="max-w-md border-red-900/60 bg-[var(--background)]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl font-black text-white">
+              <Trash2 className="h-5 w-5 text-red-400" /> Delete Booking
+            </DialogTitle>
+            <DialogDescription className="text-secondary-content">
+              Permanently delete booking {deleteTarget?.booking_number} and its booking details? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deletingBooking}
+              className="flex-1 text-muted-content hover:text-white"
+            >
+              Keep Booking
+            </Button>
+            <Button
+              onClick={() => void confirmDeleteBooking()}
+              disabled={deletingBooking}
+              className="inline-flex flex-1 items-center justify-center gap-2 whitespace-nowrap bg-red-600 font-black text-white hover:bg-red-700"
+            >
+              {deletingBooking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              Delete Booking
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -9,7 +9,7 @@ import {
   type CancellableFoodItem
 } from "@/lib/bookings/cancellation";
 import { decideCheckout, type CheckoutDecision } from "@/lib/bookings/checkoutGuard";
-import { extraPlayersCharge, perExtraPlayerCharge } from "@/lib/payments/money";
+import { deviceCharge, extraPlayersCharge, hourlyRateForPlayerCount, perExtraPlayerCharge } from "@/lib/payments/money";
 import { settlementStatus } from "@/lib/payments/paymentStatus";
 import { roundToTwo } from "@/lib/currency";
 import { calculateSharedPlayShares } from "@/lib/bookings/sharedPlay";
@@ -49,7 +49,7 @@ import {
   phoneDigits,
   type CustomerSuggestion
 } from "@/lib/customers/suggestions";
-import { requireStaff } from "@/lib/auth/require-admin";
+import { requireAdmin, requireStaff } from "@/lib/auth/require-admin";
 import {
   countAvailableDevicesForRange,
   timeToMinutes
@@ -725,6 +725,40 @@ export async function cancelBooking(bookingId: string, reason?: string) {
   }
 }
 
+/** Permanently remove a booking. This is an administrator-only operation. */
+export async function deleteBooking(bookingId: string) {
+  await requireAdmin();
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("bookings")
+      .delete()
+      .eq("id", bookingId)
+      .neq("status", "completed")
+      .is("completed_at", null)
+      .select("id, booking_number")
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) {
+      const { data: existing, error: lookupError } = await supabaseAdmin
+        .from("bookings")
+        .select("id")
+        .eq("id", bookingId)
+        .maybeSingle();
+      if (lookupError) throw lookupError;
+      return existing
+        ? { success: false, error: "Completed bookings cannot be deleted." }
+        : { success: false, error: "Booking not found." };
+    }
+
+    return { success: true, bookingNumber: data.booking_number as string };
+  } catch (err: any) {
+    console.error("Delete booking error:", err);
+    return { success: false, error: err.message || "Could not delete booking." };
+  }
+}
+
 /**
  * Record that the money taken on a cancelled booking has been handed back.
  *
@@ -869,6 +903,26 @@ export async function setSharedPlayParticipants(
 ) {
   await requireStaff();
   try {
+    if (enabled) {
+      const { data: booking, error: bookingError } = await supabaseAdmin
+        .from("bookings")
+        .select("shared_play_enabled, walk_in_device_type_id, booking_device_slots(devices(device_type:device_types(name)))")
+        .eq("id", bookingId)
+        .maybeSingle();
+      if (bookingError) throw bookingError;
+      if (!booking) return { success: false, error: "Booking not found." };
+
+      const { data: walkInType, error: typeError } = booking.walk_in_device_type_id
+        ? await supabaseAdmin.from("device_types").select("name").eq("id", booking.walk_in_device_type_id).maybeSingle()
+        : { data: null, error: null };
+      if (typeError) throw typeError;
+      const supportedTypes = new Set(["standard_snooker", "medium_snooker", "american_pool"]);
+      const slotTypes = (booking.booking_device_slots || []).map((slot: any) => slot.devices?.device_type?.name);
+      const deviceTypeNames = [walkInType?.name, ...slotTypes].filter(Boolean);
+      if (!booking.shared_play_enabled && !deviceTypeNames.some((name) => supportedTypes.has(name))) {
+        return { success: false, error: "Shared play is available only for American, Medium, and Standard tables." };
+      }
+    }
     if (sitInClock) {
       const started = resolveBackdatedStart(sitInClock);
       if (!started.ok) return { success: false, error: started.error };
@@ -2360,13 +2414,29 @@ export async function createWalkInBooking(payload: {
 
     if (bookingNumberError) throw bookingNumberError;
 
-    const extraPlayersCount = Math.max(0, payload.playerCount - payload.includedPlayers);
+    const { data: deviceType, error: deviceTypeError } = await supabaseAdmin
+      .from("device_types")
+      .select("name, regular_hourly_rate, single_player_hourly_rate, included_players, extra_player_charge")
+      .eq("id", payload.deviceTypeId)
+      .maybeSingle();
+    if (deviceTypeError) throw deviceTypeError;
+    if (!deviceType) return { success: false, error: "That device type no longer exists." };
+
+    const includedPlayers = Number(deviceType.included_players || payload.includedPlayers || 1);
+    const hourlyRate = hourlyRateForPlayerCount(
+      deviceType.name,
+      Number(deviceType.regular_hourly_rate || 0),
+      deviceType.single_player_hourly_rate,
+      payload.playerCount
+    );
+    const extraPlayerCharge = Number(deviceType.extra_player_charge || 0);
+    const extraPlayersCount = Math.max(0, payload.playerCount - includedPlayers);
     const extraPlayersTotal = extraPlayersCharge(
       extraPlayersCount,
-      payload.extraPlayerCharge,
+      extraPlayerCharge,
       payload.durationHours
     );
-    const deviceCharges = payload.subtotal; // Base station rate calculated by duration
+    const deviceCharges = deviceCharge(hourlyRate, payload.durationHours);
     const deviceSubtotal = deviceCharges + extraPlayersTotal;
     const subscriptionDiscount = payload.subscriptionDiscount || 0;
     const happyHourDiscount = payload.happyHourDiscount || 0;
@@ -2426,12 +2496,12 @@ export async function createWalkInBooking(payload: {
         p_slot_start_time: startTime,
         p_slot_end_time: endTime,
         p_duration_hours: payload.durationHours,
-        p_hourly_rate: payload.hourlyRate,
-        p_slot_total: payload.subtotal,
+        p_hourly_rate: hourlyRate,
+        p_slot_total: deviceCharges,
         p_device_type: payload.deviceTypeName,
         p_player_count: payload.playerCount,
-        p_included_players: payload.includedPlayers,
-        p_extra_player_charge: payload.extraPlayerCharge,
+        p_included_players: includedPlayers,
+        p_extra_player_charge: extraPlayerCharge,
         p_extra_players_total: extraPlayersTotal
       }
     );
@@ -2459,9 +2529,9 @@ export async function createWalkInBooking(payload: {
     lineItems.push({
       booking_id: booking.id,
       item_type: 'device',
-      description: `Device Booking (${payload.durationHours}h × ₹${payload.hourlyRate})`,
+      description: `Device Booking (${payload.durationHours}h × ₹${hourlyRate})`,
       quantity: payload.durationHours,
-      unit_price: payload.hourlyRate,
+      unit_price: hourlyRate,
       line_total: deviceCharges,
       added_by: 'admin',
       is_paid: false, // Walk-in starts as pending payment
@@ -2474,11 +2544,11 @@ export async function createWalkInBooking(payload: {
         booking_id: booking.id,
         item_type: 'extra_players',
         description: `Extra Players (${extraPlayersCount} × ₹${perExtraPlayerCharge(
-          payload.extraPlayerCharge,
+          extraPlayerCharge,
           payload.durationHours
         )})`,
         quantity: extraPlayersCount,
-        unit_price: perExtraPlayerCharge(payload.extraPlayerCharge, payload.durationHours),
+        unit_price: perExtraPlayerCharge(extraPlayerCharge, payload.durationHours),
         line_total: extraPlayersTotal,
         added_by: 'admin',
         is_paid: false,
@@ -3058,7 +3128,7 @@ export async function checkInWalkInSession(
 
     const { data: deviceType, error: deviceTypeError } = await supabaseAdmin
       .from("device_types")
-      .select("id, display_name, name, regular_hourly_rate, included_players, extra_player_charge")
+      .select("id, display_name, name, regular_hourly_rate, single_player_hourly_rate, included_players, extra_player_charge")
       .eq("id", booking.walk_in_device_type_id)
       .maybeSingle();
 
@@ -3069,7 +3139,12 @@ export async function checkInWalkInSession(
       p_booking_id: bookingId,
       p_device_type_id: deviceType.id,
       p_device_type: booking.walk_in_device_type_name || deviceType.display_name,
-      p_hourly_rate: Number(deviceType.regular_hourly_rate || 0),
+      p_hourly_rate: hourlyRateForPlayerCount(
+        deviceType.name,
+        Number(deviceType.regular_hourly_rate || 0),
+        deviceType.single_player_hourly_rate,
+        Number(booking.walk_in_player_count || 1)
+      ),
       p_player_count: booking.walk_in_player_count || 1,
       p_included_players: Number(deviceType.included_players || 1),
       p_extra_player_charge: Number(deviceType.extra_player_charge || 0),
@@ -3129,6 +3204,34 @@ export async function changeCheckedInWalkInDevice(bookingId: string, deviceTypeI
     if (error) throw error;
     const result = Array.isArray(data) ? data[0] : data;
     if (!result) return { success: false, error: "Could not move the session to that device." };
+
+    const { data: sessionSlot, error: sessionSlotError } = await supabaseAdmin
+      .from("booking_device_slots")
+      .select("id, player_count")
+      .eq("booking_id", bookingId)
+      .maybeSingle();
+    if (sessionSlotError) throw sessionSlotError;
+    const { data: nextType, error: nextTypeError } = await supabaseAdmin
+      .from("device_types")
+      .select("name, regular_hourly_rate, single_player_hourly_rate, extra_player_charge")
+      .eq("id", deviceTypeId)
+      .maybeSingle();
+    if (nextTypeError) throw nextTypeError;
+    if (sessionSlot && nextType) {
+      const { error: rateError } = await supabaseAdmin
+        .from("booking_device_slots")
+        .update({
+          hourly_rate: hourlyRateForPlayerCount(
+            nextType.name,
+            Number(nextType.regular_hourly_rate || 0),
+            nextType.single_player_hourly_rate,
+            Number(sessionSlot.player_count || 1)
+          ),
+          extra_player_charge: Number(nextType.extra_player_charge || 0)
+        })
+        .eq("id", sessionSlot.id);
+      if (rateError) throw rateError;
+    }
 
     return {
       success: true,
@@ -3696,7 +3799,7 @@ export async function updatePlayerCount(slotId: string, newPlayerCount: number, 
     // Get current slot details and booking info
     const { data: slot, error: slotError } = await supabaseAdmin
       .from("booking_device_slots")
-      .select("*, bookings!inner(id, status, payment_status, total_amount, amount_paid, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, billed_on_actual_time, completed_at)")
+      .select("*, devices(device_type:device_types(name, regular_hourly_rate, single_player_hourly_rate)), bookings!inner(id, status, payment_status, total_amount, amount_paid, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, billed_on_actual_time, completed_at)")
       .eq("id", slotId)
       .single();
 
@@ -3731,11 +3834,20 @@ export async function updatePlayerCount(slotId: string, newPlayerCount: number, 
      */
     const isLiveSession =
       slot.bookings.billed_on_actual_time === true && !slot.bookings.completed_at;
+    const deviceType = slot.devices?.device_type;
+    const newHourlyRate = deviceType
+      ? hourlyRateForPlayerCount(
+          deviceType.name,
+          Number(deviceType.regular_hourly_rate || 0),
+          deviceType.single_player_hourly_rate,
+          newPlayerCount
+        )
+      : Number(slot.hourly_rate || 0);
 
     if (isLiveSession) {
       const { error: playerCountError } = await supabaseAdmin
         .from("booking_device_slots")
-        .update({ player_count: newPlayerCount })
+        .update({ player_count: newPlayerCount, hourly_rate: newHourlyRate })
         .eq("id", slotId);
 
       if (playerCountError) throw playerCountError;
@@ -3757,18 +3869,21 @@ export async function updatePlayerCount(slotId: string, newPlayerCount: number, 
     // at the counter costs the same as the one before it.
     const newExtraPlayers = Math.max(0, newPlayerCount - includedPlayers);
     const newExtraPlayersTotal = extraPlayersCharge(newExtraPlayers, extraPlayerCharge, durationHours);
+    const newDeviceCharge = deviceCharge(newHourlyRate, durationHours);
 
     const oldExtraPlayers = Math.max(0, oldPlayerCount - includedPlayers);
     const oldExtraPlayersTotal = extraPlayersCharge(oldExtraPlayers, extraPlayerCharge, durationHours);
+    const oldDeviceCharge = deviceCharge(Number(slot.hourly_rate || 0), durationHours);
 
     // Calculate difference in total
-    const difference = newExtraPlayersTotal - oldExtraPlayersTotal;
+    const difference = newDeviceCharge + newExtraPlayersTotal - oldDeviceCharge - oldExtraPlayersTotal;
 
     // Update slot
     const { error: updateSlotError } = await supabaseAdmin
       .from("booking_device_slots")
       .update({
         player_count: newPlayerCount,
+        hourly_rate: newHourlyRate,
         extra_players_total: newExtraPlayersTotal
       })
       .eq("id", slotId);

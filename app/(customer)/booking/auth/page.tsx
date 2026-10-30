@@ -25,7 +25,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { generateDurationOptions, crossesMidnight, bookingEndDate } from "@/lib/utils/timeSlots";
 import { formatDateForDB, formatDateForDisplay, handleDobInput, isValidDob, DOB_ERROR } from "@/lib/utils/dates";
 import { allFilled, isPlausibleEmail } from "@/lib/utils/forms";
-import { deviceCharge, extraPlayersCharge, perExtraPlayerCharge, round2 } from "@/lib/payments/money";
+import { deviceCharge, extraPlayersCharge, hourlyRateForPlayerCount, perExtraPlayerCharge, round2 } from "@/lib/payments/money";
 import OTPVerification from "@/components/auth/OTPVerification";
 
 type Step = "phone" | "otp" | "details" | "summary" | "success";
@@ -34,7 +34,8 @@ export default function CustomerDetailsPage() {
   const router = useRouter();
   const dispatch = useAppDispatch();
   const bookingState = useAppSelector((state) => state.booking);
-  const { deviceTypeName, selectedSlot, deviceTypeId, selectedDate, slotStartTime, slotEndTime, selectedDuration, hourlyRate, addons, subtotal, playerCount, includedPlayers, extraPlayerCharge } = bookingState;
+  const { deviceTypeName, selectedSlot, deviceTypeId, selectedDate, slotStartTime, slotEndTime, selectedDuration, hourlyRate, singlePlayerHourlyRate, addons, subtotal, playerCount, includedPlayers, extraPlayerCharge } = bookingState;
+  const effectiveHourlyRate = hourlyRateForPlayerCount(deviceTypeName, hourlyRate || 0, singlePlayerHourlyRate, playerCount);
 
   const [step, setStep] = useState<Step>("phone");
   const [mobileNumber, setMobileNumber] = useState("");
@@ -156,7 +157,7 @@ export default function CustomerDetailsPage() {
       durationInHours = (parseTime(slotEndTime) - parseTime(slotStartTime)) / 60;
     }
 
-    const deviceCharges = deviceCharge(hourlyRate || 0, durationInHours);
+    const deviceCharges = deviceCharge(effectiveHourlyRate, durationInHours);
     const extraPlayerCharges = extraPlayersCharge(
       Math.max(0, playerCount - includedPlayers),
       extraPlayerCharge,
@@ -182,7 +183,7 @@ export default function CustomerDetailsPage() {
     selectedDuration,
     slotStartTime,
     slotEndTime,
-    hourlyRate,
+    effectiveHourlyRate,
     playerCount,
     includedPlayers,
     extraPlayerCharge,
@@ -302,7 +303,7 @@ export default function CustomerDetailsPage() {
 
         // Calculate subscription discount on device + extra players only (NOT food/addons)
         const durationInHours = (selectedDuration || 60) / 60;
-        const deviceCharges = deviceCharge(hourlyRate || 0, durationInHours);
+        const deviceCharges = deviceCharge(effectiveHourlyRate, durationInHours);
         const extraPlayerCharges = extraPlayersCharge(playerCount - includedPlayers, extraPlayerCharge, durationInHours);
         const discountableAmount = deviceCharges + extraPlayerCharges;
 
@@ -405,7 +406,7 @@ export default function CustomerDetailsPage() {
         durationInHours = (endMins - startMins) / 60;
       }
 
-      const deviceCharges = deviceCharge(hourlyRate || 0, durationInHours);
+      const deviceCharges = deviceCharge(effectiveHourlyRate, durationInHours);
       const extraPlayerCharges = extraPlayersCharge(playerCount - includedPlayers, extraPlayerCharge, durationInHours);
       const discountableAmount = deviceCharges + extraPlayerCharges; // NOT food
 
@@ -458,7 +459,7 @@ export default function CustomerDetailsPage() {
       durationInHours = (endMins - startMins) / 60;
     }
 
-    const deviceCharges = deviceCharge(hourlyRate || 0, durationInHours);
+    const deviceCharges = deviceCharge(effectiveHourlyRate, durationInHours);
     const extraPlayerCharges = extraPlayersCharge(playerCount - includedPlayers, extraPlayerCharge, durationInHours);
     const addonsTotal = addons.reduce((sum, addon) => sum + (addon.price * addon.quantity), 0);
     const calculatedSubtotal = deviceCharges + extraPlayerCharges + addonsTotal;
@@ -964,7 +965,7 @@ export default function CustomerDetailsPage() {
                 return (
                   <>
                     <div className="flex justify-between">
-                      <span className="text-zinc-400">Device Booking ({durationInHours}h × ₹{hourlyRate}):</span>
+                      <span className="text-zinc-400">Device Booking ({durationInHours}h × ₹{effectiveHourlyRate}):</span>
                       <span className="text-white">₹{deviceCharges.toFixed(2)}</span>
                     </div>
 

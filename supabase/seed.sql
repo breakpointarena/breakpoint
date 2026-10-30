@@ -10,13 +10,13 @@ TRUNCATE TABLE public.device_types CASCADE;
 -- 1. DEVICE TYPES (Based on pricing table)
 -- ================================================
 
-INSERT INTO public.device_types (name, display_name, regular_hourly_rate, included_players, max_players, extra_player_charge, description, display_order) VALUES
-  ('standard_snooker', 'Standard Snooker Table', 379.00, 4, 8, 79.00, 'Standard size snooker table - perfect for casual games with up to 4 players included', 1),
-  ('medium_snooker', 'Medium Snooker Table', 299.00, 4, 8, 79.00, 'Medium size snooker table - great for smaller groups with up to 4 players included', 2),
-  ('american_pool', 'American Pool Table', 249.00, 4, 8, 49.00, 'American pool table - classic billiards experience with up to 4 players included', 3),
-  ('ps5', 'PS5 Console', 200.00, 1, 4, 150.00, 'PlayStation 5 gaming console - latest games and titles, 1 player included, ₹150 per additional controller', 4),
-  ('other', 'FI Simulator', 2100.00, 1, 4, 100.00, 'FI simulator experience', 5),
-  ('private_ps5', 'Private PS5 Console', 200.00, 1, 4, 150.00, 'PlayStation 5 gaming console for private sessions', 6);
+INSERT INTO public.device_types (name, display_name, regular_hourly_rate, single_player_hourly_rate, included_players, max_players, extra_player_charge, description, display_order) VALUES
+  ('standard_snooker', 'Standard Snooker Table', 379.00, NULL, 4, 8, 79.00, 'Standard size snooker table - perfect for casual games with up to 4 players included', 1),
+  ('medium_snooker', 'Medium Snooker Table', 299.00, NULL, 4, 8, 79.00, 'Medium size snooker table - great for smaller groups with up to 4 players included', 2),
+  ('american_pool', 'American Pool Table', 249.00, NULL, 4, 8, 49.00, 'American pool table - classic billiards experience with up to 4 players included', 3),
+  ('ps5', 'PS5 Console', 150.00, 200.00, 1, 4, 150.00, 'PlayStation 5 gaming console - group sessions are billed per player', 4),
+  ('other', 'FI Simulator', 2100.00, NULL, 1, 4, 100.00, 'FI simulator experience', 5),
+  ('private_ps5', 'Private PS5 Console', 200.00, 250.00, 1, 4, 200.00, 'PlayStation 5 gaming console for private sessions', 6);
 
 -- ================================================
 -- 2. SAMPLE DEVICES (One for each type)
@@ -43,7 +43,7 @@ BEGIN
     (v_standard_snooker_id, 'SS-001', 'available', 'Full size standard snooker table with professional grade cloth. Includes cues, balls, and triangle. Up to 8 players (4 included in base rate).'),
     (v_medium_snooker_id, 'MS-001', 'available', 'Medium size snooker table perfect for casual play. Includes all accessories. Up to 8 players (4 included in base rate).'),
     (v_american_pool_id, 'AP-001', 'available', 'Professional American pool table with aramith balls. Includes cues and chalk. Up to 8 players (4 included in base rate).'),
-    (v_ps5_id, 'PS5-001', 'available', 'PlayStation 5 console with DualSense controller, 4K gaming, and latest game library. Up to 4 players (₹150 per additional controller).'),
+    (v_ps5_id, 'PS5-001', 'available', 'PlayStation 5 console with DualSense controller, 4K gaming, and latest game library. Solo rate ₹200/hour; groups ₹150/player/hour.'),
     (v_other_id, 'BG-001', 'available', 'FI simulator experience. Contact staff for details.');
 END $$;
 

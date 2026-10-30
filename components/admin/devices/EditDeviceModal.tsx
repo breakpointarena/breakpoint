@@ -28,6 +28,8 @@ export function EditDeviceModal({ device, onFormSuccess, onClose }: EditModalPro
   const [editStatus, setEditStatus] = useState(device.status || "available");
   const [hourlyRate, setHourlyRate] = useState(device.device_type?.regular_hourly_rate || "");
   const [extraPlayerRate, setExtraPlayerRate] = useState(device.device_type?.extra_player_charge ?? "");
+  const [singlePlayerRate, setSinglePlayerRate] = useState(device.device_type?.single_player_hourly_rate ?? device.device_type?.regular_hourly_rate ?? "");
+  const isPlayStationDevice = ["ps5", "private_ps5"].includes(device.device_type?.name || "");
   const [localFile, setLocalFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -160,7 +162,7 @@ export function EditDeviceModal({ device, onFormSuccess, onClose }: EditModalPro
 
             {/* Form row block 2 */}
             <div className="space-y-2">
-              <label className="text-xs font-bold text-[#a1a1aa] uppercase tracking-wider">Hourly Rate <span className="text-red-500">*</span></label>
+              <label className="text-xs font-bold text-[#a1a1aa] uppercase tracking-wider">{isPlayStationDevice ? "Group Rate / Player / Hour" : "Hourly Rate"} <span className="text-red-500">*</span></label>
               <div className="relative rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                   <span className="text-[#a1a1aa] text-base">₹</span>
@@ -178,7 +180,27 @@ export function EditDeviceModal({ device, onFormSuccess, onClose }: EditModalPro
               </div>
             </div>
 
-            <div className="space-y-2">
+            {isPlayStationDevice && (
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-[#a1a1aa] uppercase tracking-wider">Single Player Rate / Hour <span className="text-red-500">*</span></label>
+                <div className="relative rounded-md shadow-sm">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3"><span className="text-[#a1a1aa] text-base">₹</span></div>
+                  <input
+                    type="number"
+                    name="single_player_hourly_rate"
+                    min="0"
+                    step="0.01"
+                    value={singlePlayerRate}
+                    onChange={(e) => setSinglePlayerRate(e.target.value)}
+                    className="flex h-10 w-full rounded-md border border-[#27272a] bg-[var(--surface)] pl-7 pr-3 text-base text-white outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    required
+                  />
+                </div>
+                <p className="text-xs text-[#a1a1aa]">Used only when exactly one player is booked. For groups, each player is charged the group rate above.</p>
+              </div>
+            )}
+
+            {!isPlayStationDevice && <div className="space-y-2">
               <label className="text-xs font-bold text-[#a1a1aa] uppercase tracking-wider">Extra Player Rate (per player / hour) <span className="text-red-500">*</span></label>
               <div className="relative rounded-md shadow-sm">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
@@ -196,7 +218,7 @@ export function EditDeviceModal({ device, onFormSuccess, onClose }: EditModalPro
                 />
               </div>
               <p className="text-xs text-[#a1a1aa]">Applies to every device of this type and new shared play sessions.</p>
-            </div>
+            </div>}
 
             {/*  Replaced simple input line with modern  field component */}
             <div className="space-y-2">
@@ -290,7 +312,7 @@ export function EditDeviceModal({ device, onFormSuccess, onClose }: EditModalPro
                     <p className="text-[#a1a1aa] text-xs flex items-center gap-1.5 mt-0.5"><span className="w-1.5 h-1.5 rounded-full bg-primary"></span>{editType}</p>
                   </div>
                   <div className="flex items-center justify-between border-t border-zinc-900/60 pt-2 text-sm">
-                    <span className="text-[#a1a1aa] font-medium">Rate / Hour</span>
+                    <span className="text-[#a1a1aa] font-medium">{isPlayStationDevice ? "Group Rate / Player" : "Rate / Hour"}</span>
                     <span className="font-bold text-primary text-base">₹{hourlyRate || "0"}</span>
                   </div>
                 </div>
