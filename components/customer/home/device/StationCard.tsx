@@ -94,10 +94,10 @@ export function StationCard({ station, motionProps }: { station: Station; motion
                             className="text-white font-black text-xl min-[581px]:text-2xl leading-none"
                             style={{ fontFamily: "'Rajdhani', sans-serif" }}
                         >
-                            ₹{station.single_player_hourly_rate ?? station.regular_hourly_rate}
+                            ₹{station.regular_hourly_rate}
                         </span>
                         <span className="text-white/65 text-[11px] font-semibold uppercase tracking-widest">
-                            {isPlayStation ? "/ hr solo" : "/ hr"}
+                            {isPlayStation ? "/ player / hr" : "/ hr"}
                         </span>
                     </div>
 
@@ -112,19 +112,17 @@ export function StationCard({ station, motionProps }: { station: Station; motion
                         <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
                             Max <span className="text-white font-semibold">{station.max_players}</span>
                         </span>
-                        {isPlayStation ? (
-                            <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
-                                Group rate <span className="text-white font-semibold">{station.regular_hourly_rate}</span>/player/hr
-                            </span>
-                        ) : station.extra_player_charge > 0 ? (
-                            <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
-                                +<span className="text-white font-semibold">₹{station.extra_player_charge}</span>
-                                /extra
-                            </span>
-                        ) : (
-                            <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
-                                <span className="text-white font-semibold">No</span> extra charge
-                            </span>
+                        {!isPlayStation && (
+                            station.extra_player_charge > 0 ? (
+                                <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
+                                    +<span className="text-white font-semibold">₹{station.extra_player_charge}</span>
+                                    /extra
+                                </span>
+                            ) : (
+                                <span className="bg-zinc-800/60 border border-zinc-700/60 rounded-full text-xs min-[581px]:text-[12px] text-zinc-300 px-2 min-[581px]:px-2.5 py-0.5 min-[581px]:py-1 font-medium tracking-wide">
+                                    <span className="text-white font-semibold">No</span> extra charge
+                                </span>
+                            )
                         )}
                     </div>
 

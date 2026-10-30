@@ -169,15 +169,10 @@ export default function GamingStationPage() {
                         </p>
                       </div>
                       <div className="text-right flex-shrink-0 flex items-baseline gap-1 mt-1">
-                        <span className="text-lg font-black text-primary">₹{Number(deviceType.single_player_hourly_rate ?? deviceType.regular_hourly_rate)}</span>
+                        <span className="text-lg font-black text-primary">₹{Number(deviceType.regular_hourly_rate)}</span>
                         <span className="text-xs text-zinc-300 font-bold">/hr</span>
                       </div>
                     </div>
-                    {deviceType.name?.includes("ps5") && (
-                      <p className="text-xs font-semibold text-secondary-content text-right">
-                        Group rate: ₹{Number(deviceType.regular_hourly_rate)} per player / hour
-                      </p>
-                    )}
 
                     {/* No clamp: the card is normal flow inside a grid, so rows equalise
                         height and `justify-between` keeps the buttons aligned. Clamping to
