@@ -352,6 +352,74 @@ export async function createCustomerAction(input: {
   }
 }
 
+export async function updateCustomerAction(input: {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  date_of_birth?: string;
+}) {
+  await requireStaff();
+
+  const id = String(input?.id || "").trim();
+  const name = String(input?.name || "").trim();
+  const phoneDigits = String(input?.phone || "").replace(/\D/g, "");
+  const phone = phoneDigits.length === 12 && phoneDigits.startsWith("91")
+    ? phoneDigits.slice(-10)
+    : phoneDigits;
+  const email = String(input?.email || "").trim() || null;
+  const dateOfBirth = String(input?.date_of_birth || "").trim() || null;
+
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+    return { success: false as const, error: "Choose a valid customer." };
+  }
+  if (!name || name.length > 100) {
+    return { success: false as const, error: "Enter a customer name up to 100 characters." };
+  }
+  if (!/^\d{10}$/.test(phone)) {
+    return { success: false as const, error: "Enter a valid 10-digit mobile number." };
+  }
+  if (email && (email.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+    return { success: false as const, error: "Enter a valid email address up to 100 characters." };
+  }
+  if (dateOfBirth) {
+    const parsedDate = new Date(`${dateOfBirth}T00:00:00.000Z`);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) ||
+      Number.isNaN(parsedDate.getTime()) ||
+      parsedDate.toISOString().slice(0, 10) !== dateOfBirth
+    ) {
+      return { success: false as const, error: "Enter a valid date of birth." };
+    }
+  }
+
+  const { data: existingCustomer, error: lookupError } = await supabaseAdmin
+    .from("customers")
+    .select("id")
+    .eq("phone", phone)
+    .neq("id", id)
+    .maybeSingle();
+  if (lookupError) return { success: false as const, error: lookupError.message };
+  if (existingCustomer) {
+    return { success: false as const, error: "Another customer already uses this mobile number." };
+  }
+
+  const { data: updatedCustomer, error: updateError } = await supabaseAdmin
+    .from("customers")
+    .update({ name, phone, email, date_of_birth: dateOfBirth, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("id, name, phone, email, date_of_birth")
+    .maybeSingle();
+
+  if (updateError?.code === "23505") {
+    return { success: false as const, error: "Another customer already uses this mobile number." };
+  }
+  if (updateError) return { success: false as const, error: updateError.message };
+  if (!updatedCustomer) return { success: false as const, error: "Customer not found." };
+
+  return { success: true as const, customer: updatedCustomer };
+}
+
 export async function getAssignableSubscriptionPlansAction() {
   await requireStaff();
 

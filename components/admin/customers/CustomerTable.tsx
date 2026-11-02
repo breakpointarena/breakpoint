@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { CustomerRow } from "@/lib/types/customers";
 import { AddCustomerSubscriptionModal } from "@/components/admin/customers/AddCustomerSubscriptionModal";
 import { AddWalletCreditButton } from "@/components/admin/customers/AddWalletCreditButton";
+import { EditCustomerButton } from "@/components/admin/customers/EditCustomerButton";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -297,6 +298,7 @@ export function CustomerTable({ customers, onSubscriptionAssigned, canAdjustWall
                   </div>
 
                   <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-zinc-800/80 pt-3">
+                    <EditCustomerButton customer={row} onUpdated={onSubscriptionAssigned} />
                     <AddCustomerSubscriptionModal
                       customer={{ id: row.id, name: row.name }}
                       onAssigned={onSubscriptionAssigned}
@@ -455,6 +457,7 @@ export function CustomerTable({ customers, onSubscriptionAssigned, canAdjustWall
                 </td>
                 <td className="p-4">
                   <div className="flex flex-wrap items-center justify-end gap-2">
+                    <EditCustomerButton customer={row} onUpdated={onSubscriptionAssigned} />
                     <AddCustomerSubscriptionModal
                       customer={{ id: row.id, name: row.name }}
                       onAssigned={onSubscriptionAssigned}
