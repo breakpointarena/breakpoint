@@ -1,7 +1,7 @@
 "use client";
 
 import { Input } from "@/components/ui/input";
-import { Search, SlidersHorizontal } from "lucide-react";
+import { Search, SlidersHorizontal, X } from "lucide-react";
 
 interface FoodFiltersProps {
   searchQuery: string;
@@ -31,8 +31,18 @@ export function FoodFilters({
           placeholder="Search orders or menu items..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9 h-10 bg-[var(--background)] border-[#27272a] text-white placeholder:text-muted-content focus-visible:ring-primary"
+          className="pl-9 pr-10 h-10 bg-[var(--background)] border-[#27272a] text-white placeholder:text-muted-content focus-visible:ring-primary"
         />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery("")}
+            aria-label="Clear menu search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-secondary-content hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-4">

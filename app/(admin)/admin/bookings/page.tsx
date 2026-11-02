@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useTransition, Fragment } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -1367,7 +1368,15 @@ export default function AdminBookingsPage() {
                             )}
                             <div>
                               <p className="text-sm font-black text-primary font-mono">
-                                {isSingleBooking ? firstBooking.booking_number : `${group.count} Bookings`}
+                                {isSingleBooking ? (
+                                  <Link
+                                    href={`/admin/bookings/${firstBooking.id}`}
+                                    className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-sm"
+                                    aria-label={`View booking ${firstBooking.booking_number} details`}
+                                  >
+                                    {firstBooking.booking_number}
+                                  </Link>
+                                ) : `${group.count} Bookings`}
                               </p>
                               <p className="text-min text-secondary-content mt-0.5">
                                 {new Date(firstBooking.created_at).toLocaleDateString()}
@@ -1617,7 +1626,13 @@ export default function AdminBookingsPage() {
                         return (
                           <tr key={booking.id} className="bg-[var(--background)] hover:bg-[var(--surface)] transition-colors border-l-4 border-l-primary/30">
                             <td className="py-3 px-4 pl-12">
-                              <p className="text-sm font-black text-primary font-mono">{booking.booking_number}</p>
+                              <Link
+                                href={`/admin/bookings/${booking.id}`}
+                                className="text-sm font-black text-primary font-mono hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-sm"
+                                aria-label={`View booking ${booking.booking_number} details`}
+                              >
+                                {booking.booking_number}
+                              </Link>
                               <p className="text-min text-secondary-content mt-0.5">
                                 Booking #{index + 1}
                               </p>

@@ -2,6 +2,7 @@
 
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import Link from "next/link";
 import { BookingTimingCell, SessionSummaryLine } from "./SessionTimeline";
 import { BookingStatusBadge } from "./BookingStatusBadge";
 import { AttentionBadges } from "./AttentionBadges";
@@ -79,7 +80,13 @@ export function BookingsGrid({
               {/* Header - Booking ID & Status */}
               <div className="p-4 bg-gradient-to-br from-[var(--background)] to-[var(--surface)] border-b border-[#27272a]/50">
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-mono text-primary/70">{booking.booking_number}</p>
+                  <Link
+                    href={`/admin/bookings/${booking.id}`}
+                    className="text-xs font-mono text-primary/70 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-sm"
+                    aria-label={`View booking ${booking.booking_number} details`}
+                  >
+                    {booking.booking_number}
+                  </Link>
                   <BookingStatusBadge status={booking.status} size="sm" />
                 </div>
 

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -519,9 +520,14 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
                   >
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <p className="text-sm font-bold text-white">
+                        <Link
+                          href={`/admin/bookings/${booking.id}`}
+                          onClick={(event) => event.stopPropagation()}
+                          className="text-sm font-bold text-white hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-sm"
+                          aria-label={`View booking ${booking.booking_number} details`}
+                        >
                           {booking.booking_number}
-                        </p>
+                        </Link>
                         <BookingStatusBadge status={booking.status} />
                       </div>
                       <p className="text-min-enhanced text-secondary-content">

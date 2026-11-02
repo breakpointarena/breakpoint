@@ -2311,6 +2311,303 @@ export async function addFoodToBooking(
   }
 }
 
+/** Increase an existing unpaid, admin-added food line by one. */
+export async function increaseFoodItemQuantity(bookingId: string, foodItemId: string) {
+  await requireStaff();
+
+  let reservedStockFor: string | null = null;
+  let updatedLineItem: { id: string; quantity: number; line_total: number } | null = null;
+  let updatedFoodItem: { id: string; quantity: number; line_total: number } | null = null;
+
+  try {
+    const { data: foodItem, error: foodItemError } = await supabaseAdmin
+      .from("booking_food_items")
+      .select("id, booking_id, menu_item_id, item_name, quantity, unit_price, line_total")
+      .eq("id", foodItemId)
+      .eq("booking_id", bookingId)
+      .maybeSingle();
+
+    if (foodItemError) throw foodItemError;
+    if (!foodItem) return { success: false, error: "That food item is no longer on this booking." };
+    if (!foodItem.menu_item_id) {
+      return { success: false, error: "This menu item is no longer in inventory." };
+    }
+
+    const { data: booking, error: bookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("status, payment_status, total_amount, amount_paid, billed_on_actual_time, completed_at")
+      .eq("id", bookingId)
+      .single();
+
+    if (bookingError) throw bookingError;
+    const paymentStatus = derivePaymentStatus(
+      Number(booking.total_amount || 0),
+      Number(booking.amount_paid || 0),
+      booking.payment_status,
+      booking.billed_on_actual_time === true && !booking.completed_at
+    );
+    if (booking.status === "cancelled" || paymentStatus === "paid" || paymentStatus === "refunded") {
+      return {
+        success: false,
+        error: booking.status === "cancelled"
+          ? "This booking is cancelled. Food can no longer be changed."
+          : "This booking is fully settled. Food can no longer be changed."
+      };
+    }
+
+    let lineQuery = supabaseAdmin
+      .from("booking_line_items")
+      .select("id, quantity, line_total")
+      .eq("booking_id", bookingId)
+      .eq("item_type", "food")
+      .eq("added_by", "admin")
+      .eq("is_paid", false)
+      .eq("quantity", foodItem.quantity)
+      .order("display_order", { ascending: false })
+      .limit(1);
+    lineQuery = lineQuery.eq("reference_id", foodItem.menu_item_id);
+    const { data: lineItems, error: lineError } = await lineQuery;
+    if (lineError) throw lineError;
+    const lineItem = lineItems?.[0];
+    if (!lineItem) {
+      return { success: false, error: "Only unpaid food items added by staff can be increased." };
+    }
+
+    const { data: menuItem, error: menuError } = await supabaseAdmin
+      .from("menu_items")
+      .select("id, name, quantity, status")
+      .eq("id", foodItem.menu_item_id)
+      .maybeSingle();
+    if (menuError) throw menuError;
+    if (!menuItem || menuItem.status !== "available") {
+      return { success: false, error: `${foodItem.item_name} is no longer available.` };
+    }
+    if (Number(menuItem.quantity) < 1) {
+      return { success: false, error: `No ${foodItem.item_name} stock is available.` };
+    }
+
+    const { error: stockError } = await supabaseAdmin.rpc("decrement_menu_item_quantity", {
+      item_id: foodItem.menu_item_id,
+      decrement_by: 1
+    });
+    if (stockError) throw stockError;
+    reservedStockFor = foodItem.menu_item_id;
+
+    const nextQuantity = Number(foodItem.quantity) + 1;
+    const nextLineTotal = roundToTwo(Number(foodItem.line_total || 0) + Number(foodItem.unit_price));
+    const { error: lineUpdateError } = await supabaseAdmin
+      .from("booking_line_items")
+      .update({ quantity: nextQuantity, line_total: nextLineTotal })
+      .eq("id", lineItem.id);
+    if (lineUpdateError) throw lineUpdateError;
+    updatedLineItem = {
+      id: lineItem.id,
+      quantity: Number(lineItem.quantity),
+      line_total: Number(lineItem.line_total)
+    };
+
+    const { error: foodUpdateError } = await supabaseAdmin
+      .from("booking_food_items")
+      .update({ quantity: nextQuantity, line_total: nextLineTotal })
+      .eq("id", foodItem.id)
+      .eq("booking_id", bookingId);
+    if (foodUpdateError) throw foodUpdateError;
+    updatedFoodItem = {
+      id: foodItem.id,
+      quantity: Number(foodItem.quantity),
+      line_total: Number(foodItem.line_total)
+    };
+
+    const { data: updatedBooking, error: updatedBookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("total_amount, amount_paid")
+      .eq("id", bookingId)
+      .single();
+    if (updatedBookingError) throw updatedBookingError;
+
+    const newPaymentStatus = settlementStatus({
+      amountPaid: Number(updatedBooking.amount_paid || 0),
+      total: Number(updatedBooking.total_amount || 0)
+    });
+    const { error: statusError } = await supabaseAdmin
+      .from("bookings")
+      .update({ payment_status: newPaymentStatus, updated_at: new Date().toISOString() })
+      .eq("id", bookingId);
+    if (statusError) throw statusError;
+
+    return { success: true, newTotal: Number(updatedBooking.total_amount || 0), quantity: nextQuantity };
+  } catch (err: any) {
+    if (updatedFoodItem) {
+      const { error } = await supabaseAdmin
+        .from("booking_food_items")
+        .update({ quantity: updatedFoodItem.quantity, line_total: updatedFoodItem.line_total })
+        .eq("id", updatedFoodItem.id)
+        .eq("booking_id", bookingId);
+      if (error) console.error("Could not roll back booking food item:", error);
+    }
+    if (updatedLineItem) {
+      const { error } = await supabaseAdmin
+        .from("booking_line_items")
+        .update({ quantity: updatedLineItem.quantity, line_total: updatedLineItem.line_total })
+        .eq("id", updatedLineItem.id);
+      if (error) console.error("Could not roll back food billing line:", error);
+    }
+    if (reservedStockFor) {
+      const { error } = await supabaseAdmin.rpc("increment_menu_item_quantity", {
+        item_id: reservedStockFor,
+        increment_by: 1
+      });
+      if (error) console.error("Could not restore food inventory:", error);
+    }
+    console.error("Increase food item quantity error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/** Decrease an existing unpaid, admin-added food line by one. */
+export async function decreaseFoodItemQuantity(bookingId: string, foodItemId: string) {
+  await requireStaff();
+
+  let restoredStockFor: string | null = null;
+  let updatedLineItem: { id: string; quantity: number; line_total: number } | null = null;
+  let updatedFoodItem: { id: string; quantity: number; line_total: number } | null = null;
+
+  try {
+    const { data: foodItem, error: foodItemError } = await supabaseAdmin
+      .from("booking_food_items")
+      .select("id, booking_id, menu_item_id, item_name, quantity, unit_price, line_total")
+      .eq("id", foodItemId)
+      .eq("booking_id", bookingId)
+      .maybeSingle();
+
+    if (foodItemError) throw foodItemError;
+    if (!foodItem) return { success: false, error: "That food item is no longer on this booking." };
+    if (Number(foodItem.quantity) <= 1) {
+      return { success: false, error: "Use the remove button to remove the last item." };
+    }
+    if (!foodItem.menu_item_id) {
+      return { success: false, error: "This menu item is no longer in inventory." };
+    }
+
+    const { data: booking, error: bookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("status, payment_status, total_amount, amount_paid, billed_on_actual_time, completed_at")
+      .eq("id", bookingId)
+      .single();
+    if (bookingError) throw bookingError;
+
+    const paymentStatus = derivePaymentStatus(
+      Number(booking.total_amount || 0),
+      Number(booking.amount_paid || 0),
+      booking.payment_status,
+      booking.billed_on_actual_time === true && !booking.completed_at
+    );
+    if (booking.status === "cancelled" || paymentStatus === "paid" || paymentStatus === "refunded") {
+      return {
+        success: false,
+        error: booking.status === "cancelled"
+          ? "This booking is cancelled. Food can no longer be changed."
+          : "This booking is fully settled. Food can no longer be changed."
+      };
+    }
+
+    const { data: lineItems, error: lineError } = await supabaseAdmin
+      .from("booking_line_items")
+      .select("id, quantity, line_total")
+      .eq("booking_id", bookingId)
+      .eq("item_type", "food")
+      .eq("added_by", "admin")
+      .eq("is_paid", false)
+      .eq("quantity", foodItem.quantity)
+      .eq("reference_id", foodItem.menu_item_id)
+      .order("display_order", { ascending: false })
+      .limit(1);
+    if (lineError) throw lineError;
+    const lineItem = lineItems?.[0];
+    if (!lineItem) {
+      return { success: false, error: "Only unpaid food items added by staff can be changed." };
+    }
+
+    const nextQuantity = Number(foodItem.quantity) - 1;
+    const nextFoodTotal = Math.max(0, roundToTwo(Number(foodItem.line_total || 0) - Number(foodItem.unit_price)));
+    const nextLineTotal = Math.max(0, roundToTwo(Number(lineItem.line_total || 0) - Number(foodItem.unit_price)));
+
+    const { error: stockError } = await supabaseAdmin.rpc("increment_menu_item_quantity", {
+      item_id: foodItem.menu_item_id,
+      increment_by: 1
+    });
+    if (stockError) throw stockError;
+    restoredStockFor = foodItem.menu_item_id;
+
+    const { error: lineUpdateError } = await supabaseAdmin
+      .from("booking_line_items")
+      .update({ quantity: nextQuantity, line_total: nextLineTotal })
+      .eq("id", lineItem.id);
+    if (lineUpdateError) throw lineUpdateError;
+    updatedLineItem = {
+      id: lineItem.id,
+      quantity: Number(lineItem.quantity),
+      line_total: Number(lineItem.line_total)
+    };
+
+    const { error: foodUpdateError } = await supabaseAdmin
+      .from("booking_food_items")
+      .update({ quantity: nextQuantity, line_total: nextFoodTotal })
+      .eq("id", foodItem.id)
+      .eq("booking_id", bookingId);
+    if (foodUpdateError) throw foodUpdateError;
+    updatedFoodItem = {
+      id: foodItem.id,
+      quantity: Number(foodItem.quantity),
+      line_total: Number(foodItem.line_total)
+    };
+
+    const { data: updatedBooking, error: updatedBookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("total_amount, amount_paid")
+      .eq("id", bookingId)
+      .single();
+    if (updatedBookingError) throw updatedBookingError;
+
+    const newPaymentStatus = settlementStatus({
+      amountPaid: Number(updatedBooking.amount_paid || 0),
+      total: Number(updatedBooking.total_amount || 0)
+    });
+    const { error: statusError } = await supabaseAdmin
+      .from("bookings")
+      .update({ payment_status: newPaymentStatus, updated_at: new Date().toISOString() })
+      .eq("id", bookingId);
+    if (statusError) throw statusError;
+
+    return { success: true, newTotal: Number(updatedBooking.total_amount || 0), quantity: nextQuantity };
+  } catch (err: any) {
+    if (updatedFoodItem) {
+      const { error } = await supabaseAdmin
+        .from("booking_food_items")
+        .update({ quantity: updatedFoodItem.quantity, line_total: updatedFoodItem.line_total })
+        .eq("id", updatedFoodItem.id)
+        .eq("booking_id", bookingId);
+      if (error) console.error("Could not roll back booking food item:", error);
+    }
+    if (updatedLineItem) {
+      const { error } = await supabaseAdmin
+        .from("booking_line_items")
+        .update({ quantity: updatedLineItem.quantity, line_total: updatedLineItem.line_total })
+        .eq("id", updatedLineItem.id);
+      if (error) console.error("Could not roll back food billing line:", error);
+    }
+    if (restoredStockFor) {
+      const { error } = await supabaseAdmin.rpc("decrement_menu_item_quantity", {
+        item_id: restoredStockFor,
+        decrement_by: 1
+      });
+      if (error) console.error("Could not reverse the inventory increase:", error);
+    }
+    console.error("Decrease food item quantity error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
 /**
  * Remove a food item an admin added to an existing booking - the undo for a
  * mistaken "Add Food". Reverses everything addFoodToBooking() did: the food

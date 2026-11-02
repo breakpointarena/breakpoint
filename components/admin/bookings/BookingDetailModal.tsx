@@ -18,7 +18,7 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, increaseFoodItemQuantity, decreaseFoodItemQuantity, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
 import { getDeviceTypes } from "@/app/(admin)/admin/devices/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
@@ -115,6 +115,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [updatingPlayerCount, setUpdatingPlayerCount] = useState(false);
   const [foodItemToRemove, setFoodItemToRemove] = useState<any>(null);
   const [removingFoodItem, setRemovingFoodItem] = useState(false);
+  const [updatingFoodItemId, setUpdatingFoodItemId] = useState<string | null>(null);
   const [foodSearchQuery, setFoodSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   /**
@@ -153,6 +154,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [sitInClockDraft, setSitInClockDraft] = useState("");
   const [sitOutDialogOpen, setSitOutDialogOpen] = useState(false);
   const [sitOutClockDraft, setSitOutClockDraft] = useState("");
+  const [participantToSitOutBeforeCheckout, setParticipantToSitOutBeforeCheckout] = useState<SharedPlayParticipant | null>(null);
+  const [participantsToSitOutBeforeCheckoutAll, setParticipantsToSitOutBeforeCheckoutAll] = useState<SharedPlayParticipant[]>([]);
   const [participantCustomerDrafts, setParticipantCustomerDrafts] = useState<Record<string, string>>({});
   const [linkingParticipantCustomer, setLinkingParticipantCustomer] = useState<string | null>(null);
   const [sharedPlayNow, setSharedPlayNow] = useState(() => new Date());
@@ -340,8 +343,16 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setAddFoodModalOpen(true);
   };
 
-  const handleOpenParticipantCheckout = async (participantId: string) => {
+  const handleOpenParticipantCheckout = async (participantId: string, skipSitOutPrompt = false) => {
     if (!bookingId) return;
+    const participant = booking?.shared_play_participants?.find(
+      (row: SharedPlayParticipant) => row.id === participantId
+    ) as SharedPlayParticipant | undefined;
+    const isPlaying = participant?.shared_play_periods?.some((period) => !period.ended_at) || false;
+    if (isPlaying && !skipSitOutPrompt) {
+      setParticipantToSitOutBeforeCheckout(participant || null);
+      return;
+    }
     setParticipantCheckoutLoading(true);
     const result = await getSharedPlayParticipantCheckoutQuote(bookingId, participantId);
     setParticipantCheckoutLoading(false);
@@ -357,8 +368,50 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setParticipantCheckoutKey(crypto.randomUUID());
   };
 
-  const handleOpenCheckoutAll = async () => {
+  const handleSitOutAndContinueCheckout = async () => {
+    const participant = participantToSitOutBeforeCheckout;
+    if (!participant || !bookingId || participantCheckoutLoading) return;
+    setParticipantCheckoutLoading(true);
+    const saved = await handleSetSelectedParticipantsPlaying(
+      false,
+      null,
+      arenaClockTime(new Date()).slice(0, 5),
+      [participant.name]
+    );
+    if (saved) {
+      setParticipantToSitOutBeforeCheckout(null);
+      await handleOpenParticipantCheckout(participant.id, true);
+    }
+    setParticipantCheckoutLoading(false);
+  };
+
+  const handleSitOutAllAndContinueCheckout = async () => {
+    if (!bookingId || participantsToSitOutBeforeCheckoutAll.length === 0 || participantCheckoutLoading) return;
+    setParticipantCheckoutLoading(true);
+    const names = participantsToSitOutBeforeCheckoutAll.map((participant) => participant.name);
+    const saved = await handleSetSelectedParticipantsPlaying(
+      false,
+      null,
+      arenaClockTime(new Date()).slice(0, 5),
+      names
+    );
+    if (saved) {
+      setParticipantsToSitOutBeforeCheckoutAll([]);
+      await handleOpenCheckoutAll(true);
+    }
+    setParticipantCheckoutLoading(false);
+  };
+
+  const handleOpenCheckoutAll = async (skipSitOutPrompt = false) => {
     if (!bookingId) return;
+    const activeParticipants = (booking?.shared_play_participants || []).filter(
+      (participant: SharedPlayParticipant) =>
+        !participant.checked_out_at && participant.shared_play_periods?.some((period) => !period.ended_at)
+    ) as SharedPlayParticipant[];
+    if (!skipSitOutPrompt && activeParticipants.length > 0) {
+      setParticipantsToSitOutBeforeCheckoutAll(activeParticipants);
+      return;
+    }
     setParticipantCheckoutLoading(true);
     const result = await getSharedPlayCheckoutAllQuotes(bookingId);
     setParticipantCheckoutLoading(false);
@@ -596,6 +649,38 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setRemovingFoodItem(false);
   };
 
+  const handleIncreaseFoodItem = async (item: any) => {
+    if (!bookingId || updatingFoodItemId) return;
+    setUpdatingFoodItemId(item.id);
+    const result = await increaseFoodItemQuantity(bookingId, item.id);
+    if (result.success) {
+      toast.success(`${item.item_name} quantity increased`, {
+        description: `Quantity: ${result.quantity}. New total: ₹${Number(result.newTotal || 0).toLocaleString("en-IN")}`
+      });
+      await loadBookingDetails();
+      onUpdate?.();
+    } else {
+      toast.error("Could not increase quantity", { description: result.error });
+    }
+    setUpdatingFoodItemId(null);
+  };
+
+  const handleDecreaseFoodItem = async (item: any) => {
+    if (!bookingId || updatingFoodItemId || Number(item.quantity) <= 1) return;
+    setUpdatingFoodItemId(item.id);
+    const result = await decreaseFoodItemQuantity(bookingId, item.id);
+    if (result.success) {
+      toast.success(`${item.item_name} quantity decreased`, {
+        description: `Quantity: ${result.quantity}. New total: ₹${Number(result.newTotal || 0).toLocaleString("en-IN")}`
+      });
+      await loadBookingDetails();
+      onUpdate?.();
+    } else {
+      toast.error("Could not decrease quantity", { description: result.error });
+    }
+    setUpdatingFoodItemId(null);
+  };
+
   const handleUpdatePlayerCount = async (slotId: string, newCount: number, maxPlayers: number) => {
     setUpdatingPlayerCount(true);
     const result = await updatePlayerCount(slotId, newCount, maxPlayers);
@@ -757,15 +842,16 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const handleSetSelectedParticipantsPlaying = async (
     sitIn: boolean,
     sitInClock: string | null = null,
-    sitOutClock: string | null = null
-  ) => {
-    if (savingSharedPlay) return;
-    const selectedNames = sharedRoster.filter((name) =>
+    sitOutClock: string | null = null,
+    selectedNamesOverride?: string[]
+  ): Promise<boolean> => {
+    if (savingSharedPlay) return false;
+    const selectedNames = selectedNamesOverride ?? sharedRoster.filter((name) =>
       selectedParticipants.some((selected) => selected.toLowerCase() === name.toLowerCase())
     );
     if (selectedNames.length === 0) {
       toast.error("Select at least one player");
-      return;
+      return false;
     }
     const selectedSet = new Set(selectedNames.map((name) => name.toLowerCase()));
     const nextActive = sitIn
@@ -774,7 +860,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     const maxPlayers = Number(deviceSlot?.devices?.device_type?.max_players || 10);
     if (sitIn && nextActive.length > maxPlayers) {
       toast.error(`This device supports up to ${maxPlayers} players at a time`);
-      return;
+      return false;
     }
 
     setActivePlayers(nextActive);
@@ -792,6 +878,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       if (sitIn) setSitInDialogOpen(false);
       else if (sitOutClock) setSitOutDialogOpen(false);
     }
+    return saved;
   };
 
   const openSitInDialog = () => {
@@ -809,6 +896,13 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   };
 
   const openSitOutDialog = () => {
+    setSitOutClockDraft(arenaClockTime(sharedPlayNow).slice(0, 5));
+    setSitOutDialogOpen(true);
+  };
+
+  const openSitOutAllDialog = () => {
+    if (activePlayers.length === 0) return;
+    setSelectedParticipants([...activePlayers]);
     setSitOutClockDraft(arenaClockTime(sharedPlayNow).slice(0, 5));
     setSitOutDialogOpen(true);
   };
@@ -1426,6 +1520,16 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                             >
                               <Pause className="mr-1 h-3 w-3" /> Sit out
                             </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={savingSharedPlay || activePlayers.length === 0}
+                              onClick={openSitOutAllDialog}
+                              className="border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                            >
+                              <Pause className="mr-1 h-3 w-3" /> Sit out all
+                            </Button>
                           </div>
                         )}
                       </div>
@@ -1811,7 +1915,42 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       <div key={item.id} className="flex justify-between items-center p-4 bg-[var(--surface)] border border-[#27272a] rounded-lg hover:border-primary/30 transition-colors">
                         <div className="flex-1">
                           <p className="text-lg font-bold text-white mb-1">{item.item_name}</p>
-                          <p className="text-sm-enhanced text-secondary-content">Qty: <span className="font-bold">{item.quantity}</span> × ₹{Number(item.unit_price).toLocaleString('en-IN')}</p>
+                          <div className="flex items-center gap-2 text-sm-enhanced text-secondary-content">
+                            {item.removable && canEditBilling ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleDecreaseFoodItem(item)}
+                                  disabled={Boolean(updatingFoodItemId) || Number(item.quantity) <= 1}
+                                  className="h-7 w-7 p-0 text-secondary-content hover:text-white hover:bg-white/10 disabled:opacity-40"
+                                  title={Number(item.quantity) <= 1 ? "Minimum quantity is 1" : `Decrease ${item.item_name} quantity`}
+                                  aria-label={`Decrease ${item.item_name} quantity`}
+                                >
+                                  {updatingFoodItemId === item.id
+                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    : <Minus className="h-3.5 w-3.5" />}
+                                </Button>
+                                <span className="min-w-4 text-center font-bold text-white">{item.quantity}</span>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleIncreaseFoodItem(item)}
+                                  disabled={Boolean(updatingFoodItemId) || !item.menu_item_id}
+                                  className="h-7 w-7 p-0 text-primary hover:text-primary hover:bg-primary/10"
+                                  title={`Increase ${item.item_name} quantity`}
+                                  aria-label={`Increase ${item.item_name} quantity`}
+                                >
+                                  {updatingFoodItemId === item.id
+                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    : <Plus className="h-3.5 w-3.5" />}
+                                </Button>
+                              </>
+                            ) : (
+                              <span>Qty: <span className="font-bold">{item.quantity}</span></span>
+                            )}
+                            <span>× ₹{Number(item.unit_price).toLocaleString('en-IN')}</span>
+                          </div>
                           {item.participant_id && booking.shared_play_enabled && (
                             <p className="mt-1 text-xs font-semibold text-primary">
                               For {booking.shared_play_participants?.find((participant: any) => participant.id === item.participant_id)?.name || "participant"}
@@ -1825,15 +1964,18 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                           </div>
                           {/* Only unpaid food an admin added can be taken back off */}
                           {item.removable && canEditBilling && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => setFoodItemToRemove(item)}
-                              className="h-9 w-9 p-0 text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                              title={`Remove ${item.item_name}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            <div>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setFoodItemToRemove(item)}
+                                disabled={Boolean(updatingFoodItemId)}
+                                className="h-9 w-9 p-0 text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                                title={`Remove ${item.item_name}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -2672,6 +2814,70 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={Boolean(participantToSitOutBeforeCheckout)}
+        onOpenChange={(open) => {
+          if (!open && !participantCheckoutLoading) setParticipantToSitOutBeforeCheckout(null);
+        }}
+      >
+        <AlertDialogContent className="border-[#27272a] bg-[var(--surface)] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-lg font-black">Sit out before checkout?</AlertDialogTitle>
+            <AlertDialogDescription className="text-secondary-content">
+              {participantToSitOutBeforeCheckout?.name} is still playing. Sit them out now and continue to checkout? Their timer will stop at the current time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={participantCheckoutLoading} className="border-[#3f3f46] bg-transparent text-white hover:bg-white/5">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={participantCheckoutLoading}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleSitOutAndContinueCheckout();
+              }}
+              className="bg-primary font-black text-black hover:bg-primary-hover"
+            >
+              {participantCheckoutLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Sit out & continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={participantsToSitOutBeforeCheckoutAll.length > 0}
+        onOpenChange={(open) => {
+          if (!open && !participantCheckoutLoading) setParticipantsToSitOutBeforeCheckoutAll([]);
+        }}
+      >
+        <AlertDialogContent className="border-[#27272a] bg-[var(--surface)] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-lg font-black">Sit out before checkout all?</AlertDialogTitle>
+            <AlertDialogDescription className="text-secondary-content">
+              {participantsToSitOutBeforeCheckoutAll.length} player{participantsToSitOutBeforeCheckoutAll.length === 1 ? " is" : "s are"} still playing. Sit them out now and continue to the group checkout? Their timers will stop at the current time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={participantCheckoutLoading} className="border-[#3f3f46] bg-transparent text-white hover:bg-white/5">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={participantCheckoutLoading}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleSitOutAllAndContinueCheckout();
+              }}
+              className="bg-primary font-black text-black hover:bg-primary-hover"
+            >
+              {participantCheckoutLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Sit out all & continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={checkoutAllOpen} onOpenChange={(open) => !open && setCheckoutAllOpen(false)}>
         <DialogContent className="flex max-h-[90dvh] w-[calc(100%-2rem)] max-w-2xl flex-col overflow-hidden border-[#27272a] bg-[var(--surface)] text-white">
