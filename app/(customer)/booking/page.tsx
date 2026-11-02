@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Users, Sparkles } from 'lucide-react';
 import { getDeviceTypesWithAvailability } from "./actions";
 import Link from "next/link";
+import { hourlyRateForPlayerCount } from "@/lib/payments/money";
 
 export default function GamingStationPage() {
   const router = useRouter();
@@ -18,6 +19,21 @@ export default function GamingStationPage() {
   const [loading, setLoading] = useState(true);
   const [deviceTypes, setDeviceTypes] = useState<any[]>([]);
   const [activeFilter, setActiveFilter] = useState("All Devices");
+
+  const deviceFilters = [
+    { label: "Console", matches: (type: any) => type.name === "ps5" || type.name === "private_ps5" },
+    { label: "PC", matches: (type: any) => type.name === "gaming_pc" },
+    { label: "Snooker", matches: (type: any) => type.name?.includes("snooker") },
+    { label: "American Pool", matches: (type: any) => type.name === "american_pool" || type.name === "american_snooker" },
+    { label: "F1 Simulator", matches: (type: any) => type.name === "other" || type.name === "f1_simulator" || /f1 simulator|fi simulator/i.test(type.display_name || "") },
+  ];
+  const visibleFilters = [
+    "All Devices",
+    ...deviceFilters
+      .filter((filter) => deviceTypes.some((type) => filter.matches(type) && Number(type.total_devices_count) > 0))
+      .map((filter) => filter.label),
+  ];
+  const selectedDeviceFilter = deviceFilters.find((filter) => filter.label === activeFilter);
 
   useEffect(() => {
     // Reset booking state when starting a new booking
@@ -32,12 +48,15 @@ export default function GamingStationPage() {
   }, [dispatch]);
 
   const handleSelectAndProceed = (deviceType: any) => {
-    const hourlyRate = Number(deviceType.regular_hourly_rate) || 0;
+    const groupHourlyRate = Number(deviceType.regular_hourly_rate) || 0;
+    const singlePlayerHourlyRate = Number(deviceType.single_player_hourly_rate ?? groupHourlyRate) || 0;
+    const hourlyRate = hourlyRateForPlayerCount(deviceType.name, groupHourlyRate, singlePlayerHourlyRate, 1);
 
     dispatch(setDeviceType({
       id: deviceType.id,
       name: deviceType.display_name,
-      hourlyRate: hourlyRate,
+      hourlyRate: groupHourlyRate,
+      singlePlayerHourlyRate,
       includedPlayers: deviceType.included_players,
       maxPlayers: deviceType.max_players,
       extraPlayerCharge: Number(deviceType.extra_player_charge)
@@ -88,7 +107,7 @@ export default function GamingStationPage() {
 
       <div className="flex items-center justify-between border-b border-zinc-900 pb-4">
         <div className="flex flex-wrap gap-2">
-          {["All Devices", "Console", "PC", "Snooker"].map((tag) => (
+          {visibleFilters.map((tag) => (
             <button
               key={tag}
               onClick={() => setActiveFilter(tag)}
@@ -106,12 +125,7 @@ export default function GamingStationPage() {
       {/* DEVICE TYPES GRID CONTAINER */}
       <div className="max-w-7xl mx-auto w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
         {deviceTypes
-          .filter(type => {
-            if (activeFilter === "Console") return type.name === "ps5";
-            if (activeFilter === "PC") return type.name === "gaming_pc";
-            if (activeFilter === "Snooker") return type.name?.includes("snooker");
-            return true;
-          })
+          .filter((type) => !selectedDeviceFilter || selectedDeviceFilter.matches(type))
           .map((deviceType) => {
             const isAvail = deviceType.available_devices_count > 0;
             return (
@@ -151,7 +165,7 @@ export default function GamingStationPage() {
                         </h4>
                         <p className="text-min text-secondary-content font-bold mt-0.5 flex items-center gap-1">
                           <Users className="h-3 w-3" />
-                          {deviceType.included_players} included • Max {deviceType.max_players}
+                          {deviceType.name?.includes("ps5") ? "Group priced per player" : `${deviceType.included_players} included`} • Max {deviceType.max_players}
                         </p>
                       </div>
                       <div className="text-right flex-shrink-0 flex items-baseline gap-1 mt-1">

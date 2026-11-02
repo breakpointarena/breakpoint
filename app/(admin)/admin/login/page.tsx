@@ -47,14 +47,10 @@ function LoginForm() {
     setIsLoading(true)
 
     try {
-      console.log('Attempting login with:', { email, passwordLength: password.length })
-
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       })
-
-      console.log('Login response:', { data: !!data, error })
 
       if (error) {
         console.error('Login error:', error)
@@ -75,8 +71,9 @@ function LoginForm() {
         router.refresh()
       }
     } catch (error) {
+      console.error('Login request failed:', error)
       toast.error('Login Failed', {
-        description: 'An unexpected error occurred',
+        description: error instanceof Error ? error.message : 'The sign-in request failed unexpectedly.',
       })
     } finally {
       setIsLoading(false)

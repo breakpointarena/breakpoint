@@ -15,7 +15,7 @@ import {
 import { countAvailableDevicesForRange, toRequestedRange } from './availability'
 import { holdMatchesSlot, loadLiveHold } from '@/lib/bookings/slotHold'
 import { resolveHappyHour } from './happyHour'
-import { round2, deviceCharge, extraPlayersCharge } from './money'
+import { round2, deviceCharge, extraPlayersCharge, hourlyRateForPlayerCount } from './money'
 
 const MIN_DURATION_MINUTES = 30
 const MAX_DURATION_MINUTES = 5 * 60
@@ -107,8 +107,25 @@ export interface SubscriptionQuote {
   customer: CustomerDetails
   planId: string
   planName: string
+  planType: 'membership' | 'hour_pack'
+  deviceTypeId: string | null
   durationMonths: number
   discountPercentage: number
+  hoursIncluded: number | null
+  standardValue: number | null
+  totalAmount: number
+}
+
+export interface WalletTopUpQuote {
+  kind: 'wallet_top_up'
+  customerId: string
+  customerPhone: string
+  offerId: string
+  offerName: string
+  price: number
+  paidCredits: number
+  bonusCredits: number
+  bonusValidityDays: number | null
   totalAmount: number
 }
 
@@ -372,7 +389,7 @@ export async function quoteDeviceBooking(
     const { data: deviceType, error: deviceTypeError } = await supabaseAdmin
       .from('device_types')
       .select(
-        'id, name, display_name, regular_hourly_rate, included_players, max_players, extra_player_charge, is_active'
+        'id, name, display_name, regular_hourly_rate, single_player_hourly_rate, included_players, max_players, extra_player_charge, is_active'
       )
       .eq('id', input.deviceTypeId)
       .single()
@@ -422,7 +439,12 @@ export async function quoteDeviceBooking(
 
     // --- Charges ---
     const durationHours = durationMinutes / 60
-    const hourlyRate = Number(deviceType.regular_hourly_rate) || 0
+    const hourlyRate = hourlyRateForPlayerCount(
+      deviceType.name,
+      Number(deviceType.regular_hourly_rate) || 0,
+      deviceType.single_player_hourly_rate,
+      playerCount
+    )
     const extraPlayerCharge = Number(deviceType.extra_player_charge) || 0
 
     // Whole rupees, and the extra players rounded one at a time - see money.ts.
@@ -617,26 +639,56 @@ export async function quoteSubscription(
     }
 
     if (!input.planId) {
-      return { success: false, error: 'Please choose a membership plan.' }
+      return { success: false, error: 'Please choose a subscription plan.' }
     }
 
     const { data: plan, error } = await supabaseAdmin
       .from('subscription_plans')
-      .select('id, name, price, duration_months, discount_percentage, is_active')
+      .select('id, name, price, duration_months, discount_percentage, is_active, plan_type, hours_included, standard_value')
       .eq('id', input.planId)
       .maybeSingle()
 
     if (error) throw error
     if (!plan) {
-      return { success: false, error: 'That membership plan no longer exists.' }
+      return { success: false, error: 'That subscription plan no longer exists.' }
     }
     if (plan.is_active === false) {
-      return { success: false, error: 'That membership plan is no longer on sale.' }
+      return { success: false, error: 'That subscription plan is no longer on sale.' }
     }
 
     const price = Number(plan.price)
     if (!Number.isFinite(price) || price <= 0) {
-      return { success: false, error: 'That membership plan is not priced correctly. Please contact the arena.' }
+      return { success: false, error: 'That subscription plan is not priced correctly. Please contact the arena.' }
+    }
+    const planType = plan.plan_type === 'hour_pack' ? 'hour_pack' : 'membership'
+    let deviceTypeId: string | null = null
+    if (planType === 'hour_pack') {
+      const { data: categorizedPlan, error: categoryError } = await supabaseAdmin
+        .from('subscription_plans')
+        .select('device_type_id')
+        .eq('id', plan.id)
+        .maybeSingle()
+
+      if (categoryError) {
+        console.error('Could not read hour-pack category:', categoryError)
+        return {
+          success: false,
+          error: 'This hour pack is not configured with a play category yet.',
+        }
+      }
+      deviceTypeId = categorizedPlan?.device_type_id ?? null
+    }
+    const hoursIncluded = plan.hours_included == null ? null : Number(plan.hours_included)
+    const standardValue = plan.standard_value == null ? null : Number(plan.standard_value)
+    if (
+      planType === 'hour_pack' &&
+      (!deviceTypeId ||
+        !Number.isInteger(hoursIncluded) ||
+        Number(hoursIncluded) <= 0 ||
+        !Number.isFinite(standardValue) ||
+        Number(standardValue) < price)
+    ) {
+      return { success: false, error: 'That hour pack is not configured correctly. Please contact the arena.' }
     }
 
     return {
@@ -646,8 +698,12 @@ export async function quoteSubscription(
         customer,
         planId: plan.id,
         planName: plan.name || 'Membership',
+        planType,
+        deviceTypeId,
         durationMonths: Number(plan.duration_months || 1),
         discountPercentage: Number(plan.discount_percentage || 0),
+        hoursIncluded,
+        standardValue,
         totalAmount: round2(price),
       },
     }

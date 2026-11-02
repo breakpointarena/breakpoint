@@ -2,11 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   IndianRupee, TrendingUp, Calendar, Users, Clock,
-  Gamepad2, UtensilsCrossed, Activity, ArrowRight,
+  Gamepad2, UtensilsCrossed, Activity, ArrowRight, Wallet,
   CheckCircle2, Loader2, AlertCircle, PlusCircle, Eye, RefreshCw
 } from "lucide-react";
 import { toast } from "sonner";
@@ -51,6 +52,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
   // Modal states
   const [revenueModalOpen, setRevenueModalOpen] = useState(false);
   const [revenueDetails, setRevenueDetails] = useState<any[]>([]);
+  const [revenueWalletSales, setRevenueWalletSales] = useState<any[]>([]);
   const [sessionsModalOpen, setSessionsModalOpen] = useState(false);
   const [sessionsDetails, setSessionsDetails] = useState<any[]>([]);
   const [upcomingModalOpen, setUpcomingModalOpen] = useState(false);
@@ -135,6 +137,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
     const result = await getTodaysRevenueDetails();
     if (result.success) {
       setRevenueDetails(result.bookings);
+      setRevenueWalletSales(result.walletSales || []);
       setRevenueModalOpen(true);
     }
   };
@@ -236,7 +239,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
       </div>
 
       {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         <Card
           className="bg-gradient-to-br from-green-500/10 to-green-600/5 border-green-500/20 p-5 cursor-pointer hover:border-green-500/40 transition-all hover:scale-[1.02]"
           onClick={handleRevenueClick}
@@ -244,13 +247,14 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
           <div className="flex items-start justify-between">
             <div className="flex-1">
               <p className="text-stat-label text-green-400 mb-1">
-                Today's Revenue
+                <span className="inline xl:block">Today's</span>{' '}
+                <span className="inline xl:block">Collections</span>
               </p>
               <h3 className="text-2xl font-black text-white mb-1">
-                <RevealAmount amount={stats?.todaysRevenue || 0} label="today's revenue" />
+                <RevealAmount amount={stats?.todaysRevenue || 0} label="today's collections" />
               </h3>
               <p className="text-min-enhanced text-secondary-content">
-                From <CountUp end={stats?.todaysBookings || 0} duration={800} /> bookings
+                Booking payments and wallet top-ups
               </p>
             </div>
             <div className="p-2 bg-green-500/10 rounded-lg">
@@ -260,7 +264,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
         </Card>
 
         <Card
-          className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 border-blue-500/20 p-5 cursor-pointer hover:border-blue-500/40 transition-all hover:scale-[1.02]"
+          className="xl:order-3 bg-gradient-to-br from-blue-500/10 to-blue-600/5 border-blue-500/20 p-5 cursor-pointer hover:border-blue-500/40 transition-all hover:scale-[1.02]"
           onClick={handleSessionsClick}
         >
           <div className="flex items-start justify-between">
@@ -282,7 +286,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
         </Card>
 
         <Card
-          className="bg-gradient-to-br from-amber-500/10 to-amber-600/5 border-amber-500/20 p-5 cursor-pointer hover:border-amber-500/40 transition-all hover:scale-[1.02]"
+          className="xl:order-4 bg-gradient-to-br from-amber-500/10 to-amber-600/5 border-amber-500/20 p-5 cursor-pointer hover:border-amber-500/40 transition-all hover:scale-[1.02]"
           onClick={handleUpcomingClick}
         >
           <div className="flex items-start justify-between">
@@ -304,7 +308,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
         </Card>
 
         <Card
-          className="bg-gradient-to-br from-amber-500/10 to-orange-600/5 border-amber-500/20 p-5 cursor-pointer hover:border-amber-500/40 transition-all hover:scale-[1.02]"
+          className="xl:order-5 bg-gradient-to-br from-amber-500/10 to-orange-600/5 border-amber-500/20 p-5 cursor-pointer hover:border-amber-500/40 transition-all hover:scale-[1.02]"
           onClick={handleDevicesClick}
         >
           <div className="flex items-start justify-between">
@@ -325,7 +329,30 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
           </div>
         </Card>
 
-        <Card className="bg-[var(--surface)] border-[#27272a] p-5">
+        <Card className="xl:order-2 bg-gradient-to-br from-cyan-500/10 to-cyan-600/5 border-cyan-500/20 p-5">
+          <div className="flex items-start justify-between">
+            <div className="flex-1 min-w-0">
+              <p className="text-stat-label text-cyan-300 mb-1">Booking Settlements</p>
+              <h3 className="text-2xl font-black text-white mb-1">
+                <RevealAmount
+                  amount={stats?.todaysBookingSettlements || 0}
+                  label="today's booking settlements including wallet credits"
+                />
+              </h3>
+              <p className="text-min-enhanced text-secondary-content">
+                Includes wallet credits; excludes top-ups
+              </p>
+            </div>
+            <div className="p-2 bg-cyan-500/10 rounded-lg">
+              <Wallet className="h-5 w-5 text-cyan-400" />
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Secondary Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 items-stretch gap-4">
+        <Card className="h-full xl:min-h-[190px] bg-[var(--surface)] border-[#27272a] p-4">
           <div className="flex items-start justify-between">
             <div className="flex-1">
               <p className="text-stat-label mb-1">
@@ -344,18 +371,15 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
             </div>
           </div>
         </Card>
-      </div>
 
-      {/* Secondary Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="bg-[var(--surface)] border-[#27272a] p-5">
+        <Card className="h-full xl:min-h-[190px] bg-[var(--surface)] border-[#27272a] p-4">
           <div className="flex items-center justify-between mb-3">
             <p className="text-label-enhanced">
               Today's Food Orders
             </p>
             <UtensilsCrossed className="h-4 w-4 text-muted-content" />
           </div>
-          <h4 className="text-2xl font-black text-white">
+          <h4 className="text-xl font-black text-white">
             {quickStats?.todaysFoodOrders || 0}
           </h4>
           <p className="text-min-enhanced text-secondary-content mt-1">
@@ -363,7 +387,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
           </p>
         </Card>
 
-        <Card className="bg-[var(--surface)] border-[#27272a] p-5">
+        <Card className="h-full xl:min-h-[190px] bg-[var(--surface)] border-[#27272a] p-4">
           <div className="flex items-center justify-between mb-3">
             <p className="text-label-enhanced">
               Peak Hour Today
@@ -378,7 +402,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
           </p>
         </Card>
 
-        <Card className="bg-[var(--surface)] border-[#27272a] p-5">
+        <Card className="h-full xl:min-h-[190px] bg-[var(--surface)] border-[#27272a] p-4">
           <div className="flex items-center justify-between mb-3">
             <p className="text-label-enhanced">
               Quick Actions
@@ -496,9 +520,14 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
                   >
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <p className="text-sm font-bold text-white">
+                        <Link
+                          href={`/admin/bookings/${booking.id}`}
+                          onClick={(event) => event.stopPropagation()}
+                          className="text-sm font-bold text-white hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-sm"
+                          aria-label={`View booking ${booking.booking_number} details`}
+                        >
                           {booking.booking_number}
-                        </p>
+                        </Link>
                         <BookingStatusBadge status={booking.status} />
                       </div>
                       <p className="text-min-enhanced text-secondary-content">
@@ -584,6 +613,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
         open={revenueModalOpen}
         onClose={() => setRevenueModalOpen(false)}
         bookings={revenueDetails}
+        walletSales={revenueWalletSales}
         totalRevenue={stats?.todaysRevenue || 0}
         onBookingClick={handleBookingClick}
       />

@@ -2,6 +2,7 @@
 
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import Link from "next/link";
 import { BookingTimingCell, SessionSummaryLine } from "./SessionTimeline";
 import { BookingStatusBadge } from "./BookingStatusBadge";
 import { AttentionBadges } from "./AttentionBadges";
@@ -9,6 +10,7 @@ import { PaymentStatusBadge } from "./PaymentStatusBadge";
 import { Calendar, Clock, MapPin, IndianRupee, Phone, User, Eye, UserCheck, LogOut, UtensilsCrossed, CreditCard, Link2, Ban, Undo2 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { formatClockTime12h } from "@/lib/utils/dates";
+import { liveSessionEstimate } from "@/lib/bookings/liveSessionAmount";
 
 interface BookingsGridProps {
   customerGroups: Array<{
@@ -34,6 +36,7 @@ interface BookingsGridProps {
   onMarkRefunded?: (booking: any) => void;
   needsRefund?: (booking: any) => boolean;
   isPending: boolean;
+  liveNow: number;
 }
 
 export function BookingsGrid({
@@ -47,7 +50,8 @@ export function BookingsGrid({
   canCancel,
   onMarkRefunded,
   needsRefund,
-  isPending
+  isPending,
+  liveNow
 }: BookingsGridProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -61,6 +65,12 @@ export function BookingsGrid({
           const isSession = booking.billed_on_actual_time === true;
           const awaitingCheckIn = isSession && booking.status === "confirmed";
           const isPlaying = isSession && booking.status === "checked_in";
+          const liveEstimate = liveSessionEstimate(booking, new Date(liveNow));
+          const displayedAmount = liveEstimate?.totalAmount ?? Number(booking.total_amount || 0);
+          const canEditBilling =
+            booking.status !== "cancelled" &&
+            booking.payment_status !== "paid" &&
+            booking.payment_status !== "refunded";
 
           return (
             <Card
@@ -70,7 +80,13 @@ export function BookingsGrid({
               {/* Header - Booking ID & Status */}
               <div className="p-4 bg-gradient-to-br from-[var(--background)] to-[var(--surface)] border-b border-[#27272a]/50">
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-mono text-primary/70">{booking.booking_number}</p>
+                  <Link
+                    href={`/admin/bookings/${booking.id}`}
+                    className="text-xs font-mono text-primary/70 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-sm"
+                    aria-label={`View booking ${booking.booking_number} details`}
+                  >
+                    {booking.booking_number}
+                  </Link>
                   <BookingStatusBadge status={booking.status} size="sm" />
                 </div>
 
@@ -100,6 +116,8 @@ export function BookingsGrid({
                       createdAt={booking.created_at}
                       checkedInAt={booking.checked_in_at}
                       completedAt={booking.completed_at}
+                      sharedPlayEnabled={booking.shared_play_enabled}
+                      sharedPlayParticipants={booking.shared_play_participants || []}
                     />
                     {awaitingCheckIn && (
                       <p className="text-[11px] text-amber-300/70 font-medium mt-1">
@@ -195,7 +213,7 @@ export function BookingsGrid({
                   <div className="flex-1">
                     <p className="text-xs text-primary/70">Total Amount</p>
                     <p className="text-lg font-black text-primary">
-                      ₹{formatCurrency(booking.total_amount)}
+                      ₹{formatCurrency(displayedAmount)}
                     </p>
                   </div>
                   <PaymentStatusBadge
@@ -203,7 +221,9 @@ export function BookingsGrid({
                     bookingStatus={booking.status}
                     size="sm"
                     amountPaid={booking.amount_paid}
-                    balanceDue={booking.balance_due}
+                    balanceDue={liveEstimate
+                      ? Math.max(0, displayedAmount - Number(booking.amount_paid || 0))
+                      : booking.balance_due}
                   />
                 </div>
               </div>
@@ -260,13 +280,10 @@ export function BookingsGrid({
                       <LogOut className="h-4 w-4" />
                     </Button>
                   )}
-                  {/* Food can only be added while the booking is live. A food-only
-                      order has no session to be live for, so it stays open on its
-                      own - but not once it has been called off or closed, which is
-                      how a cancelled food order kept offering this button. */}
-                  {booking.status !== "cancelled" &&
-                    booking.status !== "completed" &&
-                    (isFoodOnly || booking.status === "confirmed" || booking.status === "checked_in") && (
+                  {/* Keep billing edits available after checkout while money is
+                      still owed. Cancelled and fully settled bookings are closed. */}
+                  {canEditBilling &&
+                    (isFoodOnly || booking.status === "confirmed" || booking.status === "checked_in" || booking.status === "completed") && (
                     <Button
                       size="sm"
                       variant="ghost"

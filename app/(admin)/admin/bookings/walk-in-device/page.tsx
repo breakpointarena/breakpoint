@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import {
   createWalkInBooking,
   createWalkInSession,
   getWalkInDeviceAvailability,
+  getWalkInStationOptions,
   lookupWalkInCustomer,
   type WalkInDeviceAvailability
 } from "../actions";
@@ -57,7 +58,6 @@ import {
   BOOKING_WINDOW_ERROR
 } from "@/lib/utils/dates";
 import {
-  PROVISIONAL_SESSION_HOURS,
   formatPlayedDuration,
   resolveBackdatedStart,
   resolvePlannedSession
@@ -76,7 +76,7 @@ import {
 import { useHappyHours } from "@/lib/hooks/useHappyHours";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { bookingNotificationId } from "@/lib/hooks/useAdminNotificationPolling";
-import { extraPlayersCharge, perExtraPlayerCharge, round2 } from "@/lib/payments/money";
+import { extraPlayersCharge, hourlyRateForPlayerCount, perExtraPlayerCharge, round2 } from "@/lib/payments/money";
 
 export default function WalkInBookingPage() {
   const router = useRouter();
@@ -86,6 +86,10 @@ export default function WalkInBookingPage() {
   const [deviceTypes, setDeviceTypes] = useState<any[]>([]);
   const [selectedDeviceType, setSelectedDeviceType] = useState<any>(null);
   const [loadingDevices, setLoadingDevices] = useState(true);
+  const [deviceLoadError, setDeviceLoadError] = useState<string | null>(null);
+  const [walkInStations, setWalkInStations] = useState<Array<{ id: string; station_number: string }>>([]);
+  const [selectedWalkInStationId, setSelectedWalkInStationId] = useState("");
+  const [loadingWalkInStations, setLoadingWalkInStations] = useState(false);
 
   // Slot selection
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -149,7 +153,7 @@ export default function WalkInBookingPage() {
   /**
    * When the customer says they are leaving, if they have said.
    *
-   * Empty holds the station for `PROVISIONAL_SESSION_HOURS`, which is a
+   * Empty holds the station for 90 minutes, which is a
    * placeholder nobody chose. A time here replaces it, so the slot row and the
    * floor plan describe the window somebody actually expects.
    *
@@ -302,6 +306,44 @@ export default function WalkInBookingPage() {
     loadDeviceTypes();
   }, []);
 
+  useEffect(() => {
+    const mediumType = deviceTypes.find((deviceType) => deviceType.name === "medium_snooker");
+    if (mode !== "session" || !mediumType) {
+      setWalkInStations([]);
+      setSelectedWalkInStationId("");
+      setLoadingWalkInStations(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingWalkInStations(true);
+    getWalkInStationOptions(mediumType.id)
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.success) {
+          setWalkInStations([]);
+          setSelectedWalkInStationId("");
+          toast.error("Could not load Medium Snooker tables", { description: result.error });
+          return;
+        }
+        setWalkInStations(result.stations || []);
+        setSelectedWalkInStationId("");
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setWalkInStations([]);
+          setSelectedWalkInStationId("");
+          console.error("Could not load walk-in stations:", error);
+          toast.error("Could not load Medium Snooker tables");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingWalkInStations(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [deviceTypes, mode]);
+
   /**
    * One fetch per date and device type. Deliberately not keyed on the duration:
    * `availableStartTimes` below derives that from occupancy already in hand.
@@ -378,11 +420,22 @@ export default function WalkInBookingPage() {
 
   const loadDeviceTypes = async () => {
     setLoadingDevices(true);
-    const result = await getDeviceTypesWithAvailability();
-    if (result.success) {
+    setDeviceLoadError(null);
+    try {
+      const result = await getDeviceTypesWithAvailability();
+      if (!result.success) {
+        setDeviceTypes([]);
+        setDeviceLoadError(result.error || "Could not load device types.");
+        return;
+      }
       setDeviceTypes(result.deviceTypes || []);
+    } catch (error) {
+      console.error("Error loading walk-in device types:", error);
+      setDeviceTypes([]);
+      setDeviceLoadError("Could not load device types. Please try again.");
+    } finally {
+      setLoadingDevices(false);
     }
-    setLoadingDevices(false);
   };
 
   const loadAvailability = async () => {
@@ -406,9 +459,10 @@ export default function WalkInBookingPage() {
     }
   };
 
-  const handleSelectDeviceType = (deviceType: any) => {
+  const handleSelectDeviceType = (deviceType: any, stationId?: string) => {
     setSelectedDeviceType(deviceType);
     setPlayerCount(deviceType.included_players || 1);
+    setSelectedWalkInStationId(stationId || "");
     // A walk-in has no slot to pick: the clock starts when the customer is
     // checked in, so the date and duration step is skipped entirely.
     setStep(mode === "session" ? 3 : 2);
@@ -539,6 +593,10 @@ export default function WalkInBookingPage() {
       toast.error("Invalid Date of Birth", { description: DOB_ERROR });
       return;
     }
+    if (selectedDeviceType?.name === "medium_snooker" && !selectedWalkInStationId) {
+      toast.error("Choose Medium Snooker table 1 or 2");
+      return;
+    }
 
     // Refused here as well as on the server. The server's copy is the one that
     // decides, but a desk with a customer in front of them should not have to
@@ -594,10 +652,11 @@ export default function WalkInBookingPage() {
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
       customerEmail: customerEmail.trim() || null,
-      customerDob: customerDob ? formatDateForDB(customerDob) : "",
+      customerDob: customerDob ? formatDateForDB(customerDob) : null,
       deviceTypeId: selectedDeviceType.id,
       deviceTypeName: selectedDeviceType.display_name,
       playerCount,
+      preferredDeviceId: selectedDeviceType.name === "medium_snooker" ? selectedWalkInStationId : null,
       startedClock,
       plannedEndClock
     });
@@ -662,7 +721,7 @@ export default function WalkInBookingPage() {
     const extraPlayersCount = Math.max(0, playerCount - (selectedDeviceType?.included_players || 1));
     const durationHours = selectedDuration / 60;
     const extraPlayerCharge = extraPlayersCharge(extraPlayersCount, Number(selectedDeviceType?.extra_player_charge) || 0, durationHours);
-    const baseRate = calculatePrice(Number(selectedDeviceType?.regular_hourly_rate) || 0, selectedDuration);
+    const baseRate = calculatePrice(hourlyRateForPlayerCount(selectedDeviceType?.name, Number(selectedDeviceType?.regular_hourly_rate) || 0, selectedDeviceType?.single_player_hourly_rate, playerCount), selectedDuration);
     const subtotal = baseRate + extraPlayerCharge;
     const subscriptionDiscount = activeSubscription
       ? round2((subtotal * activeSubscription.discount_percentage) / 100)
@@ -744,7 +803,7 @@ export default function WalkInBookingPage() {
   const extraPlayersCount = Math.max(0, playerCount - (selectedDeviceType?.included_players || 1));
   const durationHours = selectedDuration / 60;
   const extraPlayerCharge = extraPlayersCharge(extraPlayersCount, Number(selectedDeviceType?.extra_player_charge) || 0, durationHours);
-  const baseRate = calculatePrice(Number(selectedDeviceType?.regular_hourly_rate) || 0, selectedDuration);
+  const baseRate = calculatePrice(hourlyRateForPlayerCount(selectedDeviceType?.name, Number(selectedDeviceType?.regular_hourly_rate) || 0, selectedDeviceType?.single_player_hourly_rate, playerCount), selectedDuration);
   const subtotal = baseRate + extraPlayerCharge;
   const subscriptionDiscount = activeSubscription
     ? round2((subtotal * activeSubscription.discount_percentage) / 100)
@@ -982,9 +1041,31 @@ export default function WalkInBookingPage() {
               <div className="flex items-center justify-center h-64">
                 <BreakpointLoader size="lg" />
               </div>
+            ) : deviceLoadError ? (
+              <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-6 text-center">
+                <p className="font-bold text-red-400">Could not load device types</p>
+                <p className="mt-2 text-sm text-muted-content">{deviceLoadError}</p>
+                <Button type="button" variant="outline" className="mt-4" onClick={loadDeviceTypes}>
+                  <RefreshCw className="mr-2 h-4 w-4" /> Try again
+                </Button>
+              </div>
+            ) : deviceTypes.length === 0 ? (
+              <div className="rounded-lg border border-zinc-800 bg-[var(--surface)] p-6 text-center">
+                <p className="font-bold text-muted-content">No active device types available</p>
+                <p className="mt-2 text-sm text-muted-content">Activate a device type in Device Configuration, then try again.</p>
+                <Button type="button" variant="outline" className="mt-4" onClick={loadDeviceTypes}>
+                  <RefreshCw className="mr-2 h-4 w-4" /> Refresh
+                </Button>
+              </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {deviceTypes.map((deviceType) => {
+                {[...deviceTypes]
+                  .sort((a, b) => String(a.display_name || a.name || "").localeCompare(
+                    String(b.display_name || b.name || ""),
+                    undefined,
+                    { sensitivity: "base", numeric: true }
+                  ))
+                  .map((deviceType) => {
                   const bookingNow = mode === "session";
                   /**
                    * How many of these the customer can actually have, which is a
@@ -1004,6 +1085,48 @@ export default function WalkInBookingPage() {
                     : deviceType.total_devices_count ?? deviceType.available_devices_count ?? 0;
                   const isAvailable = availableCount > 0;
                   const canPick = isAvailable || !bookingNow;
+
+                  if (bookingNow && deviceType.name === "medium_snooker") {
+                    return (
+                      <Fragment key={`medium-tables-${deviceType.id}`}>
+                        {loadingWalkInStations ? (
+                          <Card className="border border-zinc-800 bg-[var(--surface)] p-4 text-sm text-muted-content">
+                            Loading Medium Snooker tables…
+                          </Card>
+                        ) : walkInStations.length === 0 ? (
+                          <Card className="border border-zinc-800 bg-[var(--surface)] p-4 text-sm text-muted-content">
+                            No Medium Snooker tables are configured.
+                          </Card>
+                        ) : walkInStations.map((station, stationIndex) => (
+                          <Card
+                            key={station.id}
+                            className={`bg-[var(--surface)] border p-4 transition-all ${canPick
+                              ? "cursor-pointer border-zinc-900 hover:border-primary"
+                              : "cursor-not-allowed border-zinc-900 opacity-50"
+                              }`}
+                            onClick={() => canPick && handleSelectDeviceType(deviceType, station.id)}
+                          >
+                            <div className="space-y-3">
+                              <div className="flex justify-between items-start gap-2">
+                                <div>
+                                  <h3 className="font-black text-sm uppercase">Medium Snooker Table {stationIndex + 1}</h3>
+                                  <p className="text-label mt-1">{station.station_number}</p>
+                                </div>
+                                <span className={`rounded px-2 py-1 text-xs font-black ${canPick ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"}`}>
+                                  {canPick ? "SELECT TABLE" : "UNAVAILABLE"}
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-lg font-black text-primary">₹{Number(deviceType.regular_hourly_rate)}</span>
+                                <span className="text-xs text-muted-content">/hour</span>
+                              </div>
+                            </div>
+                          </Card>
+                        ))}
+                      </Fragment>
+                    );
+                  }
+
                   return (
                     <Card
                       key={deviceType.id}
@@ -1063,7 +1186,7 @@ export default function WalkInBookingPage() {
                 <div className="space-y-1.5 max-h-96 overflow-y-auto pr-1">
                   {filteredDurations.map((duration) => {
                     const isSelected = selectedDuration === duration.value;
-                    const price = calculatePrice(Number(selectedDeviceType.regular_hourly_rate) || 0, duration.value);
+                    const price = calculatePrice(hourlyRateForPlayerCount(selectedDeviceType.name, Number(selectedDeviceType.regular_hourly_rate) || 0, selectedDeviceType.single_player_hourly_rate, playerCount), duration.value);
                     return (
                       <button
                         key={duration.value}
@@ -1374,6 +1497,14 @@ export default function WalkInBookingPage() {
                   <span className="text-secondary-content">Device Configuration:</span>
                   <span className="text-white font-bold uppercase">{selectedDeviceType.display_name}</span>
                 </div>
+                {mode === "session" && selectedDeviceType.name === "medium_snooker" && (
+                  <div className="flex justify-between border-b border-zinc-900/60 pb-2">
+                    <span className="text-secondary-content">Assigned Table:</span>
+                    <span className="font-bold text-primary">
+                      {walkInStations.find((station) => station.id === selectedWalkInStationId)?.station_number || "Select a table"}
+                    </span>
+                  </div>
+                )}
                 {mode === "advance" && (
                   <>
                     <div className="flex justify-between border-b border-zinc-900/60 pb-2">
@@ -1524,8 +1655,8 @@ export default function WalkInBookingPage() {
 
                   {!plannedEnd ? (
                     <p className="text-[11px] leading-relaxed text-muted-content">
-                      When the customer says they are leaving, if they have said. The station is
-                      held that long instead of the {PROVISIONAL_SESSION_HOURS}-hour default. It
+                      When the customer says they are leaving, the station is held until then
+                      instead of the 90-minute default (1 hour plus a 30-minute buffer). It
                       does not fix the price — the bill is still worked out at checkout.
                     </p>
                   ) : plannedSessionCheck?.ok ? (
@@ -1591,8 +1722,8 @@ export default function WalkInBookingPage() {
                       </li>
                     ) : (
                       <li>
-                        With no planned end the station is held for{" "}
-                        {PROVISIONAL_SESSION_HOURS} hours, which is a placeholder rather than
+                        With no planned end the station is held for 90 minutes from now
+                        (1 hour plus a 30-minute buffer), which is a placeholder rather than
                         anything the customer said.
                       </li>
                     )}
@@ -1758,6 +1889,7 @@ export default function WalkInBookingPage() {
                   // window nobody chose - so the button waits rather than guess.
                   disabled={
                     submitting ||
+                    (mode === "session" && selectedDeviceType.name === "medium_snooker" && (loadingWalkInStations || !selectedWalkInStationId)) ||
                     (mode === "session" && startMode === "manual" && !manualStartCheck?.ok) ||
                     (mode === "session" &&
                       startMode === "manual" &&
@@ -1805,9 +1937,10 @@ export default function WalkInBookingPage() {
                   All {busyPrompt.total} stations are occupied right now.{" "}
                   {startMode === "manual" ? (
                     <>
-                      A start time was entered, but the session can only begin on a station -
-                      so {customerName.trim() || "the customer"} will be booked in waiting and
-                      the {plannedEnd ? "times" : "time"} typed in will not be used.
+                      A start time was entered, but no station is free for that time.{" "}
+                      {customerName.trim() || "The customer"} will be booked in waiting; the
+                      {plannedEnd ? " times" : " time"} will be used when a station is available
+                      and you check them in.
                     </>
                   ) : (
                     <>

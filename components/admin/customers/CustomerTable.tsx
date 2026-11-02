@@ -2,6 +2,8 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { CustomerRow } from "@/lib/types/customers";
+import { AddCustomerSubscriptionModal } from "@/components/admin/customers/AddCustomerSubscriptionModal";
+import { AddWalletCreditButton } from "@/components/admin/customers/AddWalletCreditButton";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -19,19 +21,23 @@ import {
   Copy,
   Check,
   Filter,
-  X
+  X,
+  SearchX,
+  Wallet,
 } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 
 interface CustomerTableProps {
   customers: CustomerRow[];
+  onSubscriptionAssigned: () => Promise<void>;
+  canAdjustWallet: boolean;
 }
 
 type SortField = "name" | "phone" | "email" | "created_at" | "date_of_birth";
 type SortOrder = "asc" | "desc" | null;
 
-export function CustomerTable({ customers }: CustomerTableProps) {
+export function CustomerTable({ customers, onSubscriptionAssigned, canAdjustWallet }: CustomerTableProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortField, setSortField] = useState<SortField | null>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>(null);
@@ -120,6 +126,9 @@ export function CustomerTable({ customers }: CustomerTableProps) {
   }, [customers, searchQuery, sortField, sortOrder, membershipFilter]);
 
   const totalPages = Math.ceil(filteredAndSortedCustomers.length / ITEMS_PER_PAGE);
+  const activeMembershipCount = customers.filter(customer => customer.subscription_status === "active").length;
+  const inactiveMembershipCount = customers.filter(customer => customer.subscription_status === "expired").length;
+  const noMembershipCount = customers.length - activeMembershipCount - inactiveMembershipCount;
 
   const paginatedCustomers = useMemo(() => {
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
@@ -140,109 +149,194 @@ export function CustomerTable({ customers }: CustomerTableProps) {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Filters and Search Bar */}
-      <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
-        {/* Search */}
-        <div className="relative w-full md:w-96">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-secondary-content" />
-          <Input
-            placeholder="Search by name, phone, or email..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10 bg-[var(--background)] border-zinc-800 text-white text-sm h-10"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-secondary-content hover:text-white"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-
-        {/* Membership Filter */}
-        <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-secondary-content" />
-          <div className="flex gap-2">
-            {[
-              { value: "all", label: "All" },
-              { value: "active", label: "Active" },
-              { value: "inactive", label: "Inactive" },
-              { value: "none", label: "No Plan" }
-            ].map((filter) => (
-              <Button
-                key={filter.value}
-                onClick={() => setMembershipFilter(filter.value as any)}
-                size="sm"
-                className={`text-min-enhanced font-black uppercase h-8 transition-all duration-300 ${
-                  membershipFilter === filter.value
-                    ? "bg-gradient-primary text-[var(--button-text)] glow-box"
-                    : "bg-[var(--surface)] text-muted-content hover:bg-[var(--surface-hover)] hover:text-white border border-[#27272a]"
-                }`}
-              >
-                {filter.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-
-        {/* Results Count */}
-        <div className="text-min-enhanced text-secondary-content font-bold">
-          Showing {filteredAndSortedCustomers.length} of {customers.length} customers
-        </div>
+    <div className="space-y-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {[
+          { label: "Total customers", value: customers.length, icon: User, tone: "text-primary" },
+          { label: "Active memberships", value: activeMembershipCount, icon: ShieldCheck, tone: "text-emerald-400" },
+          { label: "No active membership", value: noMembershipCount, icon: ShieldAlert, tone: "text-zinc-400" },
+        ].map(stat => (
+          <Card key={stat.label} className="flex items-center gap-4 rounded-xl border-zinc-800/80 bg-zinc-950/70 p-4 shadow-none">
+            <div className={`flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 ${stat.tone}`}>
+              <stat.icon className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-2xl font-black leading-none text-white">{stat.value.toLocaleString("en-IN")}</p>
+              <p className="mt-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">{stat.label}</p>
+            </div>
+          </Card>
+        ))}
       </div>
 
-      {filteredAndSortedCustomers.length === 0 ? (
-        <div className="p-12 text-center text-sm font-semibold text-muted-content border border-zinc-900 rounded-2xl bg-[#09090b]">
-          No customers found matching your filters.
+      <Card className="rounded-xl border-zinc-800/80 bg-zinc-950/70 p-4 shadow-none">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="relative w-full xl:max-w-md">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+            <Input
+              aria-label="Search customers"
+              placeholder="Search name, phone, or email"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="h-11 border-zinc-800 bg-zinc-900/80 pl-10 pr-10 text-sm text-white placeholder:text-zinc-600 focus-visible:border-primary/60"
+            />
+            {searchQuery && (
+              <button
+                aria-label="Clear search"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between xl:justify-end">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-500">
+              <Filter className="h-4 w-4" /> Membership
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { value: "all", label: "All" },
+                { value: "active", label: "Active" },
+                { value: "inactive", label: "Expired" },
+                { value: "none", label: "None" }
+              ].map((filter) => (
+                <Button
+                  key={filter.value}
+                  onClick={() => setMembershipFilter(filter.value as any)}
+                  size="sm"
+                  aria-pressed={membershipFilter === filter.value}
+                  className={`h-9 rounded-lg px-3 text-xs font-bold transition ${
+                    membershipFilter === filter.value
+                      ? "border border-primary/50 bg-primary/15 text-primary shadow-[inset_0_0_0_1px_rgba(var(--primary-rgb),0.08)]"
+                      : "border border-zinc-800 bg-zinc-900/70 text-zinc-400 hover:border-zinc-700 hover:text-white"
+                  }`}
+                >
+                  {filter.label}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs font-semibold text-zinc-500 sm:ml-2">
+              {filteredAndSortedCustomers.length} of {customers.length} customers
+            </p>
+          </div>
         </div>
+      </Card>
+
+      {filteredAndSortedCustomers.length === 0 ? (
+        <Card className="flex flex-col items-center rounded-2xl border-zinc-800 bg-zinc-950/70 px-6 py-14 text-center shadow-none">
+          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-zinc-800 bg-zinc-900 text-zinc-500">
+            <SearchX className="h-5 w-5" />
+          </div>
+          <h2 className="text-base font-black text-white">No matching customers</h2>
+          <p className="mt-1 max-w-sm text-sm text-zinc-500">Change your search or membership filter to see more results.</p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-5"
+            onClick={() => { setSearchQuery(""); setMembershipFilter("all"); }}
+          >
+            Clear filters
+          </Button>
+        </Card>
       ) : (
         <>
-          <Card className="bg-[#0c0c0e]/40 border-zinc-900 rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.6)] w-full overflow-x-auto p-1">
-          <table className="w-full text-left border-collapse text-sm table-fixed">
+          <div className="space-y-3 md:hidden">
+            {paginatedCustomers.map(row => {
+              const hasSub = !!row.subscription_name;
+              const isActive = row.subscription_status === "active";
+              return (
+                <Card key={row.id} className="rounded-2xl border-zinc-800/80 bg-zinc-950/70 p-4 shadow-none">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 text-primary">
+                        <User className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="break-words text-sm font-black text-white">{row.name}</h3>
+                        <p className="mt-1 flex items-center gap-1.5 text-xs text-zinc-500">
+                          <Cake className="h-3.5 w-3.5 text-primary/80" />
+                          {row.date_of_birth ? format(new Date(row.date_of_birth), "dd MMM yyyy") : "Date of birth not set"}
+                        </p>
+                      </div>
+                    </div>
+                    <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${
+                      isActive
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                        : "border-zinc-700 bg-zinc-900 text-zinc-400"
+                    }`}>
+                      {isActive ? "Active" : hasSub ? "Expired" : "No plan"}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 space-y-2 border-t border-zinc-800/80 pt-3">
+                    <div className="flex items-center gap-2 text-sm text-zinc-300">
+                      <Phone className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      <span className="min-w-0 break-all font-mono">{row.phone}</span>
+                      <button
+                        aria-label={`Copy phone number for ${row.name}`}
+                        onClick={() => handleCopy(row.phone, `phone-${row.id}`)}
+                        className="ml-auto rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-white"
+                      >
+                        {copiedField === `phone-${row.id}` ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                    <div className="flex min-w-0 items-center gap-2 text-xs text-zinc-500">
+                      <Mail className="h-3.5 w-3.5 shrink-0 text-primary/80" />
+                      <span className="min-w-0 break-all">{row.email || "No email"}</span>
+                    </div>
+                    {hasSub && (
+                      <p className="pl-5 text-xs font-semibold text-zinc-400">
+                        {row.subscription_name}{row.expiry_date ? ` · until ${format(new Date(`${row.expiry_date}T00:00:00`), "dd MMM yyyy")}` : ""}
+                      </p>
+                    )}
+                    <div className="flex items-center justify-between text-xs font-semibold text-zinc-400">
+                      <span>Wallet</span>
+                      <span className="font-mono text-sm font-bold text-white">{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(Number(row.wallet_balance || 0))}</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-zinc-800/80 pt-3">
+                    <AddCustomerSubscriptionModal
+                      customer={{ id: row.id, name: row.name }}
+                      onAssigned={onSubscriptionAssigned}
+                    />
+                    {canAdjustWallet && <AddWalletCreditButton customer={{ id: row.id, name: row.name }} onCredited={onSubscriptionAssigned} />}
+                  </div>
+                  <p className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                    Customer since {row.created_at ? format(new Date(row.created_at), "dd MMM yyyy") : "—"}
+                  </p>
+                </Card>
+              );
+            })}
+          </div>
+
+          <Card className="hidden w-full overflow-hidden rounded-2xl border-zinc-800/80 bg-zinc-950/60 p-0 shadow-[0_16px_50px_rgba(0,0,0,0.22)] md:block">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[1080px] table-fixed border-collapse text-left text-sm">
             <thead>
-              <tr className="border-b border-zinc-900 bg-[var(--background)]/20 text-label-enhanced select-none">
-                <th className="p-4 w-[17%]">
+              <tr className="border-b border-zinc-800 bg-zinc-900/55 text-[10px] font-black uppercase tracking-[0.16em] text-zinc-500 select-none">
+                <th className="p-4 w-[22%]">
                   <button
                     onClick={() => handleSort("name")}
                     className="flex items-center gap-2 hover:text-primary transition-colors"
                   >
-                    Customer Profile
+                    Customer
                     <SortIcon field="name" />
                   </button>
                 </th>
-                <th className="p-4 w-[14%]">
+                <th className="p-4 w-[21%]">
                   <button
                     onClick={() => handleSort("phone")}
                     className="flex items-center gap-2 hover:text-primary transition-colors"
                   >
-                    Phone Terminal
+                    Contact
                     <SortIcon field="phone" />
                   </button>
                 </th>
-                <th className="p-4 hidden lg:table-cell w-[12%]">
-                  <button
-                    onClick={() => handleSort("date_of_birth")}
-                    className="flex items-center gap-2 hover:text-primary transition-colors"
-                  >
-                    Date of Birth
-                    <SortIcon field="date_of_birth" />
-                  </button>
-                </th>
-                <th className="p-4 hidden md:table-cell w-[18%]">
-                  <button
-                    onClick={() => handleSort("email")}
-                    className="flex items-center gap-2 hover:text-primary transition-colors"
-                  >
-                    Email Address
-                    <SortIcon field="email" />
-                  </button>
-                </th>
-                <th className="p-4 w-[19%]">Membership</th>
-                <th className="p-4 hidden lg:table-cell w-[9%] text-right">Expiration</th>
-                <th className="p-4 hidden xl:table-cell w-[11%] text-right">
+                <th className="p-4 w-[17%]">Membership</th>
+                <th className="p-4 w-[13%]">Wallet</th>
+                <th className="p-4 w-[12%] text-right">
                   <button
                     onClick={() => handleSort("created_at")}
                     className="flex items-center gap-2 hover:text-primary transition-colors ml-auto"
@@ -251,116 +345,105 @@ export function CustomerTable({ customers }: CustomerTableProps) {
                     <SortIcon field="created_at" />
                   </button>
                 </th>
+                <th className="p-4 w-[15%] text-right">Actions</th>
               </tr>
             </thead>
-        <tbody className="divide-y divide-zinc-900/40 font-medium">
+        <tbody className="divide-y divide-zinc-800/60 font-medium">
           {paginatedCustomers.map((row) => {
             const hasSub = !!row.subscription_name;
             const isActive = row.subscription_status === "active";
  
             return (
-              <tr key={row.id} className="group hover:bg-[var(--background)]/40 transition-all duration-200 border-l-2 border-transparent hover:border-l-primary">
+              <tr key={row.id} className="group transition-colors hover:bg-white/[0.025]">
  
                 {/* Customer Details Name Block */}
-                <td className="p-4 font-black tracking-wide">
+                <td className="p-4 tracking-wide">
                   {/* flex lives on an inner div: `display:flex` on a <td> drops it out of the
                       table's column layout, so it stops honouring the fixed column width */}
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-start gap-3 min-w-0">
                     <div className="h-9 w-9 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-muted-content group-hover:border-primary/50 group-hover:bg-primary/5 transition-all duration-200 shadow-inner flex-shrink-0">
                       <User className="h-4 w-4 text-primary transition-colors" />
                     </div>
-                    {/* Wraps rather than truncating: this is the directory staff read
-                        names from, so an ellipsis hides the part they need. The column
-                        is fixed-width, so a long name grows the row instead of the
-                        column and cannot push the other columns out of line.
-                        `break-all` is the fallback for a single unbroken run of
-                        characters with nowhere to wrap. */}
-                    <span
-                      title={row.name}
-                      className="text-zinc-200 group-hover:text-primary transition-colors font-black text-[15px] tracking-normal break-words [overflow-wrap:anywhere]"
-                    >
-                      {row.name}
-                    </span>
-                  </div>
-                </td>
- 
-                {/* Phone Terminal Output */}
-                <td className="p-4 text-zinc-300 font-mono tracking-wider">
-                  <div className="flex items-center gap-2 group/phone">
-                    <Phone className="h-4 w-4 text-primary flex-shrink-0" />
-                    <span className="font-bold text-zinc-300 text-sm">{row.phone}</span>
-                    <button
-                      onClick={() => handleCopy(row.phone, `phone-${row.id}`)}
-                      className="ml-auto opacity-0 group-hover/phone:opacity-100 transition-opacity p-1 hover:bg-zinc-800 rounded"
-                    >
-                      {copiedField === `phone-${row.id}` ? (
-                        <Check className="h-3.5 w-3.5 text-green-400" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5 text-secondary-content hover:text-primary" />
-                      )}
-                    </button>
-                  </div>
-                </td>
- 
-                {/* Date of Birth Block */}
-                <td className="p-4 hidden lg:table-cell text-zinc-300 font-mono tracking-wider">
-                  <div className="flex items-center gap-2">
-                    <Cake className="h-4 w-4 text-primary flex-shrink-0" />
-                    <span className="font-bold text-zinc-300 text-[13px]">
-                      {row.date_of_birth ? format(new Date(row.date_of_birth), "dd MMM yyyy") : "—"}
-                    </span>
-                  </div>
-                </td>
- 
-                {/* Email Address Block */}
-                <td className="p-4 hidden md:table-cell text-muted-content font-medium">
-                  <div className="flex items-center gap-2 group/email">
-                    <Mail className="h-4 w-4 text-primary flex-shrink-0" />
-                    <span title={row.email ?? undefined} className="truncate text-muted-content text-sm">{row.email || "No mail configured"}</span>
-                    {row.email && (
-                      <button
-                        onClick={() => handleCopy(row.email!, `email-${row.id}`)}
-                        className="ml-auto opacity-0 group-hover/email:opacity-100 transition-opacity p-1 hover:bg-zinc-800 rounded flex-shrink-0"
+                    <div className="min-w-0 space-y-1">
+                      <p
+                        title={row.name}
+                        className="text-zinc-100 group-hover:text-primary transition-colors font-black text-[15px] tracking-normal break-words [overflow-wrap:anywhere]"
                       >
-                        {copiedField === `email-${row.id}` ? (
+                        {row.name}
+                      </p>
+                      <div className="flex items-center gap-1.5 text-xs font-medium tracking-normal text-zinc-500">
+                        <Cake className="h-3.5 w-3.5 flex-shrink-0 text-primary/80" />
+                        <span>
+                          {row.date_of_birth ? format(new Date(row.date_of_birth), "dd MMM yyyy") : "Date of birth not set"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+ 
+                <td className="p-4">
+                  <div className="space-y-2">
+                    <div className="flex min-w-0 items-center gap-2 group/phone">
+                      <Phone className="h-4 w-4 flex-shrink-0 text-primary" />
+                      <span className="min-w-0 break-all font-mono text-sm font-bold tracking-wide text-zinc-200">{row.phone}</span>
+                      <button
+                        aria-label={`Copy phone number for ${row.name}`}
+                        onClick={() => handleCopy(row.phone, `phone-${row.id}`)}
+                        className="ml-auto flex-shrink-0 rounded p-1 opacity-0 transition-opacity hover:bg-zinc-800 group-hover/phone:opacity-100"
+                      >
+                        {copiedField === `phone-${row.id}` ? (
                           <Check className="h-3.5 w-3.5 text-green-400" />
                         ) : (
                           <Copy className="h-3.5 w-3.5 text-secondary-content hover:text-primary" />
                         )}
                       </button>
-                    )}
+                    </div>
+                    <div className="flex min-w-0 items-center gap-2 group/email">
+                      <Mail className="h-4 w-4 flex-shrink-0 text-primary/80" />
+                      <span
+                        title={row.email ?? undefined}
+                        className="min-w-0 break-words text-xs font-medium text-zinc-400 [overflow-wrap:anywhere]"
+                      >
+                        {row.email || "No email"}
+                      </span>
+                      {row.email && (
+                        <button
+                          aria-label={`Copy email address for ${row.name}`}
+                          onClick={() => handleCopy(row.email!, `email-${row.id}`)}
+                          className="ml-auto flex-shrink-0 rounded p-1 opacity-0 transition-opacity hover:bg-zinc-800 group-hover/email:opacity-100"
+                        >
+                          {copiedField === `email-${row.id}` ? (
+                            <Check className="h-3.5 w-3.5 text-green-400" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5 text-secondary-content hover:text-primary" />
+                          )}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </td>
  
                 {/* Membership Track */}
                 <td className="p-4 overflow-hidden">
                   {hasSub ? (
-                    /* Plan names are free text, so the badge caps at the column width and
-                       truncates instead of spilling over the Expiration column */
+                    /* Keep plan names inside their column while allowing them to wrap. */
                     <span
                       title={row.subscription_name ?? undefined}
                       className={`inline-flex items-center gap-1.5 max-w-full px-2.5 py-1 border text-[11px] font-black uppercase rounded-lg tracking-wide leading-tight ${isActive ? "bg-green-500/10 text-green-400 border-green-500/30" : "bg-zinc-900 text-secondary-content border-zinc-800"}`}
                     >
                       {isActive ? <ShieldCheck className="h-3 w-3 flex-shrink-0" /> : <ShieldAlert className="h-3 w-3 flex-shrink-0" />}
                       {/* wraps rather than truncates, so a long plan name stays fully readable */}
-                      <span className="min-w-0 break-words">{row.subscription_name}</span>
+                      <span className="min-w-0 break-words">{row.subscription_name?.toLowerCase().includes("membership") ? row.subscription_name : `${row.subscription_name} Membership`}</span>
                     </span>
                   ) : (
                     <span className="bg-[var(--background)]/80 text-red-400 border border-zinc-900 text-[11px] font-black px-2.5 py-1 rounded-lg uppercase whitespace-nowrap">No Plan Active</span>
                   )}
                 </td>
- 
-                {/* Expiration Date */}
-                <td className="p-4 hidden lg:table-cell text-right font-mono text-[13px]">
-                  {row.expiry_date ? (
-                    <span className={isActive ? "text-primary font-bold" : "text-muted-content line-through"}>
-                      {format(new Date(row.expiry_date), "dd/MM/yy")}
-                    </span>
-                  ) : "—"}
+                <td className="p-4">
+                  <span className="font-mono text-sm font-bold text-white">{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(Number(row.wallet_balance || 0))}</span>
                 </td>
- 
                 {/* Our Customer From */}
-                <td className="p-4 hidden xl:table-cell text-right font-mono">
+                <td className="p-4 text-right font-mono">
                   <div className="flex flex-col items-end">
                     <span className="text-[13px] text-white font-bold">
                       {row.created_at ? format(new Date(row.created_at), "dd MMM yy") : "N/A"}
@@ -370,11 +453,21 @@ export function CustomerTable({ customers }: CustomerTableProps) {
                     </span>
                   </div>
                 </td>
+                <td className="p-4">
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <AddCustomerSubscriptionModal
+                      customer={{ id: row.id, name: row.name }}
+                      onAssigned={onSubscriptionAssigned}
+                    />
+                    {canAdjustWallet && <AddWalletCreditButton customer={{ id: row.id, name: row.name }} onCredited={onSubscriptionAssigned} />}
+                  </div>
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+          </div>
     </Card>
 
     {/* Pagination Controls */}

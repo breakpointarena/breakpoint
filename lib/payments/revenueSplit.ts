@@ -45,6 +45,7 @@ export interface BookingMoney {
   subscriptionDiscount?: number | string | null;
   promoDiscount?: number | string | null;
   happyHourDiscount?: number | string | null;
+  hourPassDiscount?: number | string | null;
   amountPaid?: number | string | null;
 }
 
@@ -89,7 +90,8 @@ export function revenueSplit(booking: BookingMoney): RevenueSplit {
   const discounts =
     amount(booking.subscriptionDiscount) +
     amount(booking.promoDiscount) +
-    amount(booking.happyHourDiscount);
+    amount(booking.happyHourDiscount) +
+    amount(booking.hourPassDiscount);
 
   /**
    * Discounts are priced against the device charge - food is never discounted,

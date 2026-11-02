@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Calendar } from "@/components/ui/calendar";
 import {
   IndianRupee, TrendingUp, ShoppingBag, Gamepad2,
-  UtensilsCrossed, BarChart3, CalendarDays, ReceiptIndianRupee, ShieldAlert
+  UtensilsCrossed, BarChart3, CalendarDays, CalendarRange, ReceiptIndianRupee, ShieldAlert, WalletCards
 , Ban } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -17,12 +17,14 @@ import {
   getFoodReports,
   getDeviceReports,
   getRevenueReports,
+  getMonthlyRevenueReports,
   type ReportFilters
 } from "./actions";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
 import { ExpensesTab } from "@/components/admin/reports/ExpensesTab";
 import { ProfitTab } from "@/components/admin/reports/ProfitTab";
+import { MonthlyAnalyticsTab } from "@/components/admin/reports/MonthlyAnalyticsTab";
 import { CountUp, CurrencyCountUp } from "@/components/shared/CountUp";
 import { roundToTwo, formatCurrency } from "@/lib/currency";
 import { checkReportsAccess } from "@/lib/auth/roles";
@@ -36,7 +38,7 @@ import {
 export default function AdminReportsPage() {
   const router = useRouter();
   const [hasAccess, setHasAccess] = useState<boolean | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "food" | "device" | "revenue" | "expenses" | "profit">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "food" | "device" | "revenue" | "monthly" | "expenses" | "profit">("overview");
   const [loading, setLoading] = useState(true);
 
   // Initialize with current month dates
@@ -108,6 +110,7 @@ export default function AdminReportsPage() {
 
   // Revenue data
   const [revenueData, setRevenueData] = useState<any>(null);
+  const [monthlyData, setMonthlyData] = useState<any>(null);
 
   // Check access on mount
   useEffect(() => {
@@ -142,7 +145,7 @@ export default function AdminReportsPage() {
 
   const loadData = async () => {
     // Never query on a range the user has been told is invalid
-    if (dateRangeError) {
+    if (activeTab !== "monthly" && dateRangeError) {
       setLoading(false);
       return;
     }
@@ -172,6 +175,11 @@ export default function AdminReportsPage() {
         const result = await getRevenueReports(filters);
         if (result.success) {
           setRevenueData(result);
+        }
+      } else if (activeTab === "monthly") {
+        const result = await getMonthlyRevenueReports();
+        if (result.success) {
+          setMonthlyData(result);
         }
       }
     } catch (err) {
@@ -261,6 +269,7 @@ export default function AdminReportsPage() {
     { id: "food", label: "Food Reports", icon: UtensilsCrossed },
     { id: "device", label: "Device Reports", icon: Gamepad2 },
     { id: "revenue", label: "Revenue Reports", icon: IndianRupee },
+    { id: "monthly", label: "Monthly Analytics", icon: CalendarRange },
     // Receipt draws a dollar sign inside the receipt outline; the rupee variant
     // is the same outline with ₹ in it.
     { id: "expenses", label: "Expenses", icon: ReceiptIndianRupee }
@@ -313,7 +322,7 @@ export default function AdminReportsPage() {
       </div>
 
       {/* Date Filters */}
-      <Card className="bg-[var(--surface)] border-[#27272a] p-4 space-y-4">
+      {activeTab !== "monthly" && <Card className="bg-[var(--surface)] border-[#27272a] p-4 space-y-4">
         {/* Quick Filter Buttons */}
         <div>
           <Label className="text-label text-muted-content mb-2 block">
@@ -494,7 +503,7 @@ export default function AdminReportsPage() {
             {dateRangeError}
           </p>
         )}
-      </Card>
+      </Card>}
 
       {/* Tabs */}
       <div className="flex gap-2 border-b border-[#27272a] overflow-x-auto">
@@ -527,7 +536,7 @@ export default function AdminReportsPage() {
           {activeTab === "overview" && overviewData && (
             <div className="space-y-6">
               {/* Summary Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
                 <Card className="bg-gradient-to-br from-green-500/10 to-green-600/5 border-green-500/20 p-5">
                   <div className="flex items-start justify-between">
                     <div>
@@ -573,6 +582,18 @@ export default function AdminReportsPage() {
                     <div className="p-2 bg-amber-500/10 rounded-lg">
                       <UtensilsCrossed className="h-5 w-5 text-amber-500" />
                     </div>
+                  </div>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20 p-5">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-xs font-black uppercase text-primary/70 mb-1">Wallet Credit Sales</p>
+                      <h3 className="text-2xl font-black text-white">
+                        <CurrencyCountUp amount={overviewData.walletRevenue || 0} duration={1300} />
+                      </h3>
+                    </div>
+                    <div className="rounded-lg bg-primary/10 p-2"><WalletCards className="h-5 w-5 text-primary" /></div>
                   </div>
                 </Card>
 
@@ -633,7 +654,7 @@ export default function AdminReportsPage() {
                     <TrendingUp className="h-4 w-4 text-muted-content" />
                   </div>
                   <h4 className="text-xl font-black text-primary">
-                    <CurrencyCountUp amount={overviewData.totalRevenue / (overviewData.totalBookings || 1)} duration={1100} />
+                    <CurrencyCountUp amount={overviewData.averageRevenuePerBooking || 0} duration={1100} />
                   </h4>
                   <p className="text-xs text-data-placeholder mt-1">
                     Per booking
@@ -1000,6 +1021,12 @@ export default function AdminReportsPage() {
                         <CurrencyCountUp amount={revenueData.summary.foodRevenue} duration={1200} />
                       </span>
                     </div>
+                    <div className="flex justify-between">
+                      <span className="text-data-placeholder">Wallet Credit Sales:</span>
+                      <span className="font-bold text-white">
+                        <CurrencyCountUp amount={revenueData.summary.walletRevenue || 0} duration={1200} />
+                      </span>
+                    </div>
                   </div>
                 </Card>
 
@@ -1102,6 +1129,17 @@ export default function AdminReportsPage() {
                     </div>
                     <div>
                       <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs text-data-placeholder">Wallet Credits</span>
+                        <span className="text-sm font-black text-primary">
+                          <CountUp end={revenueData.summary.walletRevenuePercentage || 0} duration={1000} decimals={1} suffix="%" />
+                        </span>
+                      </div>
+                      <div className="w-full bg-zinc-900 rounded-full h-2">
+                        <div className="bg-primary h-2 rounded-full transition-all duration-[1500ms] ease-out" style={{ width: `${revenueData.summary.walletRevenuePercentage || 0}%` }} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
                         <span className="text-xs text-data-placeholder">Food</span>
                         <span className="text-sm font-black text-amber-500">
                           <CountUp end={revenueData.summary.foodRevenuePercentage} duration={1000} decimals={1} suffix="%" />
@@ -1123,20 +1161,20 @@ export default function AdminReportsPage() {
                 <h3 className="text-sm font-black uppercase text-muted-content mb-4">
                   Revenue by Source
                 </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                   {revenueData.sourceBreakdown.map((source: any) => (
                     <div
                       key={source.source}
                       className="p-4 bg-[var(--background)] border border-[#27272a] rounded-lg"
                     >
                       <p className="text-xs font-black uppercase text-white mb-2">
-                        {source.source === "walk-in" ? "Walk-In Booking" : "Pre-Booking"}
+                        {source.source === "wallet_online" ? "Online Wallet Top-Ups" : source.source === "wallet_admin" ? "Admin Wallet Sales" : source.source === "walk-in" ? "Walk-In Booking" : "Pre-Booking"}
                       </p>
                       <h4 className="text-xl font-black text-primary mb-1">
                         <CurrencyCountUp amount={source.totalRevenue} duration={1200} />
                       </h4>
                       <p className="text-xs text-data-placeholder">
-                        <CountUp end={source.bookingCount} duration={800} /> bookings
+                        <CountUp end={source.transactionCount || source.bookingCount} duration={800} /> {source.source.startsWith("wallet_") ? "sales" : "bookings"}
                       </p>
                     </div>
                   ))}
@@ -1244,6 +1282,10 @@ export default function AdminReportsPage() {
                                 width: `${(day.foodRevenue / day.totalRevenue) * percentage}%`
                               }}
                             />
+                            <div
+                              className="bg-violet-500 transition-all duration-[1500ms] ease-out"
+                              style={{ width: `${(day.walletRevenue / day.totalRevenue) * percentage}%` }}
+                            />
                           </div>
                         </div>
                         <div className="flex justify-between text-xs mt-1">
@@ -1252,6 +1294,9 @@ export default function AdminReportsPage() {
                           </span>
                           <span className="text-amber-400">
                             Food: <CurrencyCountUp amount={day.foodRevenue} duration={800} />
+                          </span>
+                          <span className="text-violet-400">
+                            Wallet: <CurrencyCountUp amount={day.walletRevenue || 0} duration={800} />
                           </span>
                         </div>
                       </div>
@@ -1267,9 +1312,18 @@ export default function AdminReportsPage() {
                     <div className="w-3 h-3 bg-amber-500 rounded"></div>
                     <span className="text-xs text-data-placeholder">Food</span>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 bg-violet-500 rounded"></div>
+                    <span className="text-xs text-data-placeholder">Wallet Top-ups</span>
+                  </div>
                 </div>
               </Card>
             </div>
+          )}
+
+          {/* Profit & Loss Tab */}
+          {activeTab === "monthly" && monthlyData && (
+            <MonthlyAnalyticsTab report={monthlyData} />
           )}
 
           {/* Profit & Loss Tab */}

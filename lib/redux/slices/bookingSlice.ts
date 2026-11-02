@@ -5,6 +5,7 @@ export interface BookingState {
   deviceTypeId: string | null
   deviceTypeName: string | null
   hourlyRate: number | null
+  singlePlayerHourlyRate: number | null
   includedPlayers: number
   maxPlayers: number
   extraPlayerCharge: number
@@ -72,6 +73,7 @@ const initialState: BookingState = {
   deviceTypeId: null,
   deviceTypeName: null,
   hourlyRate: null,
+  singlePlayerHourlyRate: null,
   includedPlayers: 1,
   maxPlayers: 1,
   extraPlayerCharge: 0,
@@ -114,6 +116,7 @@ export const bookingSlice = createSlice({
       id: string
       name: string
       hourlyRate: number
+      singlePlayerHourlyRate?: number | null
       includedPlayers: number
       maxPlayers: number
       extraPlayerCharge: number
@@ -121,6 +124,7 @@ export const bookingSlice = createSlice({
       state.deviceTypeId = action.payload.id
       state.deviceTypeName = action.payload.name
       state.hourlyRate = action.payload.hourlyRate
+      state.singlePlayerHourlyRate = action.payload.singlePlayerHourlyRate ?? action.payload.hourlyRate
       state.includedPlayers = action.payload.includedPlayers
       state.maxPlayers = action.payload.maxPlayers
       state.extraPlayerCharge = action.payload.extraPlayerCharge

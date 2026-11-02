@@ -8,10 +8,13 @@ import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useAppSelector } from '@/lib/redux/hooks';
 import { CustomerSessionMenu } from '@/components/customer/layout/CustomerSessionMenu';
+import { InstallAppButton } from '@/components/customer/layout/InstallAppButton';
 
 const navLinks = [
   { label: "Home", path: "/" },
-  { label: "Subscriptions", path: "/subscription" },
+  { label: "My Subscription", path: "/my-subscription" },
+  { label: "Browse Plans", path: "/subscription" },
+  { label: "Wallet", path: "/wallet" },
   { label: "My Bookings", path: "/retrieve" },
   { label: "FOOD MENU", path: "/food" }
 ];
@@ -188,7 +191,7 @@ export default function Navbar() {
               priority
             />
           </motion.div>
-          <span className="text-2xl font-bold text-white tracking-wide uppercase">Break point Arena</span>
+          <span className="text-xl md:text-2xl font-bold text-white tracking-wide uppercase">Break point Arena</span>
         </Link>
 
         {/* Desktop Links */}
@@ -273,6 +276,10 @@ export default function Navbar() {
                 );
               })}
             </div>
+
+            <motion.div variants={linkItemVariants} className="w-full max-w-xs mt-6">
+              <InstallAppButton />
+            </motion.div>
 
             {/* Mobile CTA Button */}
             <motion.div variants={linkItemVariants} className="w-full max-w-xs mt-8">

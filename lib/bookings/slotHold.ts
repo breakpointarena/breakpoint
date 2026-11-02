@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { slotRowCoversWindow, type RequestedWindow } from './holdWindow'
-import { deviceCharge, extraPlayersCharge } from '@/lib/payments/money'
+import { deviceCharge, extraPlayersCharge, hourlyRateForPlayerCount } from '@/lib/payments/money'
 
 /**
  * Pre-payment slot holds.
@@ -112,7 +112,7 @@ export async function createSlotHold(input: {
 
   const { data: deviceType, error: deviceTypeError } = await supabaseAdmin
     .from('device_types')
-    .select('id, name, display_name, regular_hourly_rate, included_players, max_players, extra_player_charge')
+    .select('id, name, display_name, regular_hourly_rate, single_player_hourly_rate, included_players, max_players, extra_player_charge')
     .eq('id', input.deviceTypeId)
     .eq('is_active', true)
     .maybeSingle()
@@ -129,7 +129,12 @@ export async function createSlotHold(input: {
     Math.max(Math.trunc(input.playerCount) || includedPlayers, 1),
     maxPlayers
   )
-  const hourlyRate = Number(deviceType.regular_hourly_rate || 0)
+  const hourlyRate = hourlyRateForPlayerCount(
+    deviceType.name,
+    Number(deviceType.regular_hourly_rate || 0),
+    deviceType.single_player_hourly_rate,
+    playerCount
+  )
   const extraPlayerCharge = Number(deviceType.extra_player_charge || 0)
   const extraPlayersTotal = extraPlayersCharge(
     Math.max(0, playerCount - includedPlayers),

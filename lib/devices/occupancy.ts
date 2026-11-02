@@ -1,5 +1,8 @@
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { MAX_LIVE_SESSION_HOURS } from '@/lib/bookings/walkInSession'
+import { MAX_LIVE_SESSION_HOURS, WALKIN_SLOT_HOLD_HOURS } from '@/lib/bookings/walkInSession'
+
+// Retained for the dashboard's stale-session reporting.
+export { MAX_LIVE_SESSION_HOURS }
 
 /**
  * Which stations have somebody sitting at them right now.
@@ -19,16 +22,10 @@ import { MAX_LIVE_SESSION_HOURS } from '@/lib/bookings/walkInSession'
  * `checked_in` is the arena's own record that someone is at that station, and it
  * is already the thing check-out clears.
  *
- * Deliberately keyed on booking status rather than the slot's time window:
- * "occupied" means a person is physically there, which is what check-in records.
- * A walk-in that runs past its provisional window is still occupied; a confirmed
- * booking whose slot started ten minutes ago is not, until they turn up. It also
- * means this cannot be thrown off by a mis-dated `slot_date`.
+ * The device list follows the same hold as booking availability: one hour from
+ * check-in by default, or through a future finish recorded by staff. A confirmed
+ * booking whose slot started ten minutes ago is not occupied until check-in.
  */
-// Defined with the other session-length rules, and re-exported here because
-// occupancy is where most callers meet it.
-export { MAX_LIVE_SESSION_HOURS }
-
 export type DeviceOccupancy = {
   deviceId: string
   bookingId: string
@@ -40,18 +37,16 @@ export type DeviceOccupancy = {
 
 /** Live sessions, keyed by the device they are sitting at. */
 export async function getOccupancyByDevice(): Promise<Map<string, DeviceOccupancy>> {
-  const liveSince = new Date(
-    Date.now() - MAX_LIVE_SESSION_HOURS * 60 * 60 * 1000
-  ).toISOString()
+  const now = new Date()
+  const liveSince = now.getTime() - WALKIN_SLOT_HOLD_HOURS * 60 * 60 * 1000
 
   const { data, error } = await supabaseAdmin
     .from('booking_device_slots')
     .select(
-      `device_id,
-       bookings!inner(id, booking_number, customer_name, status, checked_in_at)`
+      `device_id, slot_date, slot_start_time, slot_end_time,
+       bookings!inner(id, booking_number, customer_name, status, checked_in_at, walk_in_planned_end)`
     )
     .eq('bookings.status', 'checked_in')
-    .gte('bookings.checked_in_at', liveSince)
 
   if (error) {
     // Availability is better shown as unknown-but-free than as a crashed page;
@@ -65,6 +60,17 @@ export async function getOccupancyByDevice(): Promise<Map<string, DeviceOccupanc
   for (const row of data || []) {
     const booking = (row as any).bookings
     if (!row.device_id || !booking) continue
+    const checkedInAt = booking.checked_in_at ? new Date(booking.checked_in_at).getTime() : 0
+    const plannedEnd = booking.walk_in_planned_end ? new Date(booking.walk_in_planned_end).getTime() : 0
+    const slotStart = new Date(`${row.slot_date}T${row.slot_start_time}+05:30`).getTime()
+    const slotEndDate = new Date(`${row.slot_date}T${row.slot_end_time}+05:30`)
+    if (slotEndDate.getTime() <= slotStart) slotEndDate.setDate(slotEndDate.getDate() + 1)
+    const slotHoldUntil = slotEndDate.getTime()
+    if (
+      checkedInAt < liveSince &&
+      plannedEnd <= now.getTime() &&
+      slotHoldUntil <= now.getTime()
+    ) continue
 
     // A device can only hold one live session, but a booking spanning several
     // slots on the same station would repeat it. First one wins; they describe

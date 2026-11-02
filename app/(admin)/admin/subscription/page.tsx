@@ -22,6 +22,13 @@ export default function SubscriptionPage() {
 
   // State for dynamic data and delete confirmation
   const [plans, setPlans] = useState<any[]>([])
+  const [deviceTypes, setDeviceTypes] = useState<Array<{
+    id: string
+    name: string
+    display_name: string
+    regular_hourly_rate: number
+    is_active: boolean
+  }>>([])
   const [planToDelete, setPlanToDelete] = useState<string | null>(null)
 
   const [isLoading, setIsLoading] = useState(true)
@@ -33,8 +40,10 @@ export default function SubscriptionPage() {
   const loadPlans = async () => {
     setIsLoading(true)
     try {
-      const { data } = await getSubscriptionPlans()
-      setPlans(data)
+      const result = await getSubscriptionPlans()
+      if (!result.success) throw new Error(result.error)
+      setPlans(result.data || [])
+      setDeviceTypes(result.deviceTypes || [])
     } catch (error: any) {
       toast.error('Failed to load plans', { description: error.message })
     } finally {
@@ -66,7 +75,11 @@ export default function SubscriptionPage() {
       const result = await deleteSubscriptionPlan(targetId)
 
       if (result.success) {
-        toast.success('Plan Deleted Successfully')
+        toast.success(result.deactivated ? 'Plan Deactivated' : 'Plan Deleted Successfully', {
+          description: result.deactivated
+            ? 'This plan has existing subscriptions, so it was removed from sale and its history was preserved.'
+            : undefined,
+        })
         await loadPlans()
       } else {
         toast.error('Deletion Failed', { description: result.error })
@@ -109,7 +122,12 @@ export default function SubscriptionPage() {
       </div>
 
       {/* ADD / EDIT MODALS */}
-      <AddSubscriptionModal open={isAddOpen} setOpen={setIsAddOpen} onFormSuccess={handleRefresh} />
+      <AddSubscriptionModal
+        deviceTypes={deviceTypes}
+        open={isAddOpen}
+        setOpen={setIsAddOpen}
+        onFormSuccess={handleRefresh}
+      />
 
       {editingPlan && (
         <EditSubscriptionModal
@@ -126,8 +144,8 @@ export default function SubscriptionPage() {
         onClose={() => setPlanToDelete(null)}
         onConfirm={confirmDelete}
         title="Remove Subscription Plan"
-        description="Are you sure you want to delete this subscription plan? This drops the plan completely from your database configuration mapping and cannot be undone."
-        confirmText="Delete"
+        description="Plans with existing subscriptions will be deactivated to preserve purchase history. Plans without subscriptions will be deleted."
+        confirmText="Remove Plan"
         cancelText="Cancel"
         variant="danger"
       />

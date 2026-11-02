@@ -83,11 +83,9 @@ export function timeToMinutes(time: string): number {
  *    the next day; a neighbouring date's row is rebased onto this one's timeline,
  *    which is what lets every caller compare with a plain `<`.
  *  - **Expired holds.** A `locked` booking past its expiry is holding nothing.
- *  - **Live walk-ins.** A checked-in session holds its station until checkout,
- *    capped at `MAX_LIVE_SESSION_HOURS` - unless the customer named a finish
- *    that has not arrived, in which case the row's own window is the truth and
- *    the hours after it are free. `liveSessionEndMinutes` owns that decision and
- *    `assign_device_slot` repeats it in SQL.
+  *  - **Live walk-ins.** A checked-in session holds its station for the 90-minute
+ *    default, or through a future finish recorded by staff. `liveSessionEndMinutes`
+ *    owns that decision and `assign_device_slot` repeats it in SQL.
  */
 export function occupiedRangeFor(
   row: BookedRow,

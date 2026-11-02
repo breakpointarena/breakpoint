@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useId, useState } from 'react'
-import { ShieldCheck } from 'lucide-react'
+import { Loader2, SearchX, ShieldCheck } from 'lucide-react'
 import {
   searchWalkInCustomers,
   searchWalkInCustomersByName,
@@ -30,7 +30,11 @@ const SEARCH: Record<
   {
     minLength: number
     normalise: (value: string) => string
-    lookup: (query: string) => Promise<{ customers?: CustomerSuggestion[] | null }>
+    lookup: (query: string) => Promise<{
+      success?: boolean
+      error?: string
+      customers?: CustomerSuggestion[] | null
+    }>
   }
 > = {
   phone: {
@@ -64,6 +68,9 @@ const SEARCH: Record<
 
 export interface CustomerSuggestionsState {
   suggestions: CustomerSuggestion[]
+  loading: boolean
+  hasSearched: boolean
+  failed: boolean
   open: boolean
   highlighted: number
   listId: string
@@ -97,6 +104,9 @@ export function useCustomerSuggestions({
 }): CustomerSuggestionsState {
   const listId = useId()
   const [suggestions, setSuggestions] = useState<CustomerSuggestion[]>([])
+  const [loading, setLoading] = useState(false)
+  const [hasSearched, setHasSearched] = useState(false)
+  const [failed, setFailed] = useState(false)
   /** Held apart from the list so picking one can close it without emptying it. */
   const [open, setOpen] = useState(false)
   /** Keyboard position in the list; -1 is the input itself. */
@@ -113,24 +123,47 @@ export function useCustomerSuggestions({
    * field changes again.
    */
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {
+      setLoading(false)
+      setOpen(false)
+      return
+    }
 
     const search = SEARCH[kind]
     const cleaned = search.normalise(query)
     if (cleaned.length < search.minLength) {
       setSuggestions([])
       setHighlighted(-1)
+      setLoading(false)
+      setHasSearched(false)
+      setFailed(false)
+      setOpen(false)
       return
     }
 
     let stale = false
+    setLoading(true)
+    setHasSearched(false)
+    setFailed(false)
+    setOpen(true)
     const timer = setTimeout(async () => {
-      const result = await search.lookup(cleaned)
-      if (stale) return
-
-      setSuggestions(result.customers || [])
-      setOpen(true)
-      setHighlighted(-1)
+      try {
+        const result = await search.lookup(cleaned)
+        if (stale) return
+        if (result.success === false) throw new Error(result.error || 'Customer search failed')
+        setSuggestions(result.customers || [])
+        setHasSearched(true)
+        setOpen(true)
+        setHighlighted(-1)
+      } catch {
+        if (stale) return
+        setSuggestions([])
+        setHasSearched(true)
+        setFailed(true)
+        setOpen(true)
+      } finally {
+        if (!stale) setLoading(false)
+      }
     }, 250)
 
     return () => {
@@ -141,6 +174,9 @@ export function useCustomerSuggestions({
 
   const pick = (suggestion: CustomerSuggestion) => {
     setSuggestions([])
+    setLoading(false)
+    setHasSearched(false)
+    setFailed(false)
     setHighlighted(-1)
     setOpen(false)
     onPick(suggestion)
@@ -154,7 +190,15 @@ export function useCustomerSuggestions({
    * somebody else's.
    */
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!open || suggestions.length === 0) return
+    if (!open) return
+
+    if (event.key === 'Escape') {
+      setOpen(false)
+      setHighlighted(-1)
+      return
+    }
+
+    if (suggestions.length === 0) return
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
@@ -172,14 +216,13 @@ export function useCustomerSuggestions({
       return
     }
 
-    if (event.key === 'Escape') {
-      setOpen(false)
-      setHighlighted(-1)
-    }
   }
 
   return {
     suggestions,
+    loading,
+    hasSearched,
+    failed,
     open,
     highlighted,
     listId,
@@ -188,7 +231,7 @@ export function useCustomerSuggestions({
     inputProps: {
       onKeyDown,
       onFocus: () => {
-        if (suggestions.length > 0) setOpen(true)
+        if (suggestions.length > 0 || loading || hasSearched || failed) setOpen(true)
       },
       // Safe to close on blur because the rows are taken on mousedown with the
       // focus change prevented, so picking one never blurs the field.
@@ -198,7 +241,7 @@ export function useCustomerSuggestions({
       // people's.
       autoComplete: 'off',
       role: 'combobox',
-      'aria-expanded': open && suggestions.length > 0,
+      'aria-expanded': open && (suggestions.length > 0 || loading || hasSearched || failed),
       'aria-controls': listId,
       'aria-activedescendant': highlighted >= 0 ? `${listId}-${highlighted}` : undefined,
     },
@@ -228,7 +271,7 @@ function highlight(name: string, typed: string): React.ReactNode {
 }
 
 /**
- * The matches, as a panel under the field rather than a dropdown over it.
+ * Matches and lookup states in a panel under the field rather than a dropdown over it.
  *
  * Floating, the list sat in the gap between the number and the button next to it
  * and read as clutter between two things staff were already using - and the rows
@@ -247,66 +290,49 @@ export function CustomerSuggestions({
   /** What is in the name field, so the letters that matched can be picked out. */
   typedName?: string
 }) {
-  if (!state.open || state.suggestions.length === 0) return null
+  if (!state.open || (!state.loading && !state.hasSearched && !state.failed)) return null
 
   const matched = phoneDigits(typedPhone).length
   const typed = nameQuery(typedName)
 
   return (
-    <div className="space-y-2 rounded-xl border border-primary/30 bg-[var(--background)] p-3 animate-in fade-in slide-in-from-top-1 duration-150">
-      <p className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-primary">
-        <ShieldCheck className="h-3.5 w-3.5" />
-        {state.suggestions.length === 1
-          ? '1 existing profile'
-          : `${state.suggestions.length} existing profiles`}
-      </p>
-
-      <ul id={state.listId} role="listbox" aria-label="Matching customers" className="space-y-1.5">
-        {state.suggestions.map((suggestion, index) => (
-          <li key={suggestion.id} role="none">
-            <button
-              type="button"
-              id={`${state.listId}-${index}`}
-              role="option"
-              aria-selected={index === state.highlighted}
-              // Mouse *down*, not click: the input's blur fires first otherwise
-              // and the row is gone before the press lands on it.
-              onMouseDown={(event) => {
-                event.preventDefault()
-                state.pick(suggestion)
-              }}
-              onMouseEnter={() => state.setHighlighted(index)}
-              className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                index === state.highlighted
-                  ? 'border-primary bg-primary/10'
-                  : 'border-zinc-900 bg-[var(--surface)] hover:border-zinc-700'
-              }`}
-            >
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-black text-white">
-                  {/* The letters that matched, picked out of the name. Six
-                      similar names under a three-letter search are hard to tell
-                      apart at a glance otherwise. */}
-                  {highlight(suggestion.name || 'Unnamed customer', typed)}
-                </span>
-                <span className="mt-0.5 block font-mono text-xs tracking-wider text-secondary-content">
-                  {/* The digits already typed are the ones that matched; what
-                      the desk is checking is the rest, so those stay bright. */}
-                  <span className="text-zinc-600">+91 {suggestion.phone.slice(0, matched)}</span>
-                  {suggestion.phone.slice(matched)}
-                </span>
-              </span>
-              <span className="shrink-0 text-[10px] font-black uppercase tracking-wider text-primary">
-                Use
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      <p className="text-[11px] leading-relaxed text-muted-content">
-        Pick one to load their details, or keep typing the full number.
-      </p>
+    <div id={state.listId} className="space-y-2 rounded-xl border border-primary/30 bg-[var(--background)] p-3 animate-in fade-in slide-in-from-top-1 duration-150" aria-live="polite" aria-busy={state.loading}>
+      {state.loading ? (
+        <>
+          <p role="status" className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary"><Loader2 className="h-3.5 w-3.5 animate-spin" />Searching existing customers</p>
+          <div className="space-y-2" aria-hidden="true">
+            {[0, 1, 2].map((item) => <div key={item} className="flex items-center gap-3 rounded-lg border border-zinc-900 bg-[var(--surface)] p-2.5"><span className="h-8 w-8 animate-pulse rounded-full bg-zinc-800" /><span className="min-w-0 flex-1 space-y-2"><span className="block h-3 w-2/5 animate-pulse rounded bg-zinc-800" /><span className="block h-2.5 w-3/5 animate-pulse rounded bg-zinc-800" /></span></div>)}
+          </div>
+        </>
+      ) : state.failed ? (
+        <p role="status" className="flex items-center gap-2 text-sm text-amber-400"><SearchX className="h-4 w-4 shrink-0" />Couldn’t search right now. Try again.</p>
+      ) : state.suggestions.length === 0 ? (
+        <p role="status" className="flex items-center gap-2 text-sm text-secondary-content"><SearchX className="h-4 w-4 shrink-0 text-muted-content" />No results found</p>
+      ) : (
+        <>
+          <p className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-primary">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            {state.suggestions.length === 1 ? '1 existing profile' : `${state.suggestions.length} existing profiles`}
+          </p>
+          <ul id={`${state.listId}-list`} role="listbox" aria-label="Matching customers" className="space-y-1.5">
+            {state.suggestions.map((suggestion, index) => (
+              <li key={suggestion.id} role="none">
+                <button type="button" id={`${state.listId}-${index}`} role="option" aria-selected={index === state.highlighted}
+                  onMouseDown={(event) => { event.preventDefault(); state.pick(suggestion) }}
+                  onMouseEnter={() => state.setHighlighted(index)}
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${index === state.highlighted ? 'border-primary bg-primary/10' : 'border-zinc-900 bg-[var(--surface)] hover:border-zinc-700'}`}>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-black text-white">{highlight(suggestion.name || 'Unnamed customer', typed)}</span>
+                    <span className="mt-0.5 block font-mono text-xs tracking-wider text-secondary-content"><span className="text-zinc-600">+91 {suggestion.phone.slice(0, matched)}</span>{suggestion.phone.slice(matched)}</span>
+                  </span>
+                  <span className="shrink-0 text-[10px] font-black uppercase tracking-wider text-primary">Use</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[11px] leading-relaxed text-muted-content">Pick a profile to load their details, or keep typing.</p>
+        </>
+      )}
     </div>
   )
 }

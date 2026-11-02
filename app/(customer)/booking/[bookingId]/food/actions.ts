@@ -36,7 +36,7 @@ export async function addFoodToBooking(
     // Get booking details first
     const { data: booking, error: bookingError } = await supabaseAdmin
       .from("bookings")
-      .select("customer_phone, food_subtotal, device_subtotal, total_amount")
+      .select("customer_phone, food_subtotal, device_subtotal, total_amount, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount")
       .eq("id", bookingId)
       .single();
 
@@ -70,7 +70,15 @@ export async function addFoodToBooking(
 
     // Calculate new food subtotal
     const newFoodSubtotal = (booking.food_subtotal || 0) + foodItems.reduce((sum, item) => sum + item.line_total, 0);
-    const newTotalAmount = (booking.device_subtotal || 0) + newFoodSubtotal;
+    const newTotalAmount = Math.max(
+      0,
+      (booking.device_subtotal || 0) +
+        newFoodSubtotal -
+        Number(booking.subscription_discount || 0) -
+        Number(booking.promo_discount || 0) -
+        Number(booking.happy_hour_discount || 0) -
+        Number(booking.hour_pass_discount || 0)
+    );
 
     // Update booking totals
     const { error: updateError } = await supabaseAdmin

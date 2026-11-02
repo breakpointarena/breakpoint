@@ -22,6 +22,7 @@ import {
   type SettledMembership,
 } from './orders'
 import { fulfilQuote } from './fulfil'
+import { supabaseAdmin } from '@/lib/supabase/server'
 
 export interface CheckoutResponse {
   razorpay_order_id: string
@@ -42,6 +43,7 @@ export type SettleResult =
       bookingNumber?: string
       subscriptionId?: string
       planName?: string
+      walletTransactionId?: string
       amountPaid: number
       purpose: PaymentPurpose
     }
@@ -66,11 +68,15 @@ export type SettleResult =
 const inFlightMessage = (purpose: PaymentPurpose): string =>
   purpose === 'subscription'
     ? 'This payment is already being processed. Please check "My Subscription" shortly.'
+    : purpose === 'wallet_top_up'
+      ? 'This wallet purchase is already being processed. Please check your wallet shortly.'
     : 'This payment is already being processed. Please check "Retrieve Booking" shortly.'
 
 const goneMessage = (purpose: PaymentPurpose): string =>
   purpose === 'subscription'
     ? 'This membership is no longer available. Please contact support.'
+    : purpose === 'wallet_top_up'
+      ? 'This wallet purchase could not be completed. Please contact support.'
     : 'This booking is no longer available. Please contact support.'
 
 /**
@@ -267,6 +273,7 @@ async function settlePayment(
   await markOrderFulfilled(razorpayOrderId, {
     bookingId: result.bookingId,
     subscriptionId: result.subscriptionId,
+    walletTransactionId: result.walletTransactionId,
   })
 
   return {
@@ -275,6 +282,7 @@ async function settlePayment(
     bookingNumber: result.bookingNumber,
     subscriptionId: result.subscriptionId,
     planName: result.planName,
+    walletTransactionId: result.walletTransactionId,
     amountPaid: Number(order.amount),
     purpose: order.purpose,
   }
@@ -316,6 +324,33 @@ async function alreadyHandled(
     purpose: order.purpose,
   })
 
+  if (order.purpose === 'wallet_top_up') {
+    let transactionId = order.wallet_transaction_id
+    if (!transactionId) {
+      const { data, error } = await supabaseAdmin
+        .from('wallet_transactions')
+        .select('id')
+        .eq('idempotency_key', `wallet-topup:${razorpayPaymentId}`)
+        .maybeSingle()
+      if (error) throw error
+      transactionId = data?.id || null
+    }
+
+    if (transactionId) {
+      if (!order.wallet_transaction_id) {
+        await markOrderFulfilled(order.razorpay_order_id, {
+          walletTransactionId: transactionId,
+        })
+      }
+      return {
+        success: true,
+        walletTransactionId: transactionId,
+        amountPaid: Number(order.amount),
+        purpose: order.purpose,
+      }
+    }
+  }
+
   if (order.purpose === 'subscription') {
     if (order.subscription_id) {
       const membership = await getSubscriptionForOrder(order.subscription_id)
@@ -330,7 +365,7 @@ async function alreadyHandled(
       await markOrderFulfilled(order.razorpay_order_id, { subscriptionId: byPayment.id })
       return settledMembership(byPayment)
     }
-  } else {
+  } else if (order.purpose !== 'wallet_top_up') {
     if (order.booking_id) {
       const booking = await getBookingForOrder(order.booking_id)
       if (booking) return settled(booking)

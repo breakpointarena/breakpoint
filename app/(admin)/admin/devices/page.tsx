@@ -222,6 +222,7 @@ export default function DevicesPage() {
       {editingDevice && (
         <EditDeviceModal
           device={editingDevice}
+          deviceTypes={deviceTypes}
           onFormSuccess={() => { setEditingDevice(null); fetchFreshDevices(); }}
           onClose={() => setEditingDevice(null)}
         />

@@ -7,6 +7,7 @@ import { Breadcrumb } from '@/components/ui/breadcrumb'
 import { useRouter } from 'next/navigation'
 import {
   getMembershipBookingSummary,
+  getMyHourPacks,
   getMySubscription,
   type MembershipBookingSummary,
 } from './action'
@@ -28,6 +29,7 @@ function MySubscriptionPageContent({ phone }: { phone: string }) {
   const router = useRouter()
 
   const [subscription, setSubscription] = useState<any>(null)
+  const [hourPacks, setHourPacks] = useState<any[]>([])
   /** Null while loading, and also when the read failed - the card just hides. */
   const [summary, setSummary] = useState<MembershipBookingSummary | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -46,17 +48,20 @@ function MySubscriptionPageContent({ phone }: { phone: string }) {
         // Neither takes an argument: the server resolves the customer from the
         // session. Requested together so the card and its summary arrive in one
         // render rather than the page reflowing under the reader.
-        const [response, bookingSummary] = await Promise.all([
+        const [response, bookingSummary, hourPassResponse] = await Promise.all([
           getMySubscription(),
           getMembershipBookingSummary(),
+          getMyHourPacks(),
         ])
         if (cancelled) return
         setSubscription(response.success && response.data ? response.data : null)
+        setHourPacks(hourPassResponse.success ? hourPassResponse.data : [])
         setSummary(bookingSummary)
       } catch (error) {
         console.error('Error fetching subscription:', error)
         if (!cancelled) {
           setSubscription(null)
+          setHourPacks([])
           setSummary(null)
         }
       } finally {
@@ -184,6 +189,40 @@ function MySubscriptionPageContent({ phone }: { phone: string }) {
           </div>
         </div>
 
+        {hourPacks.length > 0 && (
+          <section className="mx-auto mb-8 max-w-3xl space-y-4">
+            <h2 className="text-lg font-black uppercase tracking-wider text-primary">Personal hour packs</h2>
+            {hourPacks.map(pass => (
+              <div key={pass.id} className="rounded-2xl border border-primary/30 bg-zinc-900/90 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-black text-white">{pass.plan?.name || 'Hour pack'}</h3>
+                    <p className="mt-1 text-sm font-bold text-amber-300">
+                      For {pass.plan?.device_type?.display_name || 'legacy universal play'}
+                    </p>
+                    <p className="mt-1 text-sm text-zinc-400">
+                      Valid until {formatDate(pass.end_date)} · unused hours expire at the end of the term
+                    </p>
+                  </div>
+                  <p className="text-sm font-bold text-zinc-400">Paid ₹{pass.amount_paid.toLocaleString('en-IN')}</p>
+                </div>
+                <p className="mt-4 text-2xl font-black text-primary">
+                  {formatHours(pass.hours_remaining)} remaining
+                  <span className="ml-2 text-sm font-semibold text-zinc-500">
+                    of {pass.plan?.hours_included || 0} hours
+                  </span>
+                </p>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-800">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-primary to-amber-300"
+                    style={{ width: `${Math.min(100, (pass.hours_remaining / Math.max(1, Number(pass.plan?.hours_included || 0))) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
+
         {/* The gate above has already verified the caller, so there is no phone
             search here any more - this is simply "you have no plan yet". */}
         {!subscription ? (
@@ -192,9 +231,13 @@ function MySubscriptionPageContent({ phone }: { phone: string }) {
               <div className="w-16 h-16 bg-neutral-900 rounded-full flex items-center justify-center mb-4">
                 <AlertCircle className="w-8 h-8 text-neutral-500" />
               </div>
-              <h3 className="text-xl font-bold text-white mb-2">No Active Subscription</h3>
+              <h3 className="text-xl font-bold text-white mb-2">
+                {hourPacks.length > 0 ? "No Active Discount Membership" : "No Active Subscription"}
+              </h3>
               <p className="text-neutral-400 text-sm max-w-md mb-6">
-                No active membership found for +91 {phone}. Subscribe to unlock elite benefits and arena discounts.
+                {hourPacks.length > 0
+                  ? `Your hour pack is shown above. No discount membership is active for +91 ${phone}.`
+                  : `No active membership found for +91 ${phone}. Subscribe to unlock elite benefits and arena discounts.`}
               </p>
               <button
                 onClick={() => {

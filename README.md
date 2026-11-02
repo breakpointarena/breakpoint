@@ -6,30 +6,37 @@ Full-stack web platform for Break Point Arena gaming café with QR-based booking
 
 ```bash
 # 1. Install dependencies
-pnpm install
+npm install
 
-# 2. Start local Supabase (requires Docker)
-npx supabase start
+# 2. Start Docker Desktop, then start local Supabase
+npm run supabase:start
 
-# 3. Reset database & seed initial data
-npx supabase db reset
+# 3. First-time only: apply all migrations and load sample seed data
+npm run supabase:reset
+# Later, after pulling migration changes, use this non-destructive command:
+# npm run supabase:migrate
 
-# 4. Copy environment variables
-cp .env.example .env.local
-# Fill in all required values in .env.local
+# 4. Create .env.local if it does not exist
+if (-not (Test-Path .env.local)) { Copy-Item .env.example .env.local }
+# Copy API_URL, ANON_KEY, and SERVICE_ROLE_KEY from:
+npx --yes supabase status
+# Set MSG91_TEST_MODE=true and give SESSION_SECRET and OTP_HASH_SECRET random
+# values of at least 32 characters.
 
 # 5. Run development server
-pnpm dev
+npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000)
 
 ### Database Setup Notes
 
-- **First time:** Run `npx supabase start` to pull Docker images and start local DB
-- **After git pull:** Run `npx supabase db reset` if there are new migrations
-- **Seed data:** Automatically populated with sample devices and menu items
-- **Local DB:** PostgreSQL runs on `localhost:54322` via Docker
+- Docker Desktop must be running before starting Supabase.
+- Supabase services run locally: API at `http://127.0.0.1:54321`, Studio at `http://127.0.0.1:54323`, and PostgreSQL at `localhost:54322`.
+- Copy `API_URL` to `NEXT_PUBLIC_SUPABASE_URL`, `ANON_KEY` to `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `SERVICE_ROLE_KEY` to `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`.
+- Set `MSG91_TEST_MODE=true` in `.env.local` to print OTPs in the Next.js terminal instead of sending real SMS. Razorpay keys are only needed for payment flows.
+- `npm run supabase:migrate` applies pending migrations without deleting local data.
+- `npm run supabase:reset` **deletes local database contents**, reapplies every migration, and loads `supabase/seed.sql`. Use it only for a brand-new local database or when you intend to rebuild it.
 
 ## 📋 Tech Stack
 

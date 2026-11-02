@@ -7,22 +7,27 @@ import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { BookingStatusBadge } from "./BookingStatusBadge";
 import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, increaseFoodItemQuantity, decreaseFoodItemQuantity, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
+import { getDeviceTypes } from "@/app/(admin)/admin/devices/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
+import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
 import { Label } from "@/components/ui/label";
 import { QRCodeSVG } from "qrcode.react";
 import {
-  User, Phone, Mail, Calendar, Clock, IndianRupee,
+  User, Phone, Mail, Calendar, Clock, IndianRupee, Pencil, X,
   Loader2, CheckCircle2, LogIn, LogOut,
-  UtensilsCrossed, QrCode, MapPin, Gamepad2, Plus, Minus, Search, Filter, Trash2
+  UtensilsCrossed, QrCode, MapPin, Gamepad2, Plus, Minus, Search, Filter, Trash2, Play, Pause, UserPlus, ChevronDown
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -38,7 +43,11 @@ import {
 import { formatDbTime, formatDbTimeRange } from "@/lib/utils/timeSlots";
 import { arenaClockTime, formatClockTime12h } from "@/lib/utils/dates";
 import { TimeOfDayField } from "@/components/ui/time-of-day-field";
-import { resolvePlannedSession } from "@/lib/bookings/walkInSession";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { formatPlayedDuration, MAX_BACKDATED_START_HOURS, playedMinutes, priceSession, resolveBackdatedStart, resolvePlannedSession } from "@/lib/bookings/walkInSession";
+import { calculateSharedPlayShares, getSharedPlaySessions } from "@/lib/bookings/sharedPlay";
+import type { SharedPlayCustomer, SharedPlayParticipant } from "@/lib/types/shared-play";
+import { getUserRole } from "@/lib/auth/roles";
 
 interface BookingDetailModalProps {
   bookingId: string | null;
@@ -64,15 +73,49 @@ interface BookingDetailModalProps {
 
 export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoodModalDirectly, onPendingPayment, variant = "modal", headerSlot }: BookingDetailModalProps) {
   const [booking, setBooking] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [deleteBookingOpen, setDeleteBookingOpen] = useState(false);
+  const [deletingBooking, setDeletingBooking] = useState(false);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [checkOutOpen, setCheckOutOpen] = useState(false);
   const [addFoodModalOpen, setAddFoodModalOpen] = useState(false);
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [selectedFoodItems, setSelectedFoodItems] = useState<Record<string, number>>({});
+  const [foodParticipantId, setFoodParticipantId] = useState("");
+  const [participantCheckoutQuote, setParticipantCheckoutQuote] = useState<any>(null);
+  const [participantCheckoutCashAmount, setParticipantCheckoutCashAmount] = useState("0");
+  const [participantCheckoutUpiAmount, setParticipantCheckoutUpiAmount] = useState("0");
+  const [participantCheckoutCardAmount, setParticipantCheckoutCardAmount] = useState("0");
+  const [participantCheckoutUseWallet, setParticipantCheckoutUseWallet] = useState(false);
+  const [participantCheckoutKey, setParticipantCheckoutKey] = useState("");
+  const [participantCheckoutLoading, setParticipantCheckoutLoading] = useState(false);
+  const participantExternalDue = participantCheckoutQuote
+    ? Number(participantCheckoutQuote.totalAmount) - (participantCheckoutUseWallet
+      ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
+      : 0)
+    : 0;
+  const participantSplitTotal = Number(participantCheckoutCashAmount || 0) + Number(participantCheckoutUpiAmount || 0) + Number(participantCheckoutCardAmount || 0);
+  const participantSplitValid = Number.isFinite(participantSplitTotal) && Math.abs(participantSplitTotal - participantExternalDue) < 0.005;
+  const [checkoutAllQuotes, setCheckoutAllQuotes] = useState<any[]>([]);
+  const [checkoutAllOpen, setCheckoutAllOpen] = useState(false);
+  const [checkoutAllWalletIds, setCheckoutAllWalletIds] = useState<string[]>([]);
+  const [checkoutAllCashAmount, setCheckoutAllCashAmount] = useState("0");
+  const [checkoutAllUpiAmount, setCheckoutAllUpiAmount] = useState("0");
+  const [checkoutAllCardAmount, setCheckoutAllCardAmount] = useState("0");
+  const [checkoutAllKey, setCheckoutAllKey] = useState("");
+  const checkoutAllRemaining = checkoutAllQuotes.reduce((sum, quote) => {
+    const wallet = checkoutAllWalletIds.includes(quote.participantId)
+      ? Math.min(Number(quote.totalAmount || 0), Number(quote.walletBalance || 0))
+      : 0;
+    return sum + Math.max(0, Number(quote.totalAmount || 0) - wallet);
+  }, 0);
+  const checkoutAllSplitTotal = Number(checkoutAllCashAmount || 0) + Number(checkoutAllUpiAmount || 0) + Number(checkoutAllCardAmount || 0);
+  const checkoutAllSplitValid = Number.isFinite(checkoutAllSplitTotal) && Math.abs(checkoutAllSplitTotal - checkoutAllRemaining) < 0.005;
   const [updatingPlayerCount, setUpdatingPlayerCount] = useState(false);
   const [foodItemToRemove, setFoodItemToRemove] = useState<any>(null);
   const [removingFoodItem, setRemovingFoodItem] = useState(false);
+  const [updatingFoodItemId, setUpdatingFoodItemId] = useState<string | null>(null);
   const [foodSearchQuery, setFoodSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   /**
@@ -88,6 +131,42 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   /** 24-hour `HH:MM` being typed. Empty means "take the plan off". */
   const [plannedEndDraft, setPlannedEndDraft] = useState("");
   const [savingPlannedEnd, setSavingPlannedEnd] = useState(false);
+  const [deviceEditOpen, setDeviceEditOpen] = useState(false);
+  const [deviceTypeOptions, setDeviceTypeOptions] = useState<any[]>([]);
+  const [selectedDeviceTypeId, setSelectedDeviceTypeId] = useState("");
+  const [loadingDeviceTypes, setLoadingDeviceTypes] = useState(false);
+  const [savingDeviceChange, setSavingDeviceChange] = useState(false);
+  const [editingStartTime, setEditingStartTime] = useState(false);
+  const [startTimeDraft, setStartTimeDraft] = useState("");
+  const [savingStartTime, setSavingStartTime] = useState(false);
+  const [sharedRoster, setSharedRoster] = useState<string[]>([]);
+  const [activePlayers, setActivePlayers] = useState<string[]>([]);
+  const [newParticipantCustomerId, setNewParticipantCustomerId] = useState("");
+  const [customerSearchQuery, setCustomerSearchQuery] = useState("");
+  const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const [addPlayerCustomerOpen, setAddPlayerCustomerOpen] = useState(false);
+  const [creatingPlayerCustomer, setCreatingPlayerCustomer] = useState(false);
+  const [sharedPlayCustomers, setSharedPlayCustomers] = useState<SharedPlayCustomer[]>([]);
+  const [loadingSharedPlayCustomers, setLoadingSharedPlayCustomers] = useState(false);
+  const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
+  const [savingSharedPlay, setSavingSharedPlay] = useState(false);
+  const [sitInDialogOpen, setSitInDialogOpen] = useState(false);
+  const [sitInClockDraft, setSitInClockDraft] = useState("");
+  const [sitOutDialogOpen, setSitOutDialogOpen] = useState(false);
+  const [sitOutClockDraft, setSitOutClockDraft] = useState("");
+  const [participantToSitOutBeforeCheckout, setParticipantToSitOutBeforeCheckout] = useState<SharedPlayParticipant | null>(null);
+  const [participantsToSitOutBeforeCheckoutAll, setParticipantsToSitOutBeforeCheckoutAll] = useState<SharedPlayParticipant[]>([]);
+  const [participantCustomerDrafts, setParticipantCustomerDrafts] = useState<Record<string, string>>({});
+  const [linkingParticipantCustomer, setLinkingParticipantCustomer] = useState<string | null>(null);
+  const [sharedPlayNow, setSharedPlayNow] = useState(() => new Date());
+
+  useEffect(() => {
+    let active = true;
+    void getUserRole().then((role) => {
+      if (active) setIsAdmin(role === "admin");
+    });
+    return () => { active = false; };
+  }, []);
 
   /**
    * The draft, read the way the server will read it: forwards from now, since a
@@ -137,11 +216,25 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       setHasLoaded(false);
       loadBookingDetails();
       loadMenuItems();
+      loadSharedPlayCustomers();
       if (openFoodModalDirectly) {
+        setFoodParticipantId("");
         setAddFoodModalOpen(true);
       }
     }
   }, [open, bookingId, openFoodModalDirectly]);
+
+  useEffect(() => {
+    if (!open || booking?.billed_on_actual_time !== true || booking.status !== "checked_in") return;
+    const timer = window.setInterval(() => setSharedPlayNow(new Date()), 10_000);
+    return () => window.clearInterval(timer);
+  }, [open, booking?.billed_on_actual_time, booking?.status]);
+
+  useEffect(() => {
+    if (!addFoodModalOpen || !booking?.shared_play_enabled || foodParticipantId) return;
+    const firstEligible = (booking.shared_play_participants || []).find((participant: any) => !participant.checked_out_at);
+    if (firstEligible) setFoodParticipantId(firstEligible.id);
+  }, [addFoodModalOpen, booking?.shared_play_enabled, booking?.shared_play_participants, foodParticipantId]);
 
   const loadBookingDetails = async () => {
     if (!bookingId) return;
@@ -149,6 +242,12 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     const result = await getBookingDetails(bookingId);
     if (result.success) {
       setBooking(result.booking);
+      const participants: SharedPlayParticipant[] = result.booking.shared_play_participants || [];
+      setSharedRoster(participants.map((participant) => participant.name));
+      setActivePlayers(participants
+        .filter((participant) => participant.shared_play_periods?.some((period) => !period.ended_at))
+        .map((participant) => participant.name));
+      setSelectedParticipants([]);
     } else {
       toast.error("Failed to load booking details", { description: result.error });
     }
@@ -156,6 +255,21 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     // Set on failure too, so a booking that cannot be fetched falls through to
     // the empty state instead of spinning forever.
     setHasLoaded(true);
+  };
+
+  const handleDeleteBooking = async () => {
+    if (!bookingId || deletingBooking) return;
+    setDeletingBooking(true);
+    const result = await deleteBooking(bookingId);
+    setDeletingBooking(false);
+    if (!result.success) {
+      toast.error("Could not delete booking", { description: result.error });
+      return;
+    }
+    toast.success(`Booking ${result.bookingNumber} deleted`);
+    setDeleteBookingOpen(false);
+    onUpdate?.();
+    onClose();
   };
 
   const loadMenuItems = async () => {
@@ -167,9 +281,24 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
   };
 
+  const loadSharedPlayCustomers = async () => {
+    setLoadingSharedPlayCustomers(true);
+    const result = await getCustomersForSharedPlay();
+    setLoadingSharedPlayCustomers(false);
+    if (!result.success) {
+      toast.error("Could not load customer profiles", { description: result.error });
+      return;
+    }
+    setSharedPlayCustomers(result.customers);
+  };
+
   const handleAddFoodItems = async () => {
     if (!bookingId || Object.keys(selectedFoodItems).length === 0) {
       toast.error("Please select at least one item");
+      return;
+    }
+    if (booking?.shared_play_enabled && !foodParticipantId) {
+      toast.error("Choose which participant ordered this food");
       return;
     }
 
@@ -184,7 +313,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
           itemName: menuItem.name,
           itemCategory: menuItem.category,
           quantity,
-          unitPrice: Number(menuItem.price)
+          unitPrice: Number(menuItem.price),
+          participantId: booking?.shared_play_enabled ? foodParticipantId : null
         };
       });
 
@@ -207,8 +337,179 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setActionLoading(false);
   };
 
+  const openFoodPicker = () => {
+    const firstEligible = (booking?.shared_play_participants || []).find((participant: any) => !participant.checked_out_at);
+    setFoodParticipantId(booking?.shared_play_enabled ? firstEligible?.id || "" : "");
+    setAddFoodModalOpen(true);
+  };
+
+  const handleOpenParticipantCheckout = async (participantId: string, skipSitOutPrompt = false) => {
+    if (!bookingId) return;
+    const participant = booking?.shared_play_participants?.find(
+      (row: SharedPlayParticipant) => row.id === participantId
+    ) as SharedPlayParticipant | undefined;
+    const isPlaying = participant?.shared_play_periods?.some((period) => !period.ended_at) || false;
+    if (isPlaying && !skipSitOutPrompt) {
+      setParticipantToSitOutBeforeCheckout(participant || null);
+      return;
+    }
+    setParticipantCheckoutLoading(true);
+    const result = await getSharedPlayParticipantCheckoutQuote(bookingId, participantId);
+    setParticipantCheckoutLoading(false);
+    if (!result.success) {
+      toast.error("Could not calculate participant bill", { description: result.error });
+      return;
+    }
+    setParticipantCheckoutQuote(result.quote);
+    setParticipantCheckoutUseWallet(false);
+    setParticipantCheckoutCashAmount("0");
+    setParticipantCheckoutUpiAmount(Number(result.quote.totalAmount).toFixed(2));
+    setParticipantCheckoutCardAmount("0");
+    setParticipantCheckoutKey(crypto.randomUUID());
+  };
+
+  const handleSitOutAndContinueCheckout = async () => {
+    const participant = participantToSitOutBeforeCheckout;
+    if (!participant || !bookingId || participantCheckoutLoading) return;
+    setParticipantCheckoutLoading(true);
+    const saved = await handleSetSelectedParticipantsPlaying(
+      false,
+      null,
+      arenaClockTime(new Date()).slice(0, 5),
+      [participant.name]
+    );
+    if (saved) {
+      setParticipantToSitOutBeforeCheckout(null);
+      await handleOpenParticipantCheckout(participant.id, true);
+    }
+    setParticipantCheckoutLoading(false);
+  };
+
+  const handleSitOutAllAndContinueCheckout = async () => {
+    if (!bookingId || participantsToSitOutBeforeCheckoutAll.length === 0 || participantCheckoutLoading) return;
+    setParticipantCheckoutLoading(true);
+    const names = participantsToSitOutBeforeCheckoutAll.map((participant) => participant.name);
+    const saved = await handleSetSelectedParticipantsPlaying(
+      false,
+      null,
+      arenaClockTime(new Date()).slice(0, 5),
+      names
+    );
+    if (saved) {
+      setParticipantsToSitOutBeforeCheckoutAll([]);
+      await handleOpenCheckoutAll(true);
+    }
+    setParticipantCheckoutLoading(false);
+  };
+
+  const handleOpenCheckoutAll = async (skipSitOutPrompt = false) => {
+    if (!bookingId) return;
+    const activeParticipants = (booking?.shared_play_participants || []).filter(
+      (participant: SharedPlayParticipant) =>
+        !participant.checked_out_at && participant.shared_play_periods?.some((period) => !period.ended_at)
+    ) as SharedPlayParticipant[];
+    if (!skipSitOutPrompt && activeParticipants.length > 0) {
+      setParticipantsToSitOutBeforeCheckoutAll(activeParticipants);
+      return;
+    }
+    setParticipantCheckoutLoading(true);
+    const result = await getSharedPlayCheckoutAllQuotes(bookingId);
+    setParticipantCheckoutLoading(false);
+    if (!result.success) {
+      toast.error("Could not calculate group bill", { description: result.error });
+      return;
+    }
+    setCheckoutAllQuotes(result.quotes);
+    setCheckoutAllWalletIds([]);
+    const due = result.quotes.reduce((sum: number, quote: any) => sum + Number(quote.totalAmount || 0), 0);
+    setCheckoutAllCashAmount("0");
+    setCheckoutAllUpiAmount(due.toFixed(2));
+    setCheckoutAllCardAmount("0");
+    setCheckoutAllKey(crypto.randomUUID());
+    setCheckoutAllOpen(true);
+  };
+
+  const handleConfirmCheckoutAll = async () => {
+    if (!bookingId || checkoutAllQuotes.length === 0) return;
+    setParticipantCheckoutLoading(true);
+    const result = await checkOutAllSharedPlayParticipants({
+      bookingId,
+      useWalletFor: checkoutAllWalletIds,
+      cashAmount: Number(checkoutAllCashAmount),
+      upiAmount: Number(checkoutAllUpiAmount),
+      cardAmount: Number(checkoutAllCardAmount),
+      idempotencyKey: checkoutAllKey
+    });
+    setParticipantCheckoutLoading(false);
+    if (!result.success) {
+      setCheckoutAllOpen(false);
+      toast.error(result.settledParticipants.length
+        ? `Checked out ${result.settledParticipants.length} participant${result.settledParticipants.length === 1 ? "" : "s"}; the rest are still active`
+        : "Checkout all failed", { description: result.error });
+      await loadBookingDetails();
+      onUpdate?.();
+      return;
+    }
+
+    setCheckoutAllOpen(false);
+    setCheckoutAllQuotes([]);
+    const closeResult = booking?.billed_on_actual_time
+      ? await checkOutWalkInSession(bookingId)
+      : await checkOutBooking(bookingId);
+    if (!closeResult.success) {
+      toast.error("Everyone paid, but the booking could not be closed", { description: closeResult.error });
+    } else {
+      toast.success("Everyone checked out", {
+        description: `${result.settledParticipants.length} participants settled.`
+      });
+    }
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+
+  const handleConfirmParticipantCheckout = async () => {
+    if (!bookingId || !participantCheckoutQuote) return;
+    setParticipantCheckoutLoading(true);
+    const result = await checkOutSharedPlayParticipant({
+      bookingId,
+      participantId: participantCheckoutQuote.participantId,
+      useWallet: participantCheckoutUseWallet,
+      cashAmount: Number(participantCheckoutCashAmount),
+      upiAmount: Number(participantCheckoutUpiAmount),
+      cardAmount: Number(participantCheckoutCardAmount),
+      idempotencyKey: participantCheckoutKey
+    });
+    setParticipantCheckoutLoading(false);
+    if (!result.success) {
+      toast.error("Participant checkout failed", { description: result.error });
+      return;
+    }
+    const walletUsed = Number(result.payment?.wallet_amount || 0);
+    toast.success(`${participantCheckoutQuote.participantName} checked out`, {
+      description: `₹${Number(result.quote.totalAmount).toFixed(2)} total (UPI ₹${Number(participantCheckoutUpiAmount).toFixed(2)}, cash ₹${Number(participantCheckoutCashAmount).toFixed(2)}, card ₹${Number(participantCheckoutCardAmount).toFixed(2)})${walletUsed > 0 ? `; ₹${walletUsed.toFixed(2)} from wallet` : ""}.`
+    });
+    setParticipantCheckoutQuote(null);
+    const remainingParticipants = (booking.shared_play_participants || []).filter(
+      (participant: any) => participant.id !== result.quote.participantId && !participant.checked_out_at
+    );
+    if (remainingParticipants.length === 0) {
+      const closeResult = booking.billed_on_actual_time
+        ? await checkOutWalkInSession(bookingId)
+        : await checkOutBooking(bookingId);
+      if (!closeResult.success) {
+        toast.error("Participant paid, but booking could not be closed", { description: closeResult.error });
+      }
+    }
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+
   /** True for a walk-in whose bill comes from the clock, not from a chosen slot. */
   const isSession = booking?.billed_on_actual_time === true;
+  const canEditBilling = !!booking &&
+    booking.status !== "cancelled" &&
+    (booking.payment_status !== "paid" || (booking.shared_play_enabled && booking.status === "checked_in")) &&
+    booking.payment_status !== "refunded";
 
   const handleSessionCheckIn = async () => {
     if (!bookingId) return;
@@ -235,6 +536,19 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
    */
   const handleSessionCheckOut = () => {
     if (!bookingId) return;
+    if (booking?.shared_play_enabled) {
+      const remainingParticipants = (booking.shared_play_participants || []).filter(
+        (participant: any) => !participant.checked_out_at
+      );
+      if (remainingParticipants.length > 1) {
+        void handleOpenCheckoutAll();
+        return;
+      }
+      if (remainingParticipants.length === 1) {
+        void handleOpenParticipantCheckout(remainingParticipants[0].id);
+        return;
+      }
+    }
     setCheckOutOpen(true);
   };
 
@@ -271,6 +585,18 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
 
   const handleCheckOut = async () => {
     if (!bookingId || !booking) return;
+
+    if (booking.shared_play_enabled) {
+      const remainingParticipants = (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at);
+      if (remainingParticipants.length === 1) {
+        await handleOpenParticipantCheckout(remainingParticipants[0].id);
+        return;
+      }
+      if (remainingParticipants.length > 1) {
+        await handleOpenCheckoutAll();
+        return;
+      }
+    }
 
     // Check if there are pending payments before checkout
     const balanceDue = Number(booking.balance_due || 0);
@@ -323,6 +649,38 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setRemovingFoodItem(false);
   };
 
+  const handleIncreaseFoodItem = async (item: any) => {
+    if (!bookingId || updatingFoodItemId) return;
+    setUpdatingFoodItemId(item.id);
+    const result = await increaseFoodItemQuantity(bookingId, item.id);
+    if (result.success) {
+      toast.success(`${item.item_name} quantity increased`, {
+        description: `Quantity: ${result.quantity}. New total: ₹${Number(result.newTotal || 0).toLocaleString("en-IN")}`
+      });
+      await loadBookingDetails();
+      onUpdate?.();
+    } else {
+      toast.error("Could not increase quantity", { description: result.error });
+    }
+    setUpdatingFoodItemId(null);
+  };
+
+  const handleDecreaseFoodItem = async (item: any) => {
+    if (!bookingId || updatingFoodItemId || Number(item.quantity) <= 1) return;
+    setUpdatingFoodItemId(item.id);
+    const result = await decreaseFoodItemQuantity(bookingId, item.id);
+    if (result.success) {
+      toast.success(`${item.item_name} quantity decreased`, {
+        description: `Quantity: ${result.quantity}. New total: ₹${Number(result.newTotal || 0).toLocaleString("en-IN")}`
+      });
+      await loadBookingDetails();
+      onUpdate?.();
+    } else {
+      toast.error("Could not decrease quantity", { description: result.error });
+    }
+    setUpdatingFoodItemId(null);
+  };
+
   const handleUpdatePlayerCount = async (slotId: string, newCount: number, maxPlayers: number) => {
     setUpdatingPlayerCount(true);
     const result = await updatePlayerCount(slotId, newCount, maxPlayers);
@@ -345,7 +703,388 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setUpdatingPlayerCount(false);
   };
 
+  const handleSaveSharedPlay = async (
+    enabled: boolean,
+    rosterOverride?: string[],
+    activeOverride?: string[],
+    successMessage?: string,
+    rosterCustomers: Array<{ customerId: string; name: string }> = [],
+    sitInClock: string | null = null,
+    sitOutClock: string | null = null
+  ): Promise<boolean> => {
+    if (!bookingId) return false;
+    const roster = rosterOverride ?? sharedRoster;
+    const active = activeOverride ?? activePlayers;
+    setSavingSharedPlay(true);
+    const result = await setSharedPlayParticipants(
+      bookingId,
+      enabled,
+      roster,
+      active,
+      rosterCustomers,
+      sitInClock,
+      sitOutClock
+    );
+    setSavingSharedPlay(false);
+    if (!result.success) {
+      toast.error("Could not update shared play", { description: result.error });
+      await loadBookingDetails();
+      return false;
+    }
+    toast.success(successMessage || (enabled ? "Shared play started" : "Standard play selected"));
+    await loadBookingDetails();
+    onUpdate?.();
+    return true;
+  };
+
+  const handleLinkParticipantCustomer = async (participantId: string, name: string) => {
+    if (!bookingId) return;
+    setLinkingParticipantCustomer(participantId);
+    const result = await linkSharedPlayParticipantToCustomer(
+      bookingId,
+      participantId,
+      participantCustomerDrafts[participantId] || ""
+    );
+    setLinkingParticipantCustomer(null);
+    if (!result.success) {
+      toast.error("Could not link customer account", { description: result.error });
+      return;
+    }
+    toast.success(`${name} linked to ${result.customerName}'s account`, { description: "Wallet credits are available at checkout." });
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+
+  const handleAddSharedParticipant = async (customerOverride?: SharedPlayCustomer) => {
+    if (savingSharedPlay) return;
+    const customer = customerOverride ||
+      sharedPlayCustomers.find((entry) => entry.id === newParticipantCustomerId);
+    if (!customer) {
+      toast.error("Select a customer profile");
+      return;
+    }
+    const existingRosterName = sharedRoster.find(
+      (entry) => entry.toLowerCase() === customer.name.toLowerCase()
+    );
+    if (existingRosterName) {
+      const existingParticipant = booking?.shared_play_participants?.find(
+        (participant: SharedPlayParticipant) =>
+          participant.name.toLowerCase() === existingRosterName.toLowerCase()
+      );
+      if (existingParticipant?.customer_id === customer.id) {
+        toast.error("This customer is already on the player list.");
+        return;
+      }
+      if (existingParticipant?.customer_id) {
+        toast.error("This player is already linked to a different customer account.");
+        return;
+      }
+
+      const linked = await handleSaveSharedPlay(
+        true,
+        sharedRoster,
+        activePlayers,
+        `${customer.name}'s customer profile linked to this player.`,
+        [{ customerId: customer.id, name: existingRosterName }]
+      );
+      if (linked) {
+        setNewParticipantCustomerId("");
+        setSelectedParticipants([existingRosterName]);
+      }
+      return;
+    }
+
+    const nextRoster = [...sharedRoster, customer.name];
+    setSharedRoster(nextRoster);
+    const saved = await handleSaveSharedPlay(
+      true,
+      nextRoster,
+      activePlayers,
+      `${customer.name} added. Select them and tap Sit in to start their timer.`,
+      [{ customerId: customer.id, name: customer.name }]
+    );
+    if (saved) {
+      setNewParticipantCustomerId("");
+      setSelectedParticipants([customer.name]);
+    }
+  };
+
+  const handleCreatePlayerCustomer = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const customerName = String(formData.get("name") || "").trim();
+    if (sharedRoster.some((name) => name.toLowerCase() === customerName.toLowerCase())) {
+      toast.error("A player with this name is already on the list.");
+      return;
+    }
+    setCreatingPlayerCustomer(true);
+    const result = await createCustomerAction({
+      name: String(formData.get("name") || ""),
+      phone: String(formData.get("phone") || ""),
+      email: String(formData.get("email") || ""),
+    });
+    setCreatingPlayerCustomer(false);
+
+    if (!result.success) {
+      toast.error("Could not add customer", { description: result.error });
+      return;
+    }
+
+    const createdCustomer: SharedPlayCustomer = result.customer;
+    setSharedPlayCustomers((current) => [...current, createdCustomer].sort((a, b) => a.name.localeCompare(b.name)));
+    setNewParticipantCustomerId(createdCustomer.id);
+    setAddPlayerCustomerOpen(false);
+    form.reset();
+    await handleAddSharedParticipant(createdCustomer);
+  };
+
+  const handleSetSelectedParticipantsPlaying = async (
+    sitIn: boolean,
+    sitInClock: string | null = null,
+    sitOutClock: string | null = null,
+    selectedNamesOverride?: string[]
+  ): Promise<boolean> => {
+    if (savingSharedPlay) return false;
+    const selectedNames = selectedNamesOverride ?? sharedRoster.filter((name) =>
+      selectedParticipants.some((selected) => selected.toLowerCase() === name.toLowerCase())
+    );
+    if (selectedNames.length === 0) {
+      toast.error("Select at least one player");
+      return false;
+    }
+    const selectedSet = new Set(selectedNames.map((name) => name.toLowerCase()));
+    const nextActive = sitIn
+      ? [...new Map([...activePlayers, ...selectedNames].map((name) => [name.toLowerCase(), name])).values()]
+      : activePlayers.filter((name) => !selectedSet.has(name.toLowerCase()));
+    const maxPlayers = Number(deviceSlot?.devices?.device_type?.max_players || 10);
+    if (sitIn && nextActive.length > maxPlayers) {
+      toast.error(`This device supports up to ${maxPlayers} players at a time`);
+      return false;
+    }
+
+    setActivePlayers(nextActive);
+    const saved = await handleSaveSharedPlay(
+      true,
+      sharedRoster,
+      nextActive,
+      `${selectedNames.length} player${selectedNames.length === 1 ? "" : "s"} ${sitIn ? "sat in" : "marked sitting out"}`,
+      [],
+      sitInClock,
+      sitOutClock
+    );
+    if (saved) {
+      setSelectedParticipants([]);
+      if (sitIn) setSitInDialogOpen(false);
+      else if (sitOutClock) setSitOutDialogOpen(false);
+    }
+    return saved;
+  };
+
+  const openSitInDialog = () => {
+    setSitInClockDraft(arenaClockTime(sharedPlayNow).slice(0, 5));
+    setSitInDialogOpen(true);
+  };
+
+  const confirmSitIn = () => {
+    const started = resolveBackdatedStart(sitInClockDraft, sharedPlayNow);
+    if (!started.ok) {
+      toast.error("Check the sit-in time", { description: started.error });
+      return;
+    }
+    void handleSetSelectedParticipantsPlaying(true, sitInClockDraft);
+  };
+
+  const openSitOutDialog = () => {
+    setSitOutClockDraft(arenaClockTime(sharedPlayNow).slice(0, 5));
+    setSitOutDialogOpen(true);
+  };
+
+  const openSitOutAllDialog = () => {
+    if (activePlayers.length === 0) return;
+    setSelectedParticipants([...activePlayers]);
+    setSitOutClockDraft(arenaClockTime(sharedPlayNow).slice(0, 5));
+    setSitOutDialogOpen(true);
+  };
+
+  const confirmSitOut = () => {
+    const ended = resolveBackdatedStart(sitOutClockDraft, sharedPlayNow);
+    if (!ended.ok) {
+      toast.error("Check the sit-out time", { description: ended.error });
+      return;
+    }
+    void handleSetSelectedParticipantsPlaying(false, null, sitOutClockDraft);
+  };
+
   const deviceSlot = booking?.booking_device_slots?.[0];
+  const isActiveActualWalkIn = booking?.billed_on_actual_time === true &&
+    booking.status === "checked_in" &&
+    Boolean(booking.checked_in_at);
+  const liveSessionDuration = useMemo(() => {
+    if (!isActiveActualWalkIn) return null;
+    return formatPlayedDuration(playedMinutes({
+      startedAt: new Date(booking.checked_in_at),
+      endedAt: sharedPlayNow,
+    }));
+  }, [isActiveActualWalkIn, booking?.checked_in_at, sharedPlayNow]);
+  const canChangeActiveWalkInDevice = booking?.billed_on_actual_time === true &&
+    booking.status === "checked_in" &&
+    !booking.completed_at &&
+    !booking.shared_play_enabled &&
+    booking.booking_device_slots?.length === 1;
+  const canChangeActiveSharedPlayDevice = booking?.shared_play_enabled === true &&
+    booking.status === "checked_in" &&
+    !booking.completed_at &&
+    booking.booking_device_slots?.length === 1 &&
+    ["standard_snooker", "medium_snooker", "american_pool"].includes(
+      booking.booking_device_slots?.[0]?.devices?.device_type?.name
+    ) &&
+    activePlayers.length > 0;
+  const canChangeActiveSessionDevice = canChangeActiveWalkInDevice || canChangeActiveSharedPlayDevice;
+
+  const openDeviceEditor = async () => {
+    if (!canChangeActiveSessionDevice) return;
+    setLoadingDeviceTypes(true);
+    const types = await getDeviceTypes();
+    setDeviceTypeOptions(booking?.shared_play_enabled
+      ? types.filter((type: any) => ["standard_snooker", "medium_snooker", "american_pool"].includes(type.name))
+      : types);
+    setSelectedDeviceTypeId(deviceSlot?.devices?.device_type?.id || "");
+    setLoadingDeviceTypes(false);
+    setDeviceEditOpen(true);
+  };
+
+  const saveDeviceChange = async () => {
+    if (!bookingId || !selectedDeviceTypeId) return;
+    setSavingDeviceChange(true);
+    const result = booking.shared_play_enabled
+      ? await changeCheckedInSharedPlayDevice(bookingId, selectedDeviceTypeId)
+      : await changeCheckedInWalkInDevice(bookingId, selectedDeviceTypeId);
+    setSavingDeviceChange(false);
+    if (!result.success) {
+      toast.error("Could not change device", { description: result.error });
+      return;
+    }
+    setDeviceEditOpen(false);
+    toast.success("Session device updated", {
+      description: booking.shared_play_enabled
+        ? `${result.deviceTypeName} #${result.stationNumber}. Unsettled shared-play charges are recalculated at this device's rates.`
+        : `${result.deviceTypeName} #${result.stationNumber}. Its rate will be used for the session at checkout.`
+    });
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+
+  const openStartTimeEditor = () => {
+    if (!canChangeActiveWalkInDevice || !booking?.checked_in_at) return;
+    setStartTimeDraft(arenaClockTime(new Date(booking.checked_in_at)).slice(0, 5));
+    setEditingStartTime(true);
+  };
+
+  const saveStartTimeChange = async () => {
+    if (!bookingId || !startTimeDraft) return;
+    setSavingStartTime(true);
+    const result = await changeCheckedInWalkInStartTime(bookingId, startTimeDraft);
+    setSavingStartTime(false);
+    if (!result.success) {
+      toast.error("Could not change start time", { description: result.error });
+      return;
+    }
+    setEditingStartTime(false);
+    toast.success("Session start time updated");
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+  const isFiSimulator =
+    booking?.walk_in_device_type_name?.trim().toLowerCase() === "fi simulator" ||
+    ["fi_simulator", "other"].includes(deviceSlot?.devices?.device_type?.name) ||
+    deviceSlot?.devices?.device_type?.display_name?.trim().toLowerCase() === "fi simulator";
+  const supportsSharedPlay = (() => {
+    const supported = (value: unknown) => [
+      "standard_snooker", "medium_snooker", "american_pool",
+      "standard snooker", "medium snooker", "american pool", "american snooker",
+      "standard snooker table", "medium snooker table", "american pool table",
+    ].includes(String(value || "").trim().toLowerCase());
+    return supported(booking?.walk_in_device_type_name) || booking?.booking_device_slots?.some((slot: any) =>
+      supported(slot.devices?.device_type?.name) ||
+      supported(slot.devices?.device_type?.display_name) ||
+      supported(slot.device_type)
+    );
+  })();
+  const sharedPlayPeriods = useMemo(
+    () => (booking?.shared_play_participants || []).flatMap((participant: any) =>
+      (participant.shared_play_periods || []).map((period: any) => ({
+        id: period.id,
+        participant_id: participant.id,
+        started_at: period.started_at,
+        ended_at: period.ended_at,
+        hourly_rate: period.hourly_rate,
+        extra_player_rate: period.extra_player_rate,
+        included_players: period.included_players,
+      }))
+    ),
+    [booking?.shared_play_participants]
+  );
+  const sharedPlayEnd = booking?.status === "completed" && booking.completed_at
+    ? new Date(booking.completed_at)
+    : sharedPlayNow;
+  const sharedPlaySessions = useMemo(
+    () => getSharedPlaySessions(sharedPlayPeriods, sharedPlayEnd),
+    [sharedPlayPeriods, sharedPlayEnd]
+  );
+  const sharedPlayCalculation = useMemo(() => {
+    if (!booking?.shared_play_enabled || !deviceSlot) return null;
+    return calculateSharedPlayShares(
+      sharedPlayPeriods,
+      Number(deviceSlot.hourly_rate || 0),
+      Number(deviceSlot.extra_player_charge || 0),
+      Number(deviceSlot.included_players || 1),
+      booking.status === "completed" ? Number(deviceSlot.slot_total || 0) : null,
+      sharedPlayEnd,
+    );
+  }, [booking?.shared_play_enabled, booking?.status, deviceSlot, sharedPlayPeriods, sharedPlayEnd]);
+  const isLiveActualSession =
+    booking?.billed_on_actual_time === true && booking.status === "checked_in";
+  const sharedParticipantShares = useMemo(
+    () => new Map((sharedPlayCalculation?.shares || []).map((share) => [share.participantId, share.amount])),
+    [sharedPlayCalculation]
+  );
+  const standardLivePricing = useMemo(() => {
+    if (
+      !booking?.billed_on_actual_time ||
+      booking.status !== "checked_in" ||
+      booking.shared_play_enabled ||
+      !booking.checked_in_at ||
+      !deviceSlot
+    ) {
+      return null;
+    }
+    return priceSession({
+      playedMinutes: playedMinutes({
+        startedAt: new Date(booking.checked_in_at),
+        endedAt: sharedPlayNow
+      }),
+      hourlyRate: Number(deviceSlot.hourly_rate || 0),
+      playerCount: Number(deviceSlot.player_count || 1),
+      includedPlayers: Number(deviceSlot.included_players || 1),
+      extraPlayerCharge: Number(deviceSlot.extra_player_charge || 0)
+    });
+  }, [booking?.billed_on_actual_time, booking?.status, booking?.shared_play_enabled, booking?.checked_in_at, deviceSlot, sharedPlayNow]);
+
+  const liveSessionBalanceDue = (() => {
+    if (!isLiveActualSession) return Number(booking?.balance_due || 0);
+
+    const liveDeviceTotal = booking?.shared_play_enabled
+      ? (sharedPlayCalculation?.deviceCharges || 0) + (sharedPlayCalculation?.extraPlayersTotal || 0)
+      : standardLivePricing?.deviceSubtotal || 0;
+    const discounts =
+      Number(booking?.subscription_discount || 0) +
+      Number(booking?.promo_discount || 0) +
+      Number(booking?.happy_hour_discount || 0) +
+      Number(booking?.hour_pass_discount || 0);
+    const liveTotal = liveDeviceTotal + Number(booking?.food_subtotal || 0) - discounts;
+    return Math.max(0, Number((liveTotal - Number(booking?.amount_paid || 0)).toFixed(2)));
+  })();
 
   // The detail panel itself, wrapped either in a Dialog or in plain page markup
   // further down. Kept as one expression so both modes render exactly the same
@@ -381,7 +1120,58 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       {booking.checked_in_at && (
                         <div className="flex items-center gap-1 text-green-500">
                           <LogIn className="h-3.5 w-3.5" />
-                          <span>In: {new Date(booking.checked_in_at).toLocaleString()}</span>
+                          {editingStartTime ? (
+                            <>
+                              <span>In:</span>
+                              <TimeOfDayField
+                                name="booking-start-time"
+                                label="Session start time"
+                                defaultValue={startTimeDraft}
+                                onChange={setStartTimeDraft}
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Save start time"
+                                title="Save start time"
+                                onClick={() => void saveStartTimeChange()}
+                                disabled={savingStartTime || !startTimeDraft}
+                                className="h-8 w-8 shrink-0 text-emerald-400 hover:text-emerald-300"
+                              >
+                                {savingStartTime ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Cancel start time change"
+                                title="Cancel start time change"
+                                onClick={() => setEditingStartTime(false)}
+                                disabled={savingStartTime}
+                                className="h-8 w-8 shrink-0 text-secondary-content hover:text-white"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <span>In: {new Date(booking.checked_in_at).toLocaleString()}</span>
+                              {canChangeActiveWalkInDevice && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  aria-label="Edit session start time"
+                                  title="Edit session start time"
+                                  onClick={openStartTimeEditor}
+                                  className="h-7 w-7 text-secondary-content hover:text-primary"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </>
+                          )}
                         </div>
                       )}
                       {/* Sessions get the full timeline below instead: for those,
@@ -396,6 +1186,16 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       )}
                     </div>
                   </div>
+                  {isAdmin && booking.status !== "completed" && !booking.completed_at && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setDeleteBookingOpen(true)}
+                      className="shrink-0 border-red-900/70 text-red-400 hover:bg-red-950/50 hover:text-red-300"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" /> Delete booking
+                    </Button>
+                  )}
                 </div>
               </Card>
 
@@ -447,9 +1247,70 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       <MapPin className="h-4 w-4 text-primary mt-0.5" />
                       <div className="flex-1">
                         <p className="text-label-enhanced text-muted-content mb-1">Device</p>
-                        <p className="text-base font-bold text-white">
-                          {deviceSlot?.device_type} #{deviceSlot?.device_station_number}
-                        </p>
+                        <div className="flex w-full items-center gap-2">
+                          {deviceEditOpen ? (
+                            <>
+                              <select
+                                aria-label="Device type"
+                                value={selectedDeviceTypeId}
+                                onChange={(event) => setSelectedDeviceTypeId(event.target.value)}
+                                className="h-9 min-w-0 max-w-[280px] flex-1 rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm font-semibold text-white"
+                              >
+                                {deviceTypeOptions.map((type) => (
+                                  <option key={type.id} value={type.id}>
+                                    {type.display_name} · ₹{Number(type.regular_hourly_rate || 0).toFixed(0)}/hour
+                                  </option>
+                                ))}
+                              </select>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Save device change"
+                                title="Save device change"
+                                onClick={() => void saveDeviceChange()}
+                                disabled={savingDeviceChange || !selectedDeviceTypeId || selectedDeviceTypeId === deviceSlot?.devices?.device_type?.id}
+                                className="h-8 w-8 shrink-0 text-emerald-400 hover:text-emerald-300"
+                              >
+                                {savingDeviceChange ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Cancel device change"
+                                title="Cancel device change"
+                                onClick={() => setDeviceEditOpen(false)}
+                                disabled={savingDeviceChange}
+                                className="h-8 w-8 shrink-0 text-secondary-content hover:text-white"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-base font-bold text-white">
+                                {deviceSlot?.device_type} #{deviceSlot?.device_station_number}
+                              </p>
+                              {canChangeActiveSessionDevice && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  aria-label="Edit device"
+                                  title={booking.shared_play_enabled ? "Change device and recalculate shared-play charges" : "Edit device"}
+                                  onClick={() => void openDeviceEditor()}
+                                  disabled={loadingDeviceTypes}
+                                  className="h-7 w-7 text-secondary-content hover:text-primary"
+                                >
+                                  {loadingDeviceTypes
+                                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                                    : <Pencil className="h-4 w-4" />}
+                                </Button>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-start gap-3">
@@ -466,11 +1327,15 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       <div className="flex-1">
                         <p className="text-label-enhanced text-muted-content mb-1">Time Slot</p>
                         <p className="text-base text-white font-semibold">
-                          {formatDbTimeRange(deviceSlot?.slot_start_time, deviceSlot?.slot_end_time)}
+                          {isActiveActualWalkIn
+                            ? `Playing for ${liveSessionDuration}`
+                            : formatDbTimeRange(deviceSlot?.slot_start_time, deviceSlot?.slot_end_time)}
                         </p>
-                        <p className="text-sm-enhanced text-secondary-content mt-1">
-                          Duration: {deviceSlot?.duration_hours}h
-                        </p>
+                        {!isActiveActualWalkIn && (
+                          <p className="text-sm-enhanced text-secondary-content mt-1">
+                            Duration: {deviceSlot?.duration_hours}h
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -487,9 +1352,14 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   <div className="space-y-3">
                     {booking.booking_device_slots.map((slot: any) => {
                       const currentPlayerCount = slot.player_count || slot.included_players || 1;
+                      const displayPlayerCount = booking.shared_play_enabled
+                        ? Math.max(sharedRoster.length, 1)
+                        : currentPlayerCount;
                       const includedPlayers = slot.included_players || 1;
                       const maxPlayers = slot.devices?.device_type?.max_players || 10;
-                      const extraPlayers = Math.max(0, currentPlayerCount - includedPlayers);
+                      const extraPlayers = booking.shared_play_enabled
+                        ? 0
+                        : Math.max(0, currentPlayerCount - includedPlayers);
                       /**
                        * The charge actually billed, not the headline rate.
                        *
@@ -501,7 +1371,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                        * session - so there is nothing to recompute here.
                        */
                       const extraPlayersCharge = Number(slot.extra_players_total || 0);
-                      const canEdit = booking.status !== "cancelled" && booking.status !== "completed";
+                      const canEdit = canEditBilling && !booking.shared_play_enabled;
 
                       return (
                         <div key={slot.id} className="bg-[var(--surface)] border border-[#27272a] rounded-lg p-4 space-y-3">
@@ -510,7 +1380,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                             <div>
                               <p className="text-sm font-black text-white">{slot.device_type}</p>
                               <p className="text-sm font-semibold text-secondary-content">
-                                {slot.duration_hours}h × ₹{Number(slot.hourly_rate).toLocaleString('en-IN')}/hr
+                                {isActiveActualWalkIn
+                                  ? `Playing for ${liveSessionDuration} · ₹${Number(slot.hourly_rate).toLocaleString('en-IN')}/hr`
+                                  : `${slot.duration_hours}h × ₹${Number(slot.hourly_rate).toLocaleString('en-IN')}/hr`}
                               </p>
                             </div>
                             <div className="text-right">
@@ -523,9 +1395,13 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                           <div className="pt-2 border-t border-[#27272a]/50 space-y-2">
                             <div className="flex items-center justify-between">
                               <div>
-                                <p className="text-sm font-bold text-white uppercase">Player Count</p>
+                                <p className="text-sm font-bold text-white uppercase">
+                                  {booking.shared_play_enabled ? "Participants" : "Player Count"}
+                                </p>
                                 <p className="text-min-enhanced text-secondary-content">
-                                  {includedPlayers} included • Max {maxPlayers}
+                                  {booking.shared_play_enabled
+                                    ? `${activePlayers.length} currently playing • ${Math.max(0, displayPlayerCount - activePlayers.length)} sitting out`
+                                    : `${includedPlayers} included • Max ${maxPlayers}`}
                                 </p>
                               </div>
                               {canEdit ? (
@@ -551,12 +1427,12 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                                   </Button>
                                 </div>
                               ) : (
-                                <span className="text-lg font-black text-white">{currentPlayerCount}</span>
+                                <span className="text-lg font-black text-white">{displayPlayerCount}</span>
                               )}
                             </div>
 
                             {/* Extra Players Charge */}
-                            {extraPlayers > 0 && (
+                            {!booking.shared_play_enabled && extraPlayers > 0 && (
                               <div className="flex justify-between items-center pt-2 border-t border-[#27272a]/30">
                                 <div>
                                   <p className="text-sm font-bold text-primary">Extra Players</p>
@@ -578,6 +1454,443 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 </Card>
               )}
 
+              {booking.billed_on_actual_time === true && (supportsSharedPlay || booking.shared_play_enabled) &&
+                !isFiSimulator &&
+                booking.booking_device_slots?.length === 1 &&
+                (booking.status === "checked_in" || (booking.status === "completed" && booking.shared_play_enabled)) && (
+                <Card className="bg-[var(--background)] border-[#27272a] p-5 space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-black text-white uppercase tracking-wide">Play mode</h3>
+                      <p className="text-xs text-secondary-content mt-1">Choose Shared play to track each person’s time at the board.</p>
+                    </div>
+                    {booking.status === "checked_in" ? (
+                      <select
+                        aria-label="Play mode"
+                        value={booking.shared_play_enabled ? "shared" : "standard"}
+                        onChange={(event) => {
+                          if (event.target.value !== "shared") return;
+                          const initialRoster = sharedRoster.length > 0
+                            ? sharedRoster
+                            : [booking.customer_name || "Player 1"];
+                          const initialActive = activePlayers.length > 0
+                            ? activePlayers
+                            : initialRoster;
+                          setSharedRoster(initialRoster);
+                          setActivePlayers(initialActive);
+                          handleSaveSharedPlay(true, initialRoster, initialActive);
+                        }}
+                        className="h-10 rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm font-bold text-white"
+                      >
+                        <option value="standard">Standard play</option>
+                        {(supportsSharedPlay || booking.shared_play_enabled) && <option value="shared">Shared play</option>}
+                      </select>
+                    ) : (
+                      <span className="rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 py-2 text-sm font-bold text-white">Shared play</span>
+                    )}
+                  </div>
+
+                  {booking.shared_play_enabled && (
+                    <div className="space-y-3 border-t border-[#27272a] pt-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="min-w-0 flex-1 text-xs text-secondary-content">Select players, then choose Sit in or Sit out and set when the change happened.</p>
+                        {booking.status === "checked_in" && (
+                          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 pr-3">
+                            {selectedParticipants.length > 0 && (
+                              <span className="mr-1 text-xs text-secondary-content">
+                                {selectedParticipants.length} selected
+                              </span>
+                            )}
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={savingSharedPlay || selectedParticipants.length === 0}
+                              onClick={openSitInDialog}
+                              className="bg-emerald-600 text-white hover:bg-emerald-500"
+                            >
+                              <Play className="mr-1 h-3 w-3" /> Sit in
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={savingSharedPlay || selectedParticipants.length === 0}
+                              onClick={openSitOutDialog}
+                              className="border-zinc-700 text-secondary-content"
+                            >
+                              <Pause className="mr-1 h-3 w-3" /> Sit out
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={savingSharedPlay || activePlayers.length === 0}
+                              onClick={openSitOutAllDialog}
+                              className="border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                            >
+                              <Pause className="mr-1 h-3 w-3" /> Sit out all
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-xs font-bold text-primary">
+                        Currently playing: {activePlayers.length} / {sharedRoster.length} participants · Board rate ₹{(Number(deviceSlot?.hourly_rate || 0) + Math.max(0, activePlayers.length - Number(deviceSlot?.included_players || 1)) * Number(deviceSlot?.extra_player_charge || 0)).toLocaleString("en-IN")}/hour
+                      </p>
+                      {activePlayers.length === 0 && booking.status === "checked_in" && (
+                        <p className="text-xs font-semibold text-amber-300">Everyone is sitting out. Player timers are paused until someone sits in.</p>
+                      )}
+                      {booking.status === "checked_in" && (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1 && (
+                        <p className="text-xs font-semibold text-secondary-content">Check out each person beside their name, or use Checkout All to review everyone’s play and assigned food together.</p>
+                      )}
+                      <div className="space-y-2">
+                        {sharedRoster.map((name) => {
+                          const participant: SharedPlayParticipant | undefined = booking.shared_play_participants?.find(
+                            (row: SharedPlayParticipant) => row.name.toLowerCase() === name.toLowerCase()
+                          );
+                          const isActive = activePlayers.some((active) => active.toLowerCase() === name.toLowerCase());
+                          const isBookedPlayer = name.trim().toLowerCase() === (booking.customer_name || "Player 1").trim().toLowerCase();
+                          const playedMinutes = Math.floor(
+                            (participant?.shared_play_periods || []).reduce((total: number, period) => {
+                              const startedAt = new Date(period.started_at).getTime();
+                              const endedAt = period.ended_at ? new Date(period.ended_at).getTime() : sharedPlayNow.getTime();
+                              return total + Math.max(0, endedAt - startedAt);
+                            }, 0) / 60_000
+                          );
+                          return (
+                            <div key={name} className="flex items-center justify-between gap-3 rounded-md border border-[#27272a] bg-[var(--surface)] px-3 py-2">
+                              <div className="flex min-w-0 items-center gap-3">
+                                {booking.status === "checked_in" && !participant?.checked_out_at && (
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`Select ${name}`}
+                                    checked={selectedParticipants.some((selected) => selected.toLowerCase() === name.toLowerCase())}
+                                    disabled={savingSharedPlay}
+                                    onChange={(event) => setSelectedParticipants((current) =>
+                                      event.target.checked
+                                        ? [...current, name]
+                                        : current.filter((selected) => selected.toLowerCase() !== name.toLowerCase())
+                                    )}
+                                    className="h-4 w-4 shrink-0 accent-emerald-500"
+                                  />
+                                )}
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="truncate text-sm font-semibold text-white">{name}</span>
+                                    {isBookedPlayer && <span className="shrink-0 text-[10px] font-bold uppercase text-primary">Booked</span>}
+                                  </div>
+                                  <span className="text-[11px] text-secondary-content">{playedMinutes} min played</span>
+                                  {participant?.customer_id && (
+                                    <span className="block text-[11px] font-semibold text-emerald-300">
+                                      Customer: {participant.customer?.name || "Linked profile"}
+                                      {participant.customer?.phone ? ` · ${participant.customer.phone}` : ""}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-3">
+                                <span className="text-xs font-bold text-primary">
+                                  ₹{Number(
+                                    booking.status === "completed"
+                                      ? participant?.billed_amount
+                                      : participant
+                                        ? sharedParticipantShares.get(participant.id) || 0
+                                        : 0
+                                  ).toFixed(2)}
+                                </span>
+                              {booking.status === "checked_in" && (
+                                <span className={participant?.checked_out_at
+                                  ? "min-w-16 rounded border border-amber-500/40 px-2 py-1 text-center text-xs font-bold text-amber-300"
+                                  : isActive
+                                    ? "min-w-16 rounded border border-emerald-500/40 px-2 py-1 text-center text-xs font-bold text-emerald-300"
+                                    : "min-w-16 rounded border border-zinc-700 px-2 py-1 text-center text-xs font-bold text-secondary-content"}>
+                                  {participant?.checked_out_at ? "Checked out" : isActive ? "Playing" : "Sit out"}
+                                </span>
+                              )}
+                              {booking.status === "checked_in" && participant?.id && !participant?.checked_out_at && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={participantCheckoutLoading}
+                                  onClick={() => void handleOpenParticipantCheckout(participant.id)}
+                                  className="h-8 shrink-0 border-amber-500/50 px-2 text-xs text-amber-300 hover:bg-amber-500/10"
+                                >
+                                  {participantCheckoutLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="mr-1 h-3 w-3" />}
+                                  Check out
+                                </Button>
+                              )}
+                              </div>
+                              {booking.status === "checked_in" && !participant?.customer_id && participant?.id && !participant?.checked_out_at && (
+                                <div className="flex w-full flex-wrap items-center gap-2 pl-7 pt-1">
+                                  <Select
+                                    value={participantCustomerDrafts[participant.id] || ""}
+                                    onValueChange={(customerId) => setParticipantCustomerDrafts((current) => ({
+                                      ...current,
+                                      [participant.id]: customerId,
+                                    }))}
+                                  >
+                                    <SelectTrigger
+                                      aria-label={`Select customer account for ${name}`}
+                                      disabled={loadingSharedPlayCustomers || sharedPlayCustomers.length === 0}
+                                      className="h-8 min-w-0 flex-1 border-[#3f3f46] bg-[var(--background)] text-xs text-white"
+                                    >
+                                      <SelectValue placeholder={
+                                        loadingSharedPlayCustomers
+                                          ? "Loading customer accounts..."
+                                          : "Select customer account for wallet"
+                                      } />
+                                    </SelectTrigger>
+                                    <SelectContent className="border-[#3f3f46] bg-[var(--surface)] text-white">
+                                      {sharedPlayCustomers.filter((customer) => !booking.shared_play_participants?.some(
+                                        (row: SharedPlayParticipant) => row.id !== participant.id && row.customer_id === customer.id
+                                      )).map((customer) => (
+                                        <SelectItem key={customer.id} value={customer.id}>
+                                          {customer.name} · {customer.phone}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={loadingSharedPlayCustomers || linkingParticipantCustomer === participant.id || !participantCustomerDrafts[participant.id]}
+                                    onClick={() => void handleLinkParticipantCustomer(participant.id, name)}
+                                    className="h-8 shrink-0 border-primary/40 px-2 text-xs text-primary"
+                                  >
+                                    {linkingParticipantCustomer === participant.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Link account"}
+                                  </Button>
+                                  {!loadingSharedPlayCustomers && sharedPlayCustomers.length === 0 && (
+                                    <p className="w-full text-[11px] text-secondary-content">No customer accounts are available.</p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <details className="group rounded-md border border-[#27272a] bg-[var(--surface)]">
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-white [&::-webkit-details-marker]:hidden">
+                          <span>Play sessions</span>
+                          <span className="flex items-center gap-2 text-xs font-medium text-secondary-content">
+                            {sharedPlaySessions.length} interval{sharedPlaySessions.length === 1 ? "" : "s"}
+                            <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                          </span>
+                        </summary>
+                        <div className="space-y-2 border-t border-[#27272a] p-3">
+                          {sharedPlaySessions.length === 0 ? (
+                            <p className="text-xs text-secondary-content">No play sessions recorded yet.</p>
+                          ) : (
+                            sharedPlaySessions.map((session, index) => {
+                              const names = session.participantIds.map((participantId) =>
+                                booking.shared_play_participants?.find((participant: any) => participant.id === participantId)?.name || "Unknown player"
+                              );
+                              const durationMinutes = Math.floor((session.endedAt - session.startedAt) / 60_000);
+                              const sessionAmount = sharedPlayCalculation?.sessions[index]?.amount;
+                              return (
+                                <div
+                                  key={`${session.startedAt}-${session.endedAt}-${index}`}
+                                  className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded border border-[#27272a] px-3 py-2"
+                                >
+                                  <div>
+                                    <p className="text-sm font-semibold text-white">{names.join(" + ")}</p>
+                                    <p className="text-xs text-secondary-content">
+                                      {formatClockTime12h(session.startedAt)} – {formatClockTime12h(session.endedAt)}
+                                    </p>
+                                  </div>
+                                  <div className="flex shrink-0 flex-col items-end gap-0.5">
+                                    {typeof sessionAmount === "number" && (
+                                      <span className="text-xs font-bold text-primary">
+                                        ₹{sessionAmount.toFixed(2)}
+                                      </span>
+                                    )}
+                                    <span className="text-xs font-medium text-secondary-content">
+                                      {formatPlayedDuration(durationMinutes)}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </details>
+                      {booking.status === "checked_in" && (
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <Popover
+                            open={customerPickerOpen}
+                            onOpenChange={(open) => {
+                              setCustomerPickerOpen(open);
+                              if (!open) setCustomerSearchQuery("");
+                            }}
+                          >
+                            <PopoverTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                disabled={loadingSharedPlayCustomers}
+                                aria-label="Search customers to add as a player"
+                                className="min-w-0 flex-1 justify-between border-[#3f3f46] bg-[var(--surface)] text-left text-white"
+                              >
+                                <span className="truncate">
+                                  {loadingSharedPlayCustomers
+                                    ? "Loading customer profiles..."
+                                    : sharedPlayCustomers.find((customer) => customer.id === newParticipantCustomerId)?.name ||
+                                      "Search customer by name"}
+                                </span>
+                                <Search className="ml-2 h-4 w-4 shrink-0 text-secondary-content" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent
+                              align="start"
+                              className="w-[min(22rem,calc(100vw-2rem))] border-[#3f3f46] bg-[var(--surface)] p-2 text-white"
+                            >
+                              <div className="relative">
+                                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-secondary-content" />
+                                <Input
+                                  autoFocus
+                                  value={customerSearchQuery}
+                                  onChange={(event) => setCustomerSearchQuery(event.target.value)}
+                                  placeholder="Search name or phone..."
+                                  aria-label="Search customer name or phone"
+                                  className="h-9 border-[#3f3f46] bg-[var(--background)] pl-9 text-white"
+                                />
+                              </div>
+                              <div
+                                className="mt-2 max-h-[40vh] min-h-0 overflow-y-scroll overscroll-contain touch-pan-y"
+                                onWheel={(event) => event.stopPropagation()}
+                                onTouchMove={(event) => event.stopPropagation()}
+                              >
+                                {sharedPlayCustomers
+                                  .filter((customer) => !booking.shared_play_participants?.some(
+                                    (participant: SharedPlayParticipant) => participant.customer_id === customer.id
+                                  ))
+                                  .filter((customer) => {
+                                    const query = customerSearchQuery.trim().toLowerCase();
+                                    return !query ||
+                                      customer.name.toLowerCase().includes(query) ||
+                                      customer.phone.toLowerCase().includes(query) ||
+                                      customer.email?.toLowerCase().includes(query);
+                                  })
+                                  .map((customer) => (
+                                    <button
+                                      key={customer.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setNewParticipantCustomerId(customer.id);
+                                        setCustomerPickerOpen(false);
+                                        setCustomerSearchQuery("");
+                                      }}
+                                      className="flex w-full flex-col rounded px-3 py-2 text-left hover:bg-zinc-800"
+                                    >
+                                      <span className="text-sm font-semibold text-white">{customer.name}</span>
+                                      <span className="text-xs text-secondary-content">
+                                        {customer.phone}{customer.email ? ` · ${customer.email}` : ""}
+                                      </span>
+                                    </button>
+                                  ))}
+                                {!loadingSharedPlayCustomers && sharedPlayCustomers.filter((customer) => {
+                                  const query = customerSearchQuery.trim().toLowerCase();
+                                  return !booking.shared_play_participants?.some(
+                                    (participant: SharedPlayParticipant) => participant.customer_id === customer.id
+                                  ) &&
+                                    (!query || customer.name.toLowerCase().includes(query) ||
+                                      customer.phone.toLowerCase().includes(query) ||
+                                      customer.email?.toLowerCase().includes(query));
+                                }).length === 0 && (
+                                  <p className="px-3 py-4 text-center text-xs text-secondary-content">
+                                    No matching unlinked customers. Use + to create a profile.
+                                  </p>
+                                )}
+                              </div>
+                            </PopoverContent>
+                          </Popover>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            aria-label="Add selected customer as player"
+                            title="Add selected customer as player"
+                            disabled={!newParticipantCustomerId || savingSharedPlay || loadingSharedPlayCustomers}
+                            onClick={() => void handleAddSharedParticipant()}
+                            className="border-[#3f3f46] text-white"
+                          >
+                            {savingSharedPlay ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
+                          </Button>
+                          <Dialog open={addPlayerCustomerOpen} onOpenChange={(open) => !creatingPlayerCustomer && setAddPlayerCustomerOpen(open)}>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              aria-label="Create customer and add as player"
+                              title="Create customer and add as player"
+                              onClick={() => setAddPlayerCustomerOpen(true)}
+                              className="border-primary/40 text-primary"
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                            <DialogContent className="max-w-md border-[#27272a] bg-[var(--background)] text-white">
+                              <DialogHeader>
+                                <DialogTitle className="text-lg font-black uppercase">Add Player Customer</DialogTitle>
+                              </DialogHeader>
+                              <form onSubmit={handleCreatePlayerCustomer} className="space-y-4">
+                                <div className="space-y-2">
+                                  <Label htmlFor="shared-player-customer-name">Name</Label>
+                                  <Input
+                                    id="shared-player-customer-name"
+                                    name="name"
+                                    maxLength={100}
+                                    required
+                                    className="border-[#3f3f46] bg-[var(--surface)] text-white"
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor="shared-player-customer-phone">Mobile number</Label>
+                                  <Input
+                                    id="shared-player-customer-phone"
+                                    name="phone"
+                                    type="tel"
+                                    inputMode="numeric"
+                                    maxLength={15}
+                                    required
+                                    className="border-[#3f3f46] bg-[var(--surface)] text-white"
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor="shared-player-customer-email">Email (optional)</Label>
+                                  <Input
+                                    id="shared-player-customer-email"
+                                    name="email"
+                                    type="email"
+                                    maxLength={100}
+                                    className="border-[#3f3f46] bg-[var(--surface)] text-white"
+                                  />
+                                </div>
+                                <div className="flex justify-end">
+                                  <Button type="submit" disabled={creatingPlayerCustomer || savingSharedPlay}>
+                                    {creatingPlayerCustomer
+                                      ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      : <UserPlus className="mr-2 h-4 w-4" />}
+                                    Create & Add Player
+                                  </Button>
+                                </div>
+                              </form>
+                            </DialogContent>
+                          </Dialog>
+                        </div>
+                      )}
+                      {booking.status === "checked_in" && (
+                        <p className="text-right text-[11px] text-muted-content">Live split estimate, updates every 10 seconds</p>
+                      )}
+                      {booking.status === "completed" && (
+                        <div className="rounded-md bg-[var(--surface)] px-3 py-2 text-xs text-secondary-content">
+                          Board rate is split by time. Each active player above {Number(deviceSlot?.included_players || 1)} included adds ₹{Number(deviceSlot?.extra_player_charge || 0)}/hour.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </Card>
+              )}
+
               {/* Food Items */}
               <Card className="bg-[var(--background)] border-[#27272a] p-5 space-y-4">
                 <div className="flex justify-between items-center border-b border-[#27272a] pb-3 mb-2">
@@ -585,9 +1898,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                     <UtensilsCrossed className="h-5 w-5 text-primary" />
                     Food & Beverage Orders
                   </h3>
-                  {booking.status !== "cancelled" && booking.status !== "completed" && (
+                  {canEditBilling && (
                     <Button
-                      onClick={() => setAddFoodModalOpen(true)}
+                      onClick={openFoodPicker}
                       size="sm"
                       className="bg-primary hover:bg-primary-hover text-black font-black uppercase text-xs h-9 px-4"
                     >
@@ -602,7 +1915,47 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       <div key={item.id} className="flex justify-between items-center p-4 bg-[var(--surface)] border border-[#27272a] rounded-lg hover:border-primary/30 transition-colors">
                         <div className="flex-1">
                           <p className="text-lg font-bold text-white mb-1">{item.item_name}</p>
-                          <p className="text-sm-enhanced text-secondary-content">Qty: <span className="font-bold">{item.quantity}</span> × ₹{Number(item.unit_price).toLocaleString('en-IN')}</p>
+                          <div className="flex items-center gap-2 text-sm-enhanced text-secondary-content">
+                            {item.removable && canEditBilling ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleDecreaseFoodItem(item)}
+                                  disabled={Boolean(updatingFoodItemId) || Number(item.quantity) <= 1}
+                                  className="h-7 w-7 p-0 text-secondary-content hover:text-white hover:bg-white/10 disabled:opacity-40"
+                                  title={Number(item.quantity) <= 1 ? "Minimum quantity is 1" : `Decrease ${item.item_name} quantity`}
+                                  aria-label={`Decrease ${item.item_name} quantity`}
+                                >
+                                  {updatingFoodItemId === item.id
+                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    : <Minus className="h-3.5 w-3.5" />}
+                                </Button>
+                                <span className="min-w-4 text-center font-bold text-white">{item.quantity}</span>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleIncreaseFoodItem(item)}
+                                  disabled={Boolean(updatingFoodItemId) || !item.menu_item_id}
+                                  className="h-7 w-7 p-0 text-primary hover:text-primary hover:bg-primary/10"
+                                  title={`Increase ${item.item_name} quantity`}
+                                  aria-label={`Increase ${item.item_name} quantity`}
+                                >
+                                  {updatingFoodItemId === item.id
+                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    : <Plus className="h-3.5 w-3.5" />}
+                                </Button>
+                              </>
+                            ) : (
+                              <span>Qty: <span className="font-bold">{item.quantity}</span></span>
+                            )}
+                            <span>× ₹{Number(item.unit_price).toLocaleString('en-IN')}</span>
+                          </div>
+                          {item.participant_id && booking.shared_play_enabled && (
+                            <p className="mt-1 text-xs font-semibold text-primary">
+                              For {booking.shared_play_participants?.find((participant: any) => participant.id === item.participant_id)?.name || "participant"}
+                            </p>
+                          )}
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="text-right">
@@ -610,16 +1963,19 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                             <p className="text-min text-muted-content uppercase mt-1">{item.status}</p>
                           </div>
                           {/* Only unpaid food an admin added can be taken back off */}
-                          {item.removable && booking.status !== "cancelled" && booking.status !== "completed" && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => setFoodItemToRemove(item)}
-                              className="h-9 w-9 p-0 text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                              title={`Remove ${item.item_name}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                          {item.removable && canEditBilling && (
+                            <div>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setFoodItemToRemove(item)}
+                                disabled={Boolean(updatingFoodItemId)}
+                                className="h-9 w-9 p-0 text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                                title={`Remove ${item.item_name}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -654,24 +2010,53 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                      * up to the total underneath them. Multi-slot bookings were
                      * worse: one slot priced, all of them counted in the subtotal.
                      */
-                    const deviceCharges = slots.reduce(
+                    const isLiveSharedSession =
+                      booking.shared_play_enabled === true &&
+                      booking.billed_on_actual_time === true &&
+                      booking.status === "checked_in";
+                    const isLiveStandardSession =
+                      standardLivePricing !== null &&
+                      booking.billed_on_actual_time === true &&
+                      booking.status === "checked_in" &&
+                      booking.shared_play_enabled !== true;
+                    const isLiveActualSession = isLiveSharedSession || isLiveStandardSession;
+                    const liveSharedTotal = isLiveSharedSession
+                      ? (sharedPlayCalculation?.deviceCharges || 0) + (sharedPlayCalculation?.extraPlayersTotal || 0)
+                      : 0;
+                    const liveSharedExtraPlayersTotal = isLiveSharedSession
+                      ? sharedPlayCalculation?.extraPlayersTotal || 0
+                      : 0;
+                    const deviceCharges = isLiveSharedSession
+                      ? sharedPlayCalculation?.deviceCharges || 0
+                      : isLiveStandardSession
+                        ? standardLivePricing.deviceCharges
+                      : slots.reduce(
                       (sum: number, slot: any) => sum + (Number(slot.slot_total) || 0),
                       0
                     );
 
-                    const extraPlayersTotal = slots.reduce(
+                    const extraPlayersTotal = isLiveSharedSession
+                      ? liveSharedExtraPlayersTotal
+                      : isLiveStandardSession
+                        ? standardLivePricing.extraPlayersTotal
+                      : slots.reduce(
                       (sum: number, slot: any) => sum + (Number(slot.extra_players_total) || 0),
                       0
                     );
 
-                    // Calculate subtotal
-                    const calculatedSubtotal = Number(booking.device_subtotal) + Number(booking.food_subtotal);
+                    const liveDeviceSubtotal = isLiveSharedSession
+                      ? liveSharedTotal
+                      : isLiveStandardSession
+                        ? standardLivePricing.deviceSubtotal
+                      : Number(booking.device_subtotal);
+                    const calculatedSubtotal = liveDeviceSubtotal + Number(booking.food_subtotal);
 
                     // Calculate total (subtract all discounts)
                     const calculatedTotal = calculatedSubtotal -
                       Number(booking.subscription_discount || 0) -
                       Number(booking.promo_discount || 0) -
-                      Number(booking.happy_hour_discount || 0);
+                      Number(booking.happy_hour_discount || 0) -
+                      Number(booking.hour_pass_discount || 0);
 
                     return (
                       <>
@@ -746,8 +2131,17 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                           </div>
                         )}
 
+                        {booking.hour_pass_discount > 0 && (
+                          <div className="flex items-center justify-between py-2 border-b border-zinc-800 text-cyan-400">
+                            <span className="font-medium">Personal Hour Pack:</span>
+                            <span className="font-bold">-₹{Number(booking.hour_pass_discount).toFixed(2)}</span>
+                          </div>
+                        )}
+
                         <div className="flex items-center justify-between pt-5 border-t-2 border-primary/20">
-                          <span className="text-white font-black text-xl uppercase">Total Amount:</span>
+                          <span className="text-white font-black text-xl uppercase">
+                            {isLiveActualSession ? "Live Total (estimate):" : "Total Amount:"}
+                          </span>
                           <span className="text-3xl font-black bg-gradient-to-r from-primary via-amber-300 to-primary bg-clip-text text-transparent">
                             ₹{calculatedTotal.toFixed(2)}
                           </span>
@@ -816,14 +2210,21 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                         )}
 
                         {/* Balance Due Warning */}
-                        {Number(booking.balance_due || 0) > 0 && booking.payment_status !== 'paid' && (
+                        {liveSessionBalanceDue > 0 && (isLiveActualSession || booking.payment_status !== 'paid') && (
                           <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-2">
                             <div className="flex items-center justify-between">
-                              <span className="text-amber-400 font-bold text-sm uppercase">Balance Due:</span>
+                              <span className="text-amber-400 font-bold text-sm uppercase">
+                                {isLiveActualSession ? "Total Balance Due (Estimate):" : "Balance Due:"}
+                              </span>
                               <span className="text-amber-300 font-black text-lg">
-                                ₹{Number(booking.balance_due).toLocaleString('en-IN')}
+                                ₹{liveSessionBalanceDue.toLocaleString('en-IN')}
                               </span>
                             </div>
+                            {isLiveActualSession && (
+                              <p className="border-t border-amber-500/20 pt-2 text-xs text-amber-200/80">
+                                Includes current play charges and food, less payments already recorded. The estimate updates while the session is active.
+                              </p>
+                            )}
                             {booking.payment_status === 'partial' && booking.unpaid_items && booking.unpaid_items.length > 0 && (
                               <div className="border-t border-amber-500/20 pt-2 space-y-1">
                                 <p className="text-xs text-amber-300/80 font-bold uppercase">
@@ -860,6 +2261,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   completedAt={booking.completed_at}
                   plannedEndAt={booking.walk_in_planned_end}
                   totalAmount={booking.total_amount}
+                  sharedPlayEnabled={booking.shared_play_enabled}
+                  sharedPlayParticipants={booking.shared_play_participants || []}
                 />
               )}
 
@@ -975,14 +2378,18 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   </Button>
                 )}
 
-                {isSession && booking.status === "checked_in" && (
+                {isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).some((participant: any) => !participant.checked_out_at)) && (
                   <Button
                     onClick={handleSessionCheckOut}
                     disabled={actionLoading}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-sm h-12 px-8 flex items-center gap-2"
                   >
                     {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
-                    Check Out &amp; Calculate Bill
+                    {booking.shared_play_enabled
+                      ? (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1
+                        ? "Checkout All Participants"
+                        : "Check Out & Calculate Individual Bill"
+                      : "Check Out & Calculate Bill"}
                   </Button>
                 )}
 
@@ -997,14 +2404,16 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   </Button>
                 )}
 
-                {!isSession && booking.status === "checked_in" && (
+                {!isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).some((participant: any) => !participant.checked_out_at)) && (
                   <Button
                     onClick={handleCheckOut}
-                    disabled={actionLoading || (Number(booking.balance_due || 0) > 0 && booking.payment_status !== 'paid')}
+                    disabled={actionLoading || (!booking.shared_play_enabled && Number(booking.balance_due || 0) > 0 && booking.payment_status !== 'paid')}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-sm h-12 px-8 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
-                    Check Out Customer
+                    {booking.shared_play_enabled && (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1
+                      ? "Checkout All Participants"
+                      : "Check Out Customer"}
                   </Button>
                 )}
 
@@ -1085,6 +2494,26 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
               Add Food & Beverages
             </DialogTitle>
           </DialogHeader>
+
+          {booking?.shared_play_enabled && (
+            <div className="px-6 pb-4">
+              <Label htmlFor="shared-food-participant" className="mb-2 block text-xs font-bold uppercase text-secondary-content">
+                Assign food to participant
+              </Label>
+              <select
+                id="shared-food-participant"
+                value={foodParticipantId}
+                onChange={(event) => setFoodParticipantId(event.target.value)}
+                className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white"
+              >
+                <option value="">Select participant</option>
+                {(booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).map((participant: any) => (
+                  <option key={participant.id} value={participant.id}>{participant.name}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-secondary-content">The food cost will be added to this participant’s checkout.</p>
+            </div>
+          )}
 
           {/* Search and Filter Controls */}
           <div className="space-y-3 px-6 pb-4 border-b border-[#27272a] flex-shrink-0">
@@ -1221,6 +2650,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
               onClick={() => {
                 setAddFoodModalOpen(false);
                 setSelectedFoodItems({});
+                setFoodParticipantId("");
                 setFoodSearchQuery("");
                 setSelectedCategory("All");
                 if (openFoodModalDirectly) {
@@ -1233,7 +2663,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
             </Button>
             <Button
               onClick={handleAddFoodItems}
-              disabled={actionLoading || Object.values(selectedFoodItems).every((qty) => qty === 0)}
+              disabled={actionLoading || Object.values(selectedFoodItems).every((qty) => qty === 0) || (booking?.shared_play_enabled && !foodParticipantId)}
               className="bg-primary hover:bg-primary-hover text-black font-black uppercase"
             >
               {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
@@ -1242,6 +2672,33 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteBookingOpen} onOpenChange={(open) => !deletingBooking && setDeleteBookingOpen(open)}>
+        <AlertDialogContent className="border-[#27272a] bg-[var(--surface)] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-xl font-bold">Delete booking permanently?</AlertDialogTitle>
+            <AlertDialogDescription className="text-muted-content">
+              Booking {booking?.booking_number} and its booking details will be permanently deleted. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingBooking} className="border-zinc-700 bg-[#27272a] text-white hover:bg-zinc-800">
+              Keep booking
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void handleDeleteBooking();
+              }}
+              disabled={deletingBooking}
+              className="inline-flex items-center justify-center gap-2 whitespace-nowrap bg-red-600 font-semibold text-white hover:bg-red-700"
+            >
+              {deletingBooking && <Loader2 className="h-4 w-4 animate-spin" />}
+              Delete Booking
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Remove Food Item Confirmation Dialog */}
       <AlertDialog
@@ -1297,6 +2754,300 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         }
         onConfirm={confirmSessionCheckOut}
       />
+
+      <Dialog open={sitInDialogOpen} onOpenChange={setSitInDialogOpen}>
+        <DialogContent className="max-w-sm border-[#27272a] bg-[var(--surface)] text-white">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase">Sit-in time</DialogTitle>
+            <DialogDescription className="text-secondary-content">
+              Set when the selected participant{selectedParticipants.length === 1 ? " sat in" : "s sat in"}. The current time is filled in; adjust it if you are recording an earlier start.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-xs font-bold uppercase text-secondary-content">Time</Label>
+            <TimeOfDayField
+              name="shared-play-sit-in-time"
+              label="Sit-in time"
+              defaultValue={sitInClockDraft}
+              onChange={setSitInClockDraft}
+            />
+            <p className="text-xs text-secondary-content">You can enter a time up to {MAX_BACKDATED_START_HOURS} hours ago.</p>
+          </div>
+          <DialogFooter className="flex-row gap-2">
+            <Button type="button" variant="ghost" onClick={() => setSitInDialogOpen(false)} disabled={savingSharedPlay}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={confirmSitIn} disabled={savingSharedPlay || !sitInClockDraft} className="bg-emerald-600 text-white hover:bg-emerald-500">
+              {savingSharedPlay ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
+              Start timer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={sitOutDialogOpen} onOpenChange={setSitOutDialogOpen}>
+        <DialogContent className="max-w-sm border-[#27272a] bg-[var(--surface)] text-white">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase">Sit-out time</DialogTitle>
+            <DialogDescription className="text-secondary-content">
+              Set when the selected participant{selectedParticipants.length === 1 ? " stopped playing" : "s stopped playing"}. The current time is filled in; adjust it if they sat out earlier.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-xs font-bold uppercase text-secondary-content">Time</Label>
+            <TimeOfDayField
+              name="shared-play-sit-out-time"
+              label="Sit-out time"
+              defaultValue={sitOutClockDraft}
+              onChange={setSitOutClockDraft}
+            />
+            <p className="text-xs text-secondary-content">You can enter a time up to {MAX_BACKDATED_START_HOURS} hours ago.</p>
+          </div>
+          <DialogFooter className="flex-row gap-2">
+            <Button type="button" variant="ghost" onClick={() => setSitOutDialogOpen(false)} disabled={savingSharedPlay}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={confirmSitOut} disabled={savingSharedPlay || !sitOutClockDraft} className="border-zinc-700 text-white" variant="outline">
+              {savingSharedPlay ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pause className="mr-2 h-4 w-4" />}
+              Save sit-out time
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={Boolean(participantToSitOutBeforeCheckout)}
+        onOpenChange={(open) => {
+          if (!open && !participantCheckoutLoading) setParticipantToSitOutBeforeCheckout(null);
+        }}
+      >
+        <AlertDialogContent className="border-[#27272a] bg-[var(--surface)] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-lg font-black">Sit out before checkout?</AlertDialogTitle>
+            <AlertDialogDescription className="text-secondary-content">
+              {participantToSitOutBeforeCheckout?.name} is still playing. Sit them out now and continue to checkout? Their timer will stop at the current time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={participantCheckoutLoading} className="border-[#3f3f46] bg-transparent text-white hover:bg-white/5">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={participantCheckoutLoading}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleSitOutAndContinueCheckout();
+              }}
+              className="bg-primary font-black text-black hover:bg-primary-hover"
+            >
+              {participantCheckoutLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Sit out & continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={participantsToSitOutBeforeCheckoutAll.length > 0}
+        onOpenChange={(open) => {
+          if (!open && !participantCheckoutLoading) setParticipantsToSitOutBeforeCheckoutAll([]);
+        }}
+      >
+        <AlertDialogContent className="border-[#27272a] bg-[var(--surface)] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-lg font-black">Sit out before checkout all?</AlertDialogTitle>
+            <AlertDialogDescription className="text-secondary-content">
+              {participantsToSitOutBeforeCheckoutAll.length} player{participantsToSitOutBeforeCheckoutAll.length === 1 ? " is" : "s are"} still playing. Sit them out now and continue to the group checkout? Their timers will stop at the current time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={participantCheckoutLoading} className="border-[#3f3f46] bg-transparent text-white hover:bg-white/5">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={participantCheckoutLoading}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleSitOutAllAndContinueCheckout();
+              }}
+              className="bg-primary font-black text-black hover:bg-primary-hover"
+            >
+              {participantCheckoutLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Sit out all & continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={checkoutAllOpen} onOpenChange={(open) => !open && setCheckoutAllOpen(false)}>
+        <DialogContent className="flex max-h-[90dvh] w-[calc(100%-2rem)] max-w-2xl flex-col overflow-hidden border-[#27272a] bg-[var(--surface)] text-white">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase">Checkout All Participants</DialogTitle>
+            <DialogDescription className="text-secondary-content">
+              Review each person’s play charge and assigned food together. The server settles everyone at the same checkout time.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          <div className="space-y-3">
+            {checkoutAllQuotes.map((quote: any) => {
+              const useWallet = checkoutAllWalletIds.includes(quote.participantId);
+              const walletUsed = useWallet ? Math.min(Number(quote.totalAmount), Number(quote.walletBalance)) : 0;
+              const remaining = Math.max(0, Number(quote.totalAmount) - walletUsed);
+              return (
+                <div key={quote.participantId} className="rounded-lg border border-[#27272a] bg-[var(--background)] p-4">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-white">{quote.participantName}</p>
+                      <p className="mt-1 text-xs text-secondary-content">Play charge · {quote.playedMinutes} min: ₹{Number(quote.deviceAmount).toFixed(2)}</p>
+                    </div>
+                    <span className="shrink-0 text-sm font-black text-primary">₹{Number(quote.totalAmount).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-secondary-content">
+                    <span>Assigned food</span><span>₹{Number(quote.foodAmount).toFixed(2)}</span>
+                  </div>
+                  {quote.foodItems.map((item: any) => (
+                    <div key={item.id} className="mt-1 flex justify-between gap-3 text-xs text-secondary-content">
+                      <span>{item.quantity} × {item.item_name}</span>
+                      <span>₹{Number(item.line_total).toFixed(2)}</span>
+                    </div>
+                  ))}
+                  <label className="mt-3 flex w-full min-w-0 cursor-pointer flex-wrap items-start gap-x-2 gap-y-1 border-t border-[#27272a] pt-3">
+                    <input
+                      type="checkbox"
+                      checked={useWallet}
+                      disabled={!quote.customerId || Number(quote.walletBalance) <= 0 || participantCheckoutLoading}
+                      onChange={(event) => {
+                        const nextWalletIds = event.target.checked
+                          ? [...checkoutAllWalletIds, quote.participantId]
+                          : checkoutAllWalletIds.filter((id) => id !== quote.participantId);
+                        setCheckoutAllWalletIds(nextWalletIds);
+                        const nextDue = checkoutAllQuotes.reduce((sum, row) => {
+                          const wallet = nextWalletIds.includes(row.participantId)
+                            ? Math.min(Number(row.totalAmount || 0), Number(row.walletBalance || 0))
+                            : 0;
+                          return sum + Math.max(0, Number(row.totalAmount || 0) - wallet);
+                        }, 0);
+                        setCheckoutAllUpiAmount(Math.max(0, nextDue - Number(checkoutAllCashAmount || 0) - Number(checkoutAllCardAmount || 0)).toFixed(2));
+                      }}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500"
+                    />
+                    <span className="min-w-0 flex-1 break-words text-xs text-secondary-content">
+                      Use {quote.participantName}’s wallet · available ₹{Number(quote.walletBalance).toFixed(2)}
+                      <span className="ml-2 font-semibold text-white">Due after wallet ₹{remaining.toFixed(2)}</span>
+                    </span>
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+
+          {(() => {
+            const total = checkoutAllQuotes.reduce((sum, quote) => sum + Number(quote.totalAmount || 0), 0);
+            const walletTotal = checkoutAllQuotes.reduce((sum, quote) => checkoutAllWalletIds.includes(quote.participantId)
+              ? sum + Math.min(Number(quote.totalAmount || 0), Number(quote.walletBalance || 0))
+              : sum, 0);
+            const remaining = Math.max(0, total - walletTotal);
+            return (
+              <div className="space-y-3 rounded-lg border border-primary/30 bg-[var(--background)] p-4">
+                <div className="flex justify-between text-base font-black">
+                  <span>Total for everyone (play + food)</span><span className="text-primary">₹{total.toFixed(2)}</span>
+                </div>
+                {walletTotal > 0 && <div className="flex justify-between text-xs text-emerald-300"><span>Wallet credits</span><span>−₹{walletTotal.toFixed(2)}</span></div>}
+                <div className="flex justify-between border-t border-[#27272a] pt-3 text-sm font-bold">
+                  <span>Collect now</span><span>₹{remaining.toFixed(2)}</span>
+                </div>
+                {remaining > 0 && (
+                  <div>
+                    <p className="mb-2 text-xs font-bold uppercase text-secondary-content">Split everyone&apos;s remaining amount</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div><Label htmlFor="checkout-all-cash" className="mb-1 block text-xs text-secondary-content">Cash (INR)</Label><input id="checkout-all-cash" type="number" min="0" step="0.01" disabled={participantCheckoutLoading} value={checkoutAllCashAmount} onChange={(event) => setCheckoutAllCashAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm text-white" /></div>
+                      <div><Label htmlFor="checkout-all-upi" className="mb-1 block text-xs text-secondary-content">UPI (INR)</Label><input id="checkout-all-upi" type="number" min="0" step="0.01" disabled={participantCheckoutLoading} value={checkoutAllUpiAmount} onChange={(event) => setCheckoutAllUpiAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm text-white" /></div>
+                      <div><Label htmlFor="checkout-all-card" className="mb-1 block text-xs text-secondary-content">Card (INR)</Label><input id="checkout-all-card" type="number" min="0" step="0.01" disabled={participantCheckoutLoading} value={checkoutAllCardAmount} onChange={(event) => setCheckoutAllCardAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm text-white" /></div>
+                    </div>
+                    <p className="mt-2 text-xs text-secondary-content">Entered INR {checkoutAllSplitTotal.toFixed(2)} of INR {remaining.toFixed(2)}{!checkoutAllSplitValid && "; amounts must match"}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          </div>
+
+          <div className="flex shrink-0 flex-col-reverse justify-end gap-2 border-t border-[#27272a] pt-3 sm:flex-row">
+            <Button variant="ghost" disabled={participantCheckoutLoading} onClick={() => setCheckoutAllOpen(false)}>Cancel</Button>
+            <Button disabled={participantCheckoutLoading || checkoutAllQuotes.length === 0 || !checkoutAllSplitValid} onClick={() => void handleConfirmCheckoutAll()} className="bg-primary font-black text-black hover:bg-primary-hover">
+              {participantCheckoutLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogOut className="mr-2 h-4 w-4" />}
+              Checkout everyone
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!participantCheckoutQuote} onOpenChange={(open) => !open && setParticipantCheckoutQuote(null)}>
+        <DialogContent className="max-w-md border-[#27272a] bg-[var(--surface)] text-white">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase">Check out {participantCheckoutQuote?.participantName}</DialogTitle>
+          </DialogHeader>
+          {participantCheckoutQuote && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-[#27272a] bg-[var(--background)] p-4 text-sm">
+                <div className="flex justify-between"><span className="text-secondary-content">Play charge ({participantCheckoutQuote.playedMinutes} min)</span><span>₹{Number(participantCheckoutQuote.deviceAmount).toFixed(2)}</span></div>
+                <div className="mt-2 flex justify-between"><span className="text-secondary-content">Assigned food</span><span>₹{Number(participantCheckoutQuote.foodAmount).toFixed(2)}</span></div>
+                {participantCheckoutQuote.foodItems.map((item: any) => (
+                  <p key={item.id} className="mt-1 text-xs text-secondary-content">{item.quantity} × {item.item_name}</p>
+                ))}
+                <div className="mt-3 flex justify-between border-t border-[#27272a] pt-3 font-black">
+                  <span>Total due</span><span className="text-primary">₹{Number(participantCheckoutQuote.totalAmount).toFixed(2)}</span>
+                </div>
+              </div>
+
+              <label className="flex w-full min-w-0 cursor-pointer items-start gap-3 rounded-lg border border-[#27272a] p-3">
+                <input
+                  type="checkbox"
+                  checked={participantCheckoutUseWallet}
+                  disabled={!participantCheckoutQuote.customerId || participantCheckoutQuote.walletBalance <= 0}
+                  onChange={(event) => {
+                    const useWallet = event.target.checked;
+                    setParticipantCheckoutUseWallet(useWallet);
+                    const due = Number(participantCheckoutQuote.totalAmount) - (useWallet
+                      ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
+                      : 0);
+                    setParticipantCheckoutUpiAmount(Math.max(0, due - Number(participantCheckoutCashAmount || 0) - Number(participantCheckoutCardAmount || 0)).toFixed(2));
+                  }}
+                  className="mt-1 h-4 w-4 shrink-0 accent-emerald-500"
+                />
+                <span className="min-w-0 flex-1 break-words">
+                  <span className="block text-sm font-bold">Use wallet credits</span>
+                  <span className="text-xs text-secondary-content">
+                    {participantCheckoutQuote.customerId
+                      ? `Available ₹${Number(participantCheckoutQuote.walletBalance).toFixed(2)}`
+                      : "Link this participant to a customer account to use wallet credits."}
+                  </span>
+                </span>
+              </label>
+
+              {participantExternalDue > 0 && (
+                <div className="space-y-3 rounded-lg border border-[#27272a] p-3">
+                  <p className="text-xs font-bold uppercase text-secondary-content">Split remaining payment</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><Label htmlFor="participant-cash-amount" className="mb-1 block text-xs text-secondary-content">Cash (INR)</Label><input id="participant-cash-amount" type="number" min="0" step="0.01" value={participantCheckoutCashAmount} onChange={(event) => setParticipantCheckoutCashAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white" /></div>
+                    <div><Label htmlFor="participant-upi-amount" className="mb-1 block text-xs text-secondary-content">UPI (INR)</Label><input id="participant-upi-amount" type="number" min="0" step="0.01" value={participantCheckoutUpiAmount} onChange={(event) => setParticipantCheckoutUpiAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white" /></div>
+                    <div><Label htmlFor="participant-card-amount" className="mb-1 block text-xs text-secondary-content">Card (INR)</Label><input id="participant-card-amount" type="number" min="0" step="0.01" value={participantCheckoutCardAmount} onChange={(event) => setParticipantCheckoutCardAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white" /></div>
+                  </div>
+                  <p className="text-xs text-secondary-content">Remaining INR {participantExternalDue.toFixed(2)}; entered INR {participantSplitTotal.toFixed(2)}{!participantSplitValid && "; amounts must match"}</p>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" disabled={participantCheckoutLoading} onClick={() => setParticipantCheckoutQuote(null)}>Cancel</Button>
+                <Button disabled={participantCheckoutLoading || !participantSplitValid} onClick={() => void handleConfirmParticipantCheckout()} className="bg-primary font-black text-black hover:bg-primary-hover">
+                  {participantCheckoutLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogOut className="mr-2 h-4 w-4" />}
+                  Confirm checkout
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

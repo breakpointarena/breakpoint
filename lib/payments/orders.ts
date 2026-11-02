@@ -1,6 +1,11 @@
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { createRazorpayOrder } from '@/lib/razorpay/client'
-import type { DeviceBookingQuote, FoodOrderQuote, SubscriptionQuote } from './quote'
+import type {
+  DeviceBookingQuote,
+  FoodOrderQuote,
+  SubscriptionQuote,
+  WalletTopUpQuote,
+} from './quote'
 
 /**
  * The `payment_orders` table is the bridge between "customer clicked Pay" and
@@ -8,8 +13,8 @@ import type { DeviceBookingQuote, FoodOrderQuote, SubscriptionQuote } from './qu
  * amount back from the database rather than trusting whatever the browser posts.
  */
 
-export type PaymentPurpose = 'device_booking' | 'food_order' | 'subscription'
-export type StoredQuote = DeviceBookingQuote | FoodOrderQuote | SubscriptionQuote
+export type PaymentPurpose = 'device_booking' | 'food_order' | 'subscription' | 'wallet_top_up'
+export type StoredQuote = DeviceBookingQuote | FoodOrderQuote | SubscriptionQuote | WalletTopUpQuote
 
 export interface PaymentOrderRow {
   id: string
@@ -22,6 +27,7 @@ export interface PaymentOrderRow {
   booking_id: string | null
   /** The membership a subscription order produced. Null on the booking flows. */
   subscription_id: string | null
+  wallet_transaction_id: string | null
   razorpay_payment_id: string | null
   paid_at: string | null
   fulfilling_at: string | null
@@ -37,7 +43,13 @@ export const FULFILMENT_LEASE_MS = 3 * 60 * 1000
 
 /** Razorpay caps receipts at 40 chars, so keep the random suffix short. */
 function buildReceipt(purpose: PaymentPurpose): string {
-  const prefix = purpose === 'device_booking' ? 'bk' : purpose === 'subscription' ? 'sb' : 'fd'
+  const prefix = purpose === 'device_booking'
+    ? 'bk'
+    : purpose === 'subscription'
+      ? 'sb'
+      : purpose === 'wallet_top_up'
+        ? 'wl'
+        : 'fd'
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
@@ -180,7 +192,7 @@ export async function claimStrandedOrder(
 
 export async function markOrderFulfilled(
   razorpayOrderId: string,
-  produced: { bookingId?: string; subscriptionId?: string }
+  produced: { bookingId?: string; subscriptionId?: string; walletTransactionId?: string }
 ): Promise<void> {
   // Whichever of the two the purpose produced. Written separately rather than
   // into one column, so "which membership did this order pay for" stays a
@@ -191,6 +203,7 @@ export async function markOrderFulfilled(
       status: 'fulfilled',
       ...(produced.bookingId ? { booking_id: produced.bookingId } : {}),
       ...(produced.subscriptionId ? { subscription_id: produced.subscriptionId } : {}),
+      ...(produced.walletTransactionId ? { wallet_transaction_id: produced.walletTransactionId } : {}),
       fulfilled_at: new Date().toISOString(),
     })
     .eq('razorpay_order_id', razorpayOrderId)

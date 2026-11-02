@@ -2,11 +2,11 @@
 
 import { useState, useEffect, useMemo, useRef, useTransition, Fragment } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Calendar as CalendarPicker } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -19,19 +19,20 @@ import { RevealAmount } from "@/components/admin/dashboard/RevealAmount";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { CheckoutModal } from "@/components/admin/bookings/CheckoutModal";
 import { CheckOutSessionDialog, type CheckOutTarget } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, type BookingFilters } from "./actions";
+import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkInBookingOnStation, getBookingStationOptions, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, deleteBooking, type BookingFilters } from "./actions";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
-import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2, LogIn } from "lucide-react";
+import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2, LogIn, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { useDebounce } from "@/lib/hooks/useDebounce";
 import { CountUp } from "@/components/shared/CountUp";
 import { roundToTwo, formatCurrency } from "@/lib/currency";
+import { liveSessionEstimate } from "@/lib/bookings/liveSessionAmount";
 import { formatDbTime, formatDbTimeRange } from "@/lib/utils/timeSlots";
+import { getUserRole } from "@/lib/auth/roles";
 import { BookingTimingCell } from "@/components/admin/bookings/SessionTimeline";
 import { TimeOfDayField } from "@/components/ui/time-of-day-field";
 import {
-  PROVISIONAL_SESSION_HOURS,
   formatPlayedDuration,
   resolvePlannedSession
 } from "@/lib/bookings/walkInSession";
@@ -50,6 +51,7 @@ export default function AdminBookingsPage() {
   const router = useRouter();
   const { addNotification } = useNotifications();
   const [bookings, setBookings] = useState<any[]>([]);
+  const [liveNow, setLiveNow] = useState(() => Date.now());
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -78,21 +80,45 @@ export default function AdminBookingsPage() {
   const [dateTo, setDateTo] = useState(() => arenaToday());
   const [activeQuickFilter, setActiveQuickFilter] = useState<string>("today");
   const [selectedBooking, setSelectedBooking] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deletingBooking, setDeletingBooking] = useState(false);
   const [openFoodModal, setOpenFoodModal] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<any>(null);
   /** The waiting walk-in about to be started, while the dialog is open. */
   const [checkInTarget, setCheckInTarget] = useState<any>(null);
+  const [checkInStations, setCheckInStations] = useState<Array<{ id: string; station_number: string }>>([]);
+  const [checkInStationId, setCheckInStationId] = useState("");
+  const [checkInNeedsStation, setCheckInNeedsStation] = useState(false);
   /** 24-hour `HH:MM` the customer says they will finish. Empty means they did not say. */
   const [checkInPlannedEnd, setCheckInPlannedEnd] = useState("");
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setLiveNow(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void getUserRole().then((role) => {
+      if (active) setIsAdmin(role === "admin");
+    });
+    return () => { active = false; };
+  }, []);
   /**
    * The entered finish, read the way the server will read it.
    *
-   * Against now, because check-in from this screen starts the session now - the
-   * same function the action calls, so what the dialog says and what the claim
-   * does cannot drift apart.
+   * Against the saved manual start when this booking has one, otherwise now.
    */
   const checkInPlannedEndCheck = useMemo(
-    () => (checkInPlannedEnd ? resolvePlannedSession(null, checkInPlannedEnd) : null),
+    () => (checkInPlannedEnd
+      ? resolvePlannedSession(
+          checkInTarget?.walk_in_pending_start_time
+            ? String(checkInTarget.walk_in_pending_start_time).slice(0, 5)
+            : null,
+          checkInPlannedEnd
+        )
+      : null),
     [checkInPlannedEnd, checkInTarget]
   );
   const [cancelReason, setCancelReason] = useState("");
@@ -107,17 +133,22 @@ export default function AdminBookingsPage() {
     balanceDue: number;
     bookingNumber: string;
     isCheckout: boolean; // Track if this is from checkout attempt (vs billing modal)
+    walletBalance: number;
+    paymentRequestId: string;
   }>({
     open: false,
     bookingId: null,
     balanceDue: 0,
     bookingNumber: "",
-    isCheckout: false
+    isCheckout: false,
+    walletBalance: 0,
+    paymentRequestId: ""
   });
   const [paymentSplit, setPaymentSplit] = useState({
     cashAmount: 0,
     cardAmount: 0,
-    upiAmount: 0
+    upiAmount: 0,
+    walletAmount: 0
   });
 
   // Initialize payment split when modal opens
@@ -134,7 +165,8 @@ export default function AdminBookingsPage() {
       setPaymentSplit({
         cashAmount: 0,
         cardAmount: 0,
-        upiAmount: pendingPaymentModal.balanceDue
+        upiAmount: pendingPaymentModal.balanceDue,
+        walletAmount: 0
       });
     }
   }, [pendingPaymentModal.open, pendingPaymentModal.balanceDue]);
@@ -418,6 +450,27 @@ export default function AdminBookingsPage() {
    */
   const canCancelBooking = (booking: any) =>
     booking?.status === "confirmed" && !booking?.checked_in_at && !booking?.completed_at;
+  const canDeleteBooking = (booking: any) =>
+    booking?.status !== "completed" && !booking?.completed_at;
+
+  const confirmDeleteBooking = async () => {
+    if (!deleteTarget || deletingBooking) return;
+    setDeletingBooking(true);
+    try {
+      const result = await deleteBooking(deleteTarget.id);
+      if (!result.success) {
+        toast.error("Could not delete booking", { description: result.error });
+        return;
+      }
+      toast.success(`Booking ${result.bookingNumber} deleted`);
+      setDeleteTarget(null);
+      refreshAll();
+    } catch (error: any) {
+      toast.error("Could not delete booking", { description: error?.message || "Please try again." });
+    } finally {
+      setDeletingBooking(false);
+    }
+  };
 
   const handleCancelBooking = () => {
     if (!cancelTarget) return;
@@ -507,9 +560,9 @@ export default function AdminBookingsPage() {
    * it the only way to record that was the New Walk-In form, so a booking taken
    * earlier in the evening could never be given one at all.
    */
-  const startWalkInSession = (bookingId: string, plannedEndClock: string | null) => {
+  const startWalkInSession = (bookingId: string, plannedEndClock: string | null, stationId: string | null) => {
     startTransition(async () => {
-      const result = await checkInWalkInSession(bookingId, null, plannedEndClock);
+      const result = await checkInWalkInSession(bookingId, null, plannedEndClock, stationId);
       if (result.success) {
         toast.success("Checked in — playing now", {
           description:
@@ -521,6 +574,9 @@ export default function AdminBookingsPage() {
         });
         setCheckInTarget(null);
         setCheckInPlannedEnd("");
+        setCheckInStations([]);
+        setCheckInStationId("");
+        setCheckInNeedsStation(false);
         refreshAll();
       } else {
         toast.error("Check-in failed", { description: result.error });
@@ -536,6 +592,23 @@ export default function AdminBookingsPage() {
     if (booking.billed_on_actual_time) {
       setCheckInPlannedEnd("");
       setCheckInTarget(booking);
+      setCheckInStations([]);
+      setCheckInStationId("");
+      setCheckInNeedsStation(false);
+      const stationOptions = await getBookingStationOptions(bookingId);
+      if (!stationOptions.success) {
+        toast.error("Could not load table assignment", { description: stationOptions.error });
+        return;
+      }
+      if (stationOptions.requiresStationSelection) {
+        setCheckInStations(stationOptions.stations);
+        setCheckInNeedsStation(true);
+        setCheckInStationId(
+          stationOptions.preferredDeviceId ||
+          stationOptions.currentDeviceId ||
+          stationOptions.stations[0]?.id || ""
+        );
+      }
       return;
     }
 
@@ -558,12 +631,48 @@ export default function AdminBookingsPage() {
       }
     }
 
+    const stationOptions = await getBookingStationOptions(bookingId);
+    if (!stationOptions.success) {
+      toast.error("Could not load table assignment", { description: stationOptions.error });
+      return;
+    }
+    if (stationOptions.requiresStationSelection) {
+      setCheckInTarget(booking);
+      setCheckInStations(stationOptions.stations);
+      setCheckInNeedsStation(true);
+      setCheckInStationId(stationOptions.currentDeviceId || stationOptions.stations[0]?.id || "");
+      return;
+    }
+
     startTransition(async () => {
       const result = await checkInBooking(bookingId);
       if (result.success) {
         toast.success("Customer checked in successfully", {
           description: `Booking ${bookingNumber} is now active`
         });
+        refreshAll();
+      } else {
+        toast.error("Check-in failed", { description: result.error });
+      }
+    });
+  };
+
+  const checkInMediumBooking = () => {
+    const target = checkInTarget;
+    if (!target || !checkInStationId) {
+      toast.error("Choose Medium Snooker table 1 or 2.");
+      return;
+    }
+
+    startTransition(async () => {
+      const result = await checkInBookingOnStation(target.id, checkInStationId);
+      if (result.success) {
+        toast.success("Customer checked in successfully", {
+          description: `Booking ${target.booking_number} · Station ${result.stationNumber}`
+        });
+        setCheckInTarget(null);
+        setCheckInStations([]);
+        setCheckInStationId("");
         refreshAll();
       } else {
         toast.error("Check-in failed", { description: result.error });
@@ -593,6 +702,12 @@ export default function AdminBookingsPage() {
   };
 
   const handleCheckOut = async (bookingId: string, bookingNumber: string, booking: any) => {
+    // Shared play settles each person against their own participant record and
+    // wallet. Open the participant controls instead of booking-owner billing.
+    if (booking.shared_play_enabled) {
+      setSelectedBooking(booking);
+      return;
+    }
     // A session has no scheduled end to be early for. Checking out is what fixes
     // the end time and, with it, the price.
     if (booking.billed_on_actual_time) {
@@ -646,7 +761,9 @@ export default function AdminBookingsPage() {
         bookingId: billingBooking.id,
         balanceDue: balanceDue,
         bookingNumber: billingBooking.booking_number,
-        isCheckout: true // Mark this as a checkout attempt
+        isCheckout: true, // Mark this as a checkout attempt
+        walletBalance: Number(billingBooking.wallet_balance || 0),
+        paymentRequestId: crypto.randomUUID()
       });
       return;
     }
@@ -675,6 +792,10 @@ export default function AdminBookingsPage() {
     }
 
     const { booking } = billingResult;
+    if (booking.shared_play_enabled) {
+      setSelectedBooking({ id: booking.id });
+      return;
+    }
     const balanceDue = Number(booking.balance_due || 0);
 
     // If there's a balance due (pending payment), show warning modal first
@@ -684,7 +805,9 @@ export default function AdminBookingsPage() {
         bookingId: booking.id,
         balanceDue: balanceDue,
         bookingNumber: booking.booking_number,
-        isCheckout: false // This is for billing modal, not direct checkout
+        isCheckout: false, // This is for billing modal, not direct checkout
+        walletBalance: Number(booking.wallet_balance || 0),
+        paymentRequestId: crypto.randomUUID()
       });
     } else {
       // No pending payment, proceed directly to checkout billing modal
@@ -697,7 +820,7 @@ export default function AdminBookingsPage() {
     if (!pendingPaymentModal.bookingId) return;
 
     // Validate split amounts
-    const totalSplit = paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount;
+    const totalSplit = paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount;
     if (Math.abs(totalSplit - pendingPaymentModal.balanceDue) > 0.01) {
       toast.error("Invalid payment split", {
         description: `Total split (₹${totalSplit.toFixed(2)}) must equal balance due (₹${pendingPaymentModal.balanceDue.toFixed(2)})`
@@ -709,7 +832,7 @@ export default function AdminBookingsPage() {
     const isCheckoutAttempt = pendingPaymentModal.isCheckout;
 
     startTransition(async () => {
-      const result = await markBookingAsPaid(bookingIdToProcess, paymentSplit);
+      const result = await markBookingAsPaid(bookingIdToProcess, { ...paymentSplit, idempotencyKey: pendingPaymentModal.paymentRequestId });
 
       if (result.success) {
         // Build payment description
@@ -719,12 +842,13 @@ export default function AdminBookingsPage() {
         if (paymentSplit.upiAmount > 0) methods.push(`UPI: ₹${paymentSplit.upiAmount}`);
         if (paymentSplit.cashAmount > 0) methods.push(`Cash: ₹${paymentSplit.cashAmount}`);
         if (paymentSplit.cardAmount > 0) methods.push(`Card: ₹${paymentSplit.cardAmount}`);
+        if (paymentSplit.walletAmount > 0) methods.push(`Wallet: ₹${paymentSplit.walletAmount}`);
 
         toast.success("Payment marked as paid", {
           description: methods.join(', ')
         });
-        setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false });
-        setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: 0 }); // Reset
+        setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false, walletBalance: 0, paymentRequestId: "" });
+        setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: 0, walletAmount: 0 }); // Reset
 
         if (isCheckoutAttempt) {
           // If this was a checkout attempt, proceed with checkout
@@ -766,6 +890,11 @@ export default function AdminBookingsPage() {
     return new Date(booking.created_at).getTime();
   };
 
+  const liveClock = new Date(liveNow);
+  const liveEstimates = new Map(
+    bookings.map((booking) => [booking.id, liveSessionEstimate(booking, liveClock)])
+  );
+
   // Group bookings by customer
   const groupedBookings = bookings.reduce((groups, booking) => {
     const key = booking.customer_phone;
@@ -782,11 +911,15 @@ export default function AdminBookingsPage() {
       (a, b) => getBookingTime(b) - getBookingTime(a) // Most recent slot first
     );
 
-    const totalAmount = roundToTwo(sorted.reduce((sum, b) => sum + Number(b.total_amount || 0), 0));
+    const totalAmount = roundToTwo(sorted.reduce(
+      (sum, b) => sum + (liveEstimates.get(b.id)?.totalAmount ?? Number(b.total_amount || 0)),
+      0
+    ));
     // Calculate actual revenue after discounts (including happy hour)
     const totalDevice = roundToTwo(sorted.reduce((sum, b) => {
-      const deviceSubtotal = Number(b.device_subtotal || 0);
-      const discount = Number(b.subscription_discount || 0) + Number(b.promo_discount || 0) + Number(b.happy_hour_discount || 0);
+      const deviceSubtotal = liveEstimates.get(b.id)?.deviceSubtotal ?? Number(b.device_subtotal || 0);
+      const discount = Number(b.subscription_discount || 0) + Number(b.promo_discount || 0) +
+        Number(b.happy_hour_discount || 0) + Number(b.hour_pass_discount || 0);
       return sum + Math.max(0, deviceSubtotal - discount);
     }, 0));
     const totalFood = roundToTwo(sorted.reduce((sum, b) => sum + Number(b.food_subtotal || 0), 0));
@@ -1170,6 +1303,7 @@ export default function AdminBookingsPage() {
           }}
           onCheckoutBilling={handleCheckoutBillingClick}
           isPending={isPending}
+                  liveNow={liveNow}
         />
       ) : (
         <Card className="bg-[var(--surface)] border-[#27272a] overflow-hidden">
@@ -1209,6 +1343,7 @@ export default function AdminBookingsPage() {
                   const isSingleBooking = group.count === 1;
                   const firstBooking = group.earliestBooking;
                   const firstSlot = firstBooking.booking_device_slots?.[0];
+                  const firstLiveEstimate = liveEstimates.get(firstBooking.id);
 
                   return (
                     <Fragment key={`group-${group.phone}`}>
@@ -1233,7 +1368,15 @@ export default function AdminBookingsPage() {
                             )}
                             <div>
                               <p className="text-sm font-black text-primary font-mono">
-                                {isSingleBooking ? firstBooking.booking_number : `${group.count} Bookings`}
+                                {isSingleBooking ? (
+                                  <Link
+                                    href={`/admin/bookings/${firstBooking.id}`}
+                                    className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-sm"
+                                    aria-label={`View booking ${firstBooking.booking_number} details`}
+                                  >
+                                    {firstBooking.booking_number}
+                                  </Link>
+                                ) : `${group.count} Bookings`}
                               </p>
                               <p className="text-min text-secondary-content mt-0.5">
                                 {new Date(firstBooking.created_at).toLocaleDateString()}
@@ -1345,7 +1488,9 @@ export default function AdminBookingsPage() {
                               bookingStatus={firstBooking.status}
                               size="md"
                               amountPaid={firstBooking.amount_paid}
-                              balanceDue={firstBooking.balance_due}
+                              balanceDue={firstLiveEstimate
+                                ? Math.max(0, firstLiveEstimate.totalAmount - Number(firstBooking.amount_paid || 0))
+                                : firstBooking.balance_due}
                             />
                           ) : (
                             <p className="text-sm-readable text-secondary-content italic">-</p>
@@ -1403,7 +1548,12 @@ export default function AdminBookingsPage() {
                                   <Ban className="h-4 w-4" />
                                 </Button>
                               )}
-                              {(firstBooking.status === "confirmed" || firstBooking.status === "checked_in") && (
+                              {firstBooking.status !== "cancelled" &&
+                                firstBooking.payment_status !== "paid" &&
+                                firstBooking.payment_status !== "refunded" &&
+                                (firstBooking.status === "confirmed" ||
+                                  firstBooking.status === "checked_in" ||
+                                  firstBooking.status === "completed") && (
                                 <Button
                                   size="sm"
                                   variant="ghost"
@@ -1443,6 +1593,18 @@ export default function AdminBookingsPage() {
                                   <Undo2 className="h-4 w-4" />
                                 </Button>
                               )}
+                              {isAdmin && canDeleteBooking(firstBooking) && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setDeleteTarget(firstBooking)}
+                                  className="h-8 w-8 p-0 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                                  title={`Delete booking ${firstBooking.booking_number}`}
+                                  aria-label={`Delete booking ${firstBooking.booking_number}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -1460,10 +1622,17 @@ export default function AdminBookingsPage() {
                       {/* Child Rows - Individual Bookings (when expanded) */}
                       {!isSingleBooking && isExpanded && group.bookings.map((booking, index) => {
                         const deviceSlot = booking.booking_device_slots?.[0];
+                        const liveEstimate = liveEstimates.get(booking.id);
                         return (
                           <tr key={booking.id} className="bg-[var(--background)] hover:bg-[var(--surface)] transition-colors border-l-4 border-l-primary/30">
                             <td className="py-3 px-4 pl-12">
-                              <p className="text-sm font-black text-primary font-mono">{booking.booking_number}</p>
+                              <Link
+                                href={`/admin/bookings/${booking.id}`}
+                                className="text-sm font-black text-primary font-mono hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-sm"
+                                aria-label={`View booking ${booking.booking_number} details`}
+                              >
+                                {booking.booking_number}
+                              </Link>
                               <p className="text-min text-secondary-content mt-0.5">
                                 Booking #{index + 1}
                               </p>
@@ -1494,10 +1663,10 @@ export default function AdminBookingsPage() {
                               </p>
                             </td>
                             <td className="py-3 px-4">
-                              <p className="text-sm font-black text-data-visible">₹{formatCurrency(booking.total_amount)}</p>
+                              <p className="text-sm font-black text-data-visible">₹{formatCurrency(liveEstimate?.totalAmount ?? booking.total_amount)}</p>
                               <div className="flex flex-col gap-0.5 mt-1">
                                 <p className="text-min text-secondary-content">
-                                  Games: ₹{formatCurrency(Math.max(0, Number(booking.device_subtotal || 0) - (Number(booking.subscription_discount || 0) + Number(booking.promo_discount || 0) + Number(booking.happy_hour_discount || 0))))}
+                                  Games: ₹{formatCurrency(Math.max(0, (liveEstimate?.deviceSubtotal ?? Number(booking.device_subtotal || 0)) - (Number(booking.subscription_discount || 0) + Number(booking.promo_discount || 0) + Number(booking.happy_hour_discount || 0) + Number(booking.hour_pass_discount || 0))))}
                                 </p>
                                 {booking.food_subtotal > 0 && (
                                   <p className="text-min text-secondary-content">
@@ -1512,7 +1681,9 @@ export default function AdminBookingsPage() {
                                 bookingStatus={booking.status}
                                 size="md"
                                 amountPaid={booking.amount_paid}
-                                balanceDue={booking.balance_due}
+                                balanceDue={liveEstimate
+                                  ? Math.max(0, liveEstimate.totalAmount - Number(booking.amount_paid || 0))
+                                  : booking.balance_due}
                               />
                             </td>
                             <td className="py-3 px-4">
@@ -1562,7 +1733,12 @@ export default function AdminBookingsPage() {
                                     <LogOut className="h-4 w-4" />
                                   </Button>
                                 )}
-                                {(booking.status === "confirmed" || booking.status === "checked_in") && (
+                                {booking.status !== "cancelled" &&
+                                  booking.payment_status !== "paid" &&
+                                  booking.payment_status !== "refunded" &&
+                                  (booking.status === "confirmed" ||
+                                    booking.status === "checked_in" ||
+                                    booking.status === "completed") && (
                                   <Button
                                     size="sm"
                                     variant="ghost"
@@ -1602,6 +1778,18 @@ export default function AdminBookingsPage() {
                                     <Undo2 className="h-4 w-4" />
                                   </Button>
                                 )}
+                                {isAdmin && canDeleteBooking(booking) && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => setDeleteTarget(booking)}
+                                    className="h-8 w-8 p-0 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                                    title={`Delete booking ${booking.booking_number}`}
+                                    aria-label={`Delete booking ${booking.booking_number}`}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                )}
                                 <Button
                                   size="sm"
                                   variant="ghost"
@@ -1634,14 +1822,17 @@ export default function AdminBookingsPage() {
           refreshAll();
         }}
         openFoodModalDirectly={openFoodModal}
-        onPendingPayment={(bookingId, balanceDue, bookingNumber) => {
+        onPendingPayment={async (bookingId, balanceDue, bookingNumber) => {
           // Show the pending payment modal (from checkout attempt)
+          const billingResult = await getBookingBillingDetails(bookingId);
           setPendingPaymentModal({
             open: true,
             bookingId,
             balanceDue,
             bookingNumber,
-            isCheckout: true
+            isCheckout: true,
+            walletBalance: Number(billingResult.booking?.wallet_balance || 0),
+            paymentRequestId: crypto.randomUUID()
           });
         }}
       />
@@ -1649,7 +1840,7 @@ export default function AdminBookingsPage() {
       {/* Pending Payment Confirmation Dialog */}
       <Dialog open={pendingPaymentModal.open} onOpenChange={(open) => {
         if (!open) {
-          setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false });
+          setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false, walletBalance: 0, paymentRequestId: "" });
         }
       }}>
         <DialogContent className="bg-[var(--background)] border-2 border-amber-500/50 text-white max-w-md max-h-[85vh] overflow-y-auto">
@@ -1744,15 +1935,37 @@ export default function AdminBookingsPage() {
                 </div>
               </div>
 
+              {/* Wallet Amount */}
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">👛</span>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-zinc-400 uppercase">Wallet credits</Label>
+                    <span className="text-xs text-zinc-500">Available: ₹{pendingPaymentModal.walletBalance.toFixed(2)}</span>
+                  </div>
+                  <Input
+                    type="number"
+                    min="0"
+                    max={Math.min(pendingPaymentModal.walletBalance, pendingPaymentModal.balanceDue)}
+                    step="0.01"
+                    value={paymentSplit.walletAmount || ''}
+                    onChange={(e) => setPaymentSplit({ ...paymentSplit, walletAmount: Math.min(Math.max(0, parseFloat(e.target.value) || 0), pendingPaymentModal.walletBalance, pendingPaymentModal.balanceDue) })}
+                    disabled={pendingPaymentModal.walletBalance <= 0}
+                    className="bg-zinc-800 border-zinc-700 text-white h-9 text-sm"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
               {/* Total Validator */}
               <div className="pt-2 border-t border-zinc-800">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-zinc-400">Total Split:</span>
-                  <span className={`text-sm font-black ${Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount) - pendingPaymentModal.balanceDue) < 0.01 ? 'text-green-400' : 'text-red-400'}`}>
-                    ₹{(paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount).toFixed(2)}
+                  <span className={`text-sm font-black ${Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount) - pendingPaymentModal.balanceDue) < 0.01 ? 'text-green-400' : 'text-red-400'}`}>
+                    ₹{(paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount).toFixed(2)}
                   </span>
                 </div>
-                {Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount) - pendingPaymentModal.balanceDue) >= 0.01 && (
+                {Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount) - pendingPaymentModal.balanceDue) >= 0.01 && (
                   <p className="text-xs text-red-400 mt-1">
                     ⚠️ Total must equal ₹{pendingPaymentModal.balanceDue.toFixed(2)}
                   </p>
@@ -1760,13 +1973,13 @@ export default function AdminBookingsPage() {
               </div>
 
               {/* Quick Fill Buttons */}
-              <div className="flex gap-2 pt-2">
+              <div className="grid grid-cols-2 gap-2 pt-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue })}
-                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue, walletAmount: 0 })}
+                  className="w-full whitespace-nowrap text-xs h-8 border-zinc-700 hover:bg-zinc-800"
                 >
                   All UPI
                 </Button>
@@ -1774,8 +1987,8 @@ export default function AdminBookingsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setPaymentSplit({ cashAmount: pendingPaymentModal.balanceDue, cardAmount: 0, upiAmount: 0 })}
-                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                  onClick={() => setPaymentSplit({ cashAmount: pendingPaymentModal.balanceDue, cardAmount: 0, upiAmount: 0, walletAmount: 0 })}
+                  className="w-full whitespace-nowrap text-xs h-8 border-zinc-700 hover:bg-zinc-800"
                 >
                   All Cash
                 </Button>
@@ -1783,10 +1996,23 @@ export default function AdminBookingsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: pendingPaymentModal.balanceDue, upiAmount: 0 })}
-                  className="flex-1 text-xs h-7 border-zinc-700 hover:bg-zinc-800"
+                  onClick={() => setPaymentSplit({ cashAmount: 0, cardAmount: pendingPaymentModal.balanceDue, upiAmount: 0, walletAmount: 0 })}
+                  className="w-full whitespace-nowrap text-xs h-8 border-zinc-700 hover:bg-zinc-800"
                 >
                   All Card
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={pendingPaymentModal.walletBalance <= 0}
+                  onClick={() => {
+                    const walletAmount = Math.min(pendingPaymentModal.walletBalance, pendingPaymentModal.balanceDue);
+                    setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: pendingPaymentModal.balanceDue - walletAmount, walletAmount });
+                  }}
+                  className="w-full whitespace-nowrap text-xs h-8 border-zinc-700 hover:bg-zinc-800"
+                >
+                  Use Wallet
                 </Button>
               </div>
             </div>
@@ -1794,7 +2020,7 @@ export default function AdminBookingsPage() {
 
           <DialogFooter className="flex gap-2">
             <Button
-              onClick={() => setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false })}
+              onClick={() => setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false, walletBalance: 0, paymentRequestId: "" })}
               variant="ghost"
               className="flex-1 border border-zinc-800 text-muted-content hover:text-white font-bold uppercase text-xs h-10 rounded-lg"
             >
@@ -1816,17 +2042,17 @@ export default function AdminBookingsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Start a waiting walk-in.
-
-          The clock starts now either way; the only question is whether the
-          customer has said when they are leaving, which decides how long the
-          station is held and nothing about the money. */}
+      {/* Start a waiting walk-in, retaining any start time entered when it was
+          first created if the floor was full at that time. */}
       <Dialog
         open={!!checkInTarget}
         onOpenChange={(open) => {
           if (!open) {
             setCheckInTarget(null);
             setCheckInPlannedEnd("");
+            setCheckInStations([]);
+            setCheckInStationId("");
+            setCheckInNeedsStation(false);
           }
         }}
       >
@@ -1837,8 +2063,11 @@ export default function AdminBookingsPage() {
               Check In
             </DialogTitle>
             <DialogDescription className="text-sm text-secondary-content">
-              The clock starts now. The bill is worked out at checkout from the time
-              actually played.
+              {checkInTarget?.billed_on_actual_time
+                ? <>{checkInTarget?.walk_in_pending_start_time
+                    ? `Billing starts at ${formatDbTime(String(checkInTarget.walk_in_pending_start_time))} as entered on the new walk-in form.`
+                    : "The clock starts now."} The bill is worked out at checkout from the time actually played.</>
+                : "Choose the Medium Snooker table for this customer, then confirm check-in."}
             </DialogDescription>
           </DialogHeader>
 
@@ -1850,11 +2079,45 @@ export default function AdminBookingsPage() {
                 </p>
                 <p className="text-sm text-white">{checkInTarget.customer_name}</p>
                 <p className="text-label">
-                  {checkInTarget.walk_in_device_type_name || "Walk-in session"}
+                  {checkInTarget.walk_in_device_type_name || checkInTarget.booking_device_slots?.[0]?.device_type || "Walk-in session"}
                 </p>
               </div>
 
-              <div className="space-y-2">
+              {checkInNeedsStation && (
+                <div className="space-y-2">
+                  <Label className="text-label text-muted-content">Assign Medium Snooker Table</Label>
+                  {checkInStations.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {checkInStations.map((station, index) => {
+                        const isSelected = checkInStationId === station.id;
+                        return (
+                          <button
+                            key={station.id}
+                            type="button"
+                            onClick={() => setCheckInStationId(station.id)}
+                            aria-pressed={isSelected}
+                            className={`rounded-xl border-2 p-4 text-left transition-colors ${isSelected
+                              ? "border-primary bg-primary/10"
+                              : "border-zinc-800 bg-[var(--surface)] hover:border-zinc-600"
+                              }`}
+                          >
+                            <span className={`block text-sm font-black uppercase ${isSelected ? "text-primary" : "text-white"}`}>
+                              Medium {index + 1}
+                            </span>
+                            <span className="mt-1 block text-xs text-muted-content">{station.station_number}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300">
+                      No Medium Snooker tables are available to assign.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {checkInTarget?.billed_on_actual_time && <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <Label className="text-label text-muted-content">
                     Planned end <span className="text-muted-content/60">(optional)</span>
@@ -1881,8 +2144,7 @@ export default function AdminBookingsPage() {
 
                 {!checkInPlannedEnd ? (
                   <p className="text-[11px] leading-relaxed text-muted-content">
-                    Leave blank if they have not said. The station is then held for the
-                    usual {PROVISIONAL_SESSION_HOURS} hours until they check out.
+                    With no planned finish, the station is held for 1 hour plus a 30-minute buffer (90 minutes total). Add a planned finish to hold it longer.
                   </p>
                 ) : checkInPlannedEndCheck?.ok ? (
                   <p className="text-[11px] font-bold text-emerald-400">
@@ -1894,7 +2156,7 @@ export default function AdminBookingsPage() {
                     {checkInPlannedEndCheck?.error}
                   </p>
                 )}
-              </div>
+              </div>}
             </div>
           )}
 
@@ -1910,16 +2172,57 @@ export default function AdminBookingsPage() {
               Cancel
             </Button>
             <Button
-              onClick={() =>
-                startWalkInSession(
-                  checkInTarget.id,
-                  checkInPlannedEndCheck?.ok ? checkInPlannedEndCheck.session.end.clock : null
-                )
+              onClick={() => checkInTarget?.billed_on_actual_time
+                ? startWalkInSession(
+                    checkInTarget.id,
+                    checkInPlannedEndCheck?.ok ? checkInPlannedEndCheck.session.end.clock : null,
+                    checkInNeedsStation ? checkInStationId : null
+                  )
+                : checkInMediumBooking()
               }
-              disabled={isPending || (!!checkInPlannedEnd && !checkInPlannedEndCheck?.ok)}
+              disabled={
+                isPending ||
+                (checkInNeedsStation && !checkInStationId) ||
+                (checkInTarget?.billed_on_actual_time && !!checkInPlannedEnd && !checkInPlannedEndCheck?.ok)
+              }
               className="flex-1 bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] font-black uppercase text-xs h-10 rounded-lg disabled:opacity-50"
             >
-              {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Start Session"}
+              {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : checkInTarget?.billed_on_actual_time ? "Start Session" : "Check In"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Admin-only permanent deletion from the booking table. */}
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => { if (!open && !deletingBooking) setDeleteTarget(null); }}
+      >
+        <DialogContent className="max-w-md border-red-900/60 bg-[var(--background)]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl font-black text-white">
+              <Trash2 className="h-5 w-5 text-red-400" /> Delete Booking
+            </DialogTitle>
+            <DialogDescription className="text-secondary-content">
+              Permanently delete booking {deleteTarget?.booking_number} and its booking details? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deletingBooking}
+              className="flex-1 text-muted-content hover:text-white"
+            >
+              Keep Booking
+            </Button>
+            <Button
+              onClick={() => void confirmDeleteBooking()}
+              disabled={deletingBooking}
+              className="inline-flex flex-1 items-center justify-center gap-2 whitespace-nowrap bg-red-600 font-black text-white hover:bg-red-700"
+            >
+              {deletingBooking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              Delete Booking
             </Button>
           </DialogFooter>
         </DialogContent>
