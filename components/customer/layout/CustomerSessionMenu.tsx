@@ -265,7 +265,7 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
   }
 
   return (
-    <div ref={menuRef} className="relative hidden lg:block">
+    <div ref={menuRef} className="relative hidden 2xl:block">
       <button
         onClick={() => setOpen((wasOpen) => !wasOpen)}
         aria-haspopup="menu"

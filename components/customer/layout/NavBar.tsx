@@ -165,7 +165,7 @@ export default function Navbar() {
       <div className="flex items-center justify-between px-6 md:px-12">
 
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-3 cursor-pointer group">
+        <Link href="/" className="flex shrink-0 cursor-pointer items-center gap-3 whitespace-nowrap group">
           <motion.div
             animate={isFetching ? {
               rotate: 360,
@@ -191,11 +191,11 @@ export default function Navbar() {
               priority
             />
           </motion.div>
-          <span className="text-xl md:text-2xl font-bold text-white tracking-wide uppercase">Break point Arena</span>
+          <span className="text-xl font-bold uppercase tracking-wide text-white 2xl:text-2xl">Break point Arena</span>
         </Link>
 
         {/* Desktop Links */}
-        <div className="hidden lg:flex items-center gap-10">
+        <div className="hidden 2xl:flex min-w-0 items-center gap-4 2xl:gap-6">
           {navLinks.map((link) => {
             const isActive = pathname === link.path; // Check if active
 
@@ -205,7 +205,7 @@ export default function Navbar() {
                 href={link.path}
                 className="group cursor-pointer relative py-2"
               >
-                <span className={`text-sm font-black transition-colors duration-300 uppercase tracking-widest ${isActive ? "text-white" : "text-gray-300 group-hover:text-white"
+                <span className={`whitespace-nowrap text-xs font-black uppercase tracking-[0.12em] transition-colors duration-300 2xl:text-sm ${isActive ? "text-white" : "text-gray-300 group-hover:text-white"
                   }`}>
                   {link.label}
                 </span>
@@ -224,13 +224,13 @@ export default function Navbar() {
 
           <Link
             href="/booking"
-            className="hidden lg:inline-block px-6 py-2.5 border-gradient-animated cursor-pointer font-bold text-xs tracking-widest uppercase hover:bg-[var(--primary)] text-black transition-all duration-300 text-center"
+            className="hidden 2xl:inline-block shrink-0 cursor-pointer px-6 py-2.5 text-center text-xs font-bold uppercase tracking-widest text-black transition-all duration-300 border-gradient-animated hover:bg-[var(--primary)]"
           >
             Book Slot
           </Link>
 
           <button
-            className="lg:hidden text-white hover:text-[var(--primary)] transition-colors p-2 z-50"
+            className="2xl:hidden text-white hover:text-[var(--primary)] transition-colors p-2 z-50"
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
             aria-label="Toggle Menu"
           >
@@ -247,7 +247,7 @@ export default function Navbar() {
             initial="hidden"
             animate="visible"
             exit="exit"
-            className="fixed top-0 left-0 w-full h-screen bg-black/95 backdrop-blur-2xl flex flex-col items-center justify-center p-8 gap-8 lg:hidden z-40"
+            className="fixed top-0 left-0 w-full h-screen bg-black/95 backdrop-blur-2xl flex flex-col items-center justify-center p-8 gap-8 2xl:hidden z-40"
           >
             <div className="flex flex-col items-center gap-6 w-full max-w-sm mt-10">
               {navLinks.map((link) => {
