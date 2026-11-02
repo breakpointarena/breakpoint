@@ -165,7 +165,7 @@ export default function Navbar() {
       <div className="flex items-center justify-between px-6 md:px-12">
 
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-3 cursor-pointer group">
+        <Link href="/" className="flex shrink-0 cursor-pointer items-center gap-3 whitespace-nowrap group">
           <motion.div
             animate={isFetching ? {
               rotate: 360,
@@ -191,11 +191,11 @@ export default function Navbar() {
               priority
             />
           </motion.div>
-          <span className="text-xl md:text-2xl font-bold text-white tracking-wide uppercase">Break point Arena</span>
+          <span className="text-lg font-bold uppercase tracking-wide text-white 2xl:text-2xl">Break point Arena</span>
         </Link>
 
         {/* Desktop Links */}
-        <div className="hidden lg:flex items-center gap-10">
+        <div className="hidden min-w-0 items-center gap-2 lg:flex xl:gap-4 2xl:gap-6">
           {navLinks.map((link) => {
             const isActive = pathname === link.path; // Check if active
 
@@ -205,7 +205,7 @@ export default function Navbar() {
                 href={link.path}
                 className="group cursor-pointer relative py-2"
               >
-                <span className={`text-sm font-black transition-colors duration-300 uppercase tracking-widest ${isActive ? "text-white" : "text-gray-300 group-hover:text-white"
+                <span className={`whitespace-nowrap text-xs font-black uppercase tracking-[0.08em] transition-colors duration-300 lg:text-sm 2xl:text-base ${isActive ? "text-white" : "text-gray-300 group-hover:text-white"
                   }`}>
                   {link.label}
                 </span>
@@ -224,7 +224,7 @@ export default function Navbar() {
 
           <Link
             href="/booking"
-            className="hidden lg:inline-block px-6 py-2.5 border-gradient-animated cursor-pointer font-bold text-xs tracking-widest uppercase hover:bg-[var(--primary)] text-black transition-all duration-300 text-center"
+            className="hidden shrink-0 cursor-pointer px-3 py-2.5 text-center text-xs font-bold uppercase tracking-wider text-black transition-all duration-300 border-gradient-animated hover:bg-[var(--primary)] lg:inline-block 2xl:px-6 2xl:py-3 2xl:text-sm"
           >
             Book Slot
           </Link>
