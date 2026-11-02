@@ -265,14 +265,14 @@ export function CustomerSessionMenu({ compact = false }: { compact?: boolean }) 
   }
 
   return (
-    <div ref={menuRef} className="relative hidden 2xl:block">
+    <div ref={menuRef} className="relative hidden lg:block">
       <button
         onClick={() => setOpen((wasOpen) => !wasOpen)}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={customerName ? `Customer account for ${customerName}` : "Customer account"}
         title={customerName || "Customer account"}
-        className={`flex shrink-0 items-center justify-center gap-3 rounded-xl border px-4 py-2 text-left transition-colors ${open
+        className={`flex shrink-0 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors 2xl:gap-3 2xl:px-4 ${open
           ? "border-primary/60 bg-primary/10"
           : "border-primary/25 bg-[#141110] hover:border-primary/50"
           }`}
