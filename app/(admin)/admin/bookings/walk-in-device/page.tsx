@@ -1059,7 +1059,13 @@ export default function WalkInBookingPage() {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {deviceTypes.map((deviceType) => {
+                {[...deviceTypes]
+                  .sort((a, b) => String(a.display_name || a.name || "").localeCompare(
+                    String(b.display_name || b.name || ""),
+                    undefined,
+                    { sensitivity: "base", numeric: true }
+                  ))
+                  .map((deviceType) => {
                   const bookingNow = mode === "session";
                   /**
                    * How many of these the customer can actually have, which is a
