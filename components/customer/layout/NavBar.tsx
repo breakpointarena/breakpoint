@@ -205,7 +205,7 @@ export default function Navbar() {
                 href={link.path}
                 className="group cursor-pointer relative py-2"
               >
-                <span className={`whitespace-nowrap text-[10px] font-black uppercase tracking-[0.08em] transition-colors duration-300 xl:text-xs 2xl:text-sm ${isActive ? "text-white" : "text-gray-300 group-hover:text-white"
+                <span className={`whitespace-nowrap text-xs font-black uppercase tracking-[0.08em] transition-colors duration-300 lg:text-sm 2xl:text-base ${isActive ? "text-white" : "text-gray-300 group-hover:text-white"
                   }`}>
                   {link.label}
                 </span>
@@ -224,7 +224,7 @@ export default function Navbar() {
 
           <Link
             href="/booking"
-            className="hidden shrink-0 cursor-pointer px-3 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider text-black transition-all duration-300 border-gradient-animated hover:bg-[var(--primary)] lg:inline-block 2xl:px-6 2xl:text-xs"
+            className="hidden shrink-0 cursor-pointer px-3 py-2.5 text-center text-xs font-bold uppercase tracking-wider text-black transition-all duration-300 border-gradient-animated hover:bg-[var(--primary)] lg:inline-block 2xl:px-6 2xl:py-3 2xl:text-sm"
           >
             Book Slot
           </Link>
