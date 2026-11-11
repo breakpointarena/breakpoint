@@ -448,6 +448,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
         promo_discount,
         happy_hour_discount,
         hour_pass_discount,
+        manual_discount,
         total_amount,
         amount_paid,
         wallet_amount,
@@ -490,7 +491,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
         .not('paid_at', 'is', null),
       supabaseAdmin
         .from('wallet_transactions')
-        .select('id, paid_amount, sale_payment_method, created_at')
+        .select('id, paid_amount, bonus_amount, sale_payment_method, created_at')
         .eq('source', 'admin_wallet_sale')
         .eq('kind', 'top_up')
         .eq('direction', 'credit'),
@@ -614,6 +615,13 @@ export async function getRevenueReports(filters?: ReportFilters) {
         sum + outstandingAmount({ amountPaid: b.amount_paid, total: b.total_amount }),
       0
     );
+
+    const totalDiscountsGiven = activeData.reduce((sum: number, booking: any) =>
+      sum + Number(booking.subscription_discount || 0)
+        + Number(booking.promo_discount || 0)
+        + Number(booking.happy_hour_discount || 0)
+        + Number(booking.hour_pass_discount || 0)
+        + Number(booking.manual_discount || 0), 0);
 
     let totalRevenue = 0;
     let bookingRevenue = 0;
@@ -776,6 +784,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
         deviceRevenue,
         foodRevenue,
         walletRevenue,
+        totalDiscountsGiven,
         walletTopUps: walletOnlineSales.length + walletAdminSales.length,
         // Bookings that produced revenue. Left as it was, on purpose: the
         // Overview tab reads this through getDashboardSummary, and revenue per
@@ -949,6 +958,7 @@ export async function getDashboardSummary(filters?: ReportFilters) {
         deviceRevenue: revenueResult.summary?.deviceRevenue || 0,
         foodRevenue: revenueResult.summary?.foodRevenue || 0,
         walletRevenue: revenueResult.summary?.walletRevenue || 0,
+        totalDiscountsGiven: revenueResult.summary?.totalDiscountsGiven || 0,
         totalBookings: revenueResult.summary?.totalBookings || 0,
         averageRevenuePerBooking: revenueResult.summary?.averageRevenuePerBooking || 0,
         totalFoodOrders: foodResult.summary?.totalOrders || 0,

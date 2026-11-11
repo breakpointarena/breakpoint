@@ -48,6 +48,7 @@ import { formatPlayedDuration, MAX_BACKDATED_START_HOURS, playedMinutes, priceSe
 import { calculateSharedPlayShares, getSharedPlaySessions } from "@/lib/bookings/sharedPlay";
 import type { SharedPlayCustomer, SharedPlayParticipant } from "@/lib/types/shared-play";
 import { getUserRole } from "@/lib/auth/roles";
+import { roundToTwo } from "@/lib/currency";
 
 interface BookingDetailModalProps {
   bookingId: string | null;
@@ -88,15 +89,33 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [participantCheckoutUpiAmount, setParticipantCheckoutUpiAmount] = useState("0");
   const [participantCheckoutCardAmount, setParticipantCheckoutCardAmount] = useState("0");
   const [participantCheckoutUseWallet, setParticipantCheckoutUseWallet] = useState(false);
+  const [participantDiscountKind, setParticipantDiscountKind] = useState<"value" | "percentage">("value");
+  const [participantDiscountValue, setParticipantDiscountValue] = useState("");
   const [participantCheckoutKey, setParticipantCheckoutKey] = useState("");
   const [participantCheckoutLoading, setParticipantCheckoutLoading] = useState(false);
+  const participantRawTotal = Number(participantCheckoutQuote?.totalAmount || 0);
+  const participantDiscountNumber = Number(participantDiscountValue || 0);
+  const participantDiscountAmount = roundToTwo(participantDiscountKind === "percentage"
+    ? participantRawTotal * participantDiscountNumber / 100
+    : participantDiscountNumber);
+  const participantDiscountValid = Number.isFinite(participantDiscountNumber) && participantDiscountNumber >= 0 &&
+    (participantDiscountKind !== "percentage" || participantDiscountNumber <= 100) &&
+    participantDiscountAmount <= participantRawTotal;
+  const participantDiscountedTotal = participantDiscountValid ? Math.max(0, roundToTwo(participantRawTotal - participantDiscountAmount)) : participantRawTotal;
   const participantExternalDue = participantCheckoutQuote
-    ? Number(participantCheckoutQuote.totalAmount) - (participantCheckoutUseWallet
-      ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
+    ? participantDiscountedTotal - (participantCheckoutUseWallet
+      ? Math.min(participantDiscountedTotal, Number(participantCheckoutQuote.walletBalance))
       : 0)
     : 0;
   const participantSplitTotal = Number(participantCheckoutCashAmount || 0) + Number(participantCheckoutUpiAmount || 0) + Number(participantCheckoutCardAmount || 0);
-  const participantSplitValid = Number.isFinite(participantSplitTotal) && Math.abs(participantSplitTotal - participantExternalDue) < 0.005;
+  const participantWalletAmount = participantCheckoutUseWallet
+    ? Math.min(participantDiscountedTotal, Number(participantCheckoutQuote?.walletBalance || 0))
+    : 0;
+  const participantPaymentAmount = roundToTwo(Math.min(participantDiscountedTotal, participantSplitTotal + participantWalletAmount));
+  const participantBalanceAfterPayment = roundToTwo(Math.max(0, participantDiscountedTotal - participantPaymentAmount));
+  const participantSplitValid = Number.isFinite(participantSplitTotal) && participantSplitTotal >= 0 &&
+    participantSplitTotal <= participantExternalDue + 0.005 &&
+    (participantExternalDue < 0.005 || participantSplitTotal > 0);
   const [checkoutAllQuotes, setCheckoutAllQuotes] = useState<any[]>([]);
   const [checkoutAllOpen, setCheckoutAllOpen] = useState(false);
   const [checkoutAllWalletIds, setCheckoutAllWalletIds] = useState<string[]>([]);
@@ -104,14 +123,45 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [checkoutAllUpiAmount, setCheckoutAllUpiAmount] = useState("0");
   const [checkoutAllCardAmount, setCheckoutAllCardAmount] = useState("0");
   const [checkoutAllKey, setCheckoutAllKey] = useState("");
-  const checkoutAllRemaining = checkoutAllQuotes.reduce((sum, quote) => {
+  const [checkoutAllDiscountKind, setCheckoutAllDiscountKind] = useState<"value" | "percentage">("value");
+  const [checkoutAllDiscountValue, setCheckoutAllDiscountValue] = useState("");
+  const checkoutAllGrossTotal = roundToTwo(checkoutAllQuotes.reduce((sum, quote) => sum + Number(quote.totalAmount || 0), 0));
+  const checkoutAllDiscountNumber = Number(checkoutAllDiscountValue || 0);
+  const checkoutAllDiscountAmount = roundToTwo(checkoutAllDiscountKind === "percentage"
+    ? checkoutAllGrossTotal * checkoutAllDiscountNumber / 100
+    : checkoutAllDiscountNumber);
+  const checkoutAllDiscountValid = Number.isFinite(checkoutAllDiscountNumber) && checkoutAllDiscountNumber >= 0 &&
+    (checkoutAllDiscountKind !== "percentage" || checkoutAllDiscountNumber <= 100) &&
+    checkoutAllDiscountAmount <= checkoutAllGrossTotal;
+  let checkoutAllDiscountLeft = checkoutAllDiscountValid ? checkoutAllDiscountAmount : 0;
+  let checkoutAllGrossLeft = checkoutAllGrossTotal;
+  const checkoutAllDiscountedQuotes = checkoutAllQuotes.map((quote: any, index: number) => {
+    const gross = Number(quote.totalAmount || 0);
+    const discount = index === checkoutAllQuotes.length - 1
+      ? Math.min(gross, checkoutAllDiscountLeft)
+      : Math.min(gross, roundToTwo(checkoutAllGrossLeft > 0 ? checkoutAllDiscountLeft * gross / checkoutAllGrossLeft : 0));
+    checkoutAllDiscountLeft = roundToTwo(checkoutAllDiscountLeft - discount);
+    checkoutAllGrossLeft = roundToTwo(checkoutAllGrossLeft - gross);
+    return { ...quote, totalAmount: roundToTwo(gross - discount), manualDiscount: discount };
+  });
+  const checkoutAllRemaining = checkoutAllDiscountedQuotes.reduce((sum, quote) => {
     const wallet = checkoutAllWalletIds.includes(quote.participantId)
-      ? Math.min(Number(quote.totalAmount || 0), Number(quote.walletBalance || 0))
+                      ? Math.min(Number(quote.totalAmount || 0), Number(quote.walletBalance || 0))
       : 0;
     return sum + Math.max(0, Number(quote.totalAmount || 0) - wallet);
   }, 0);
   const checkoutAllSplitTotal = Number(checkoutAllCashAmount || 0) + Number(checkoutAllUpiAmount || 0) + Number(checkoutAllCardAmount || 0);
-  const checkoutAllSplitValid = Number.isFinite(checkoutAllSplitTotal) && Math.abs(checkoutAllSplitTotal - checkoutAllRemaining) < 0.005;
+  const checkoutAllSplitValid = checkoutAllDiscountValid && Number.isFinite(checkoutAllSplitTotal) && Math.abs(checkoutAllSplitTotal - checkoutAllRemaining) < 0.005;
+
+  useEffect(() => {
+    if (!participantCheckoutQuote) return;
+    setParticipantCheckoutUpiAmount(Math.max(0, participantExternalDue - Number(participantCheckoutCashAmount || 0) - Number(participantCheckoutCardAmount || 0)).toFixed(2));
+  }, [participantExternalDue, participantCheckoutCashAmount, participantCheckoutCardAmount, participantCheckoutQuote]);
+
+  useEffect(() => {
+    if (!checkoutAllOpen) return;
+    setCheckoutAllUpiAmount(Math.max(0, checkoutAllRemaining - Number(checkoutAllCashAmount || 0) - Number(checkoutAllCardAmount || 0)).toFixed(2));
+  }, [checkoutAllOpen, checkoutAllRemaining, checkoutAllCashAmount, checkoutAllCardAmount]);
   const [updatingPlayerCount, setUpdatingPlayerCount] = useState(false);
   const [foodItemToRemove, setFoodItemToRemove] = useState<any>(null);
   const [removingFoodItem, setRemovingFoodItem] = useState(false);
@@ -154,8 +204,6 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [sitInClockDraft, setSitInClockDraft] = useState("");
   const [sitOutDialogOpen, setSitOutDialogOpen] = useState(false);
   const [sitOutClockDraft, setSitOutClockDraft] = useState("");
-  const [participantToSitOutBeforeCheckout, setParticipantToSitOutBeforeCheckout] = useState<SharedPlayParticipant | null>(null);
-  const [participantsToSitOutBeforeCheckoutAll, setParticipantsToSitOutBeforeCheckoutAll] = useState<SharedPlayParticipant[]>([]);
   const [participantCustomerDrafts, setParticipantCustomerDrafts] = useState<Record<string, string>>({});
   const [linkingParticipantCustomer, setLinkingParticipantCustomer] = useState<string | null>(null);
   const [sharedPlayNow, setSharedPlayNow] = useState(() => new Date());
@@ -343,14 +391,14 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     setAddFoodModalOpen(true);
   };
 
-  const handleOpenParticipantCheckout = async (participantId: string, skipSitOutPrompt = false) => {
+  const handleOpenParticipantCheckout = async (participantId: string) => {
     if (!bookingId) return;
     const participant = booking?.shared_play_participants?.find(
       (row: SharedPlayParticipant) => row.id === participantId
     ) as SharedPlayParticipant | undefined;
     const isPlaying = participant?.shared_play_periods?.some((period) => !period.ended_at) || false;
-    if (isPlaying && !skipSitOutPrompt) {
-      setParticipantToSitOutBeforeCheckout(participant || null);
+    if (isPlaying) {
+      toast.error("Sit this participant out before checkout.");
       return;
     }
     setParticipantCheckoutLoading(true);
@@ -362,55 +410,32 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
     setParticipantCheckoutQuote(result.quote);
     setParticipantCheckoutUseWallet(false);
+    setParticipantDiscountKind("value");
+    setParticipantDiscountValue("");
     setParticipantCheckoutCashAmount("0");
     setParticipantCheckoutUpiAmount(Number(result.quote.totalAmount).toFixed(2));
     setParticipantCheckoutCardAmount("0");
     setParticipantCheckoutKey(crypto.randomUUID());
   };
 
-  const handleSitOutAndContinueCheckout = async () => {
-    const participant = participantToSitOutBeforeCheckout;
-    if (!participant || !bookingId || participantCheckoutLoading) return;
-    setParticipantCheckoutLoading(true);
-    const saved = await handleSetSelectedParticipantsPlaying(
-      false,
-      null,
-      arenaClockTime(new Date()).slice(0, 5),
-      [participant.name]
-    );
-    if (saved) {
-      setParticipantToSitOutBeforeCheckout(null);
-      await handleOpenParticipantCheckout(participant.id, true);
-    }
-    setParticipantCheckoutLoading(false);
-  };
-
-  const handleSitOutAllAndContinueCheckout = async () => {
-    if (!bookingId || participantsToSitOutBeforeCheckoutAll.length === 0 || participantCheckoutLoading) return;
-    setParticipantCheckoutLoading(true);
-    const names = participantsToSitOutBeforeCheckoutAll.map((participant) => participant.name);
-    const saved = await handleSetSelectedParticipantsPlaying(
-      false,
-      null,
-      arenaClockTime(new Date()).slice(0, 5),
-      names
-    );
-    if (saved) {
-      setParticipantsToSitOutBeforeCheckoutAll([]);
-      await handleOpenCheckoutAll(true);
-    }
-    setParticipantCheckoutLoading(false);
-  };
-
-  const handleOpenCheckoutAll = async (skipSitOutPrompt = false) => {
-    if (!bookingId) return;
+  const handleOpenCheckoutAll = async () => {
+    if (!bookingId || participantCheckoutLoading) return;
     const activeParticipants = (booking?.shared_play_participants || []).filter(
       (participant: SharedPlayParticipant) =>
         !participant.checked_out_at && participant.shared_play_periods?.some((period) => !period.ended_at)
     ) as SharedPlayParticipant[];
-    if (!skipSitOutPrompt && activeParticipants.length > 0) {
-      setParticipantsToSitOutBeforeCheckoutAll(activeParticipants);
-      return;
+    if (activeParticipants.length > 0) {
+      setParticipantCheckoutLoading(true);
+      const saved = await handleSetSelectedParticipantsPlaying(
+        false,
+        null,
+        arenaClockTime(new Date()).slice(0, 5),
+        activeParticipants.map((participant) => participant.name)
+      );
+      if (!saved) {
+        setParticipantCheckoutLoading(false);
+        return;
+      }
     }
     setParticipantCheckoutLoading(true);
     const result = await getSharedPlayCheckoutAllQuotes(bookingId);
@@ -421,6 +446,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
     setCheckoutAllQuotes(result.quotes);
     setCheckoutAllWalletIds([]);
+    setCheckoutAllDiscountKind("value");
+    setCheckoutAllDiscountValue("");
     const due = result.quotes.reduce((sum: number, quote: any) => sum + Number(quote.totalAmount || 0), 0);
     setCheckoutAllCashAmount("0");
     setCheckoutAllUpiAmount(due.toFixed(2));
@@ -438,7 +465,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       cashAmount: Number(checkoutAllCashAmount),
       upiAmount: Number(checkoutAllUpiAmount),
       cardAmount: Number(checkoutAllCardAmount),
-      idempotencyKey: checkoutAllKey
+      idempotencyKey: checkoutAllKey,
+      discountKind: checkoutAllDiscountKind,
+      discountValue: checkoutAllDiscountNumber
     });
     setParticipantCheckoutLoading(false);
     if (!result.success) {
@@ -477,16 +506,19 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       cashAmount: Number(participantCheckoutCashAmount),
       upiAmount: Number(participantCheckoutUpiAmount),
       cardAmount: Number(participantCheckoutCardAmount),
-      idempotencyKey: participantCheckoutKey
+      idempotencyKey: participantCheckoutKey,
+      discountKind: participantDiscountKind,
+      discountValue: participantDiscountNumber
     });
     setParticipantCheckoutLoading(false);
     if (!result.success) {
       toast.error("Participant checkout failed", { description: result.error });
       return;
     }
-    const walletUsed = Number(result.payment?.wallet_amount || 0);
-    toast.success(`${participantCheckoutQuote.participantName} checked out`, {
-      description: `₹${Number(result.quote.totalAmount).toFixed(2)} total (UPI ₹${Number(participantCheckoutUpiAmount).toFixed(2)}, cash ₹${Number(participantCheckoutCashAmount).toFixed(2)}, card ₹${Number(participantCheckoutCardAmount).toFixed(2)})${walletUsed > 0 ? `; ₹${walletUsed.toFixed(2)} from wallet` : ""}.`
+    const remainingDue = Number(result.remainingDue || 0);
+    const paidAmount = Number(result.paidAmount || 0);
+    toast.success(remainingDue >= 0.01 ? "Partial payment recorded" : `${participantCheckoutQuote.participantName} checked out`, {
+      description: `${participantCheckoutQuote.participantName} paid ₹${paidAmount.toFixed(2)}${remainingDue >= 0.01 ? `; ₹${remainingDue.toFixed(2)} remains due` : "."}`
     });
     setParticipantCheckoutQuote(null);
     const remainingParticipants = (booking.shared_play_participants || []).filter(
@@ -497,7 +529,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         ? await checkOutWalkInSession(bookingId)
         : await checkOutBooking(bookingId);
       if (!closeResult.success) {
-        toast.error("Participant paid, but booking could not be closed", { description: closeResult.error });
+        toast.error("Payment recorded, but booking could not be closed", { description: closeResult.error });
       }
     }
     await loadBookingDetails();
@@ -540,12 +572,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       const remainingParticipants = (booking.shared_play_participants || []).filter(
         (participant: any) => !participant.checked_out_at
       );
-      if (remainingParticipants.length > 1) {
+      if (remainingParticipants.length > 0) {
         void handleOpenCheckoutAll();
-        return;
-      }
-      if (remainingParticipants.length === 1) {
-        void handleOpenParticipantCheckout(remainingParticipants[0].id);
         return;
       }
     }
@@ -588,11 +616,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
 
     if (booking.shared_play_enabled) {
       const remainingParticipants = (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at);
-      if (remainingParticipants.length === 1) {
-        await handleOpenParticipantCheckout(remainingParticipants[0].id);
-        return;
-      }
-      if (remainingParticipants.length > 1) {
+      if (remainingParticipants.length > 0) {
         await handleOpenCheckoutAll();
         return;
       }
@@ -1540,7 +1564,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                         <p className="text-xs font-semibold text-amber-300">Everyone is sitting out. Player timers are paused until someone sits in.</p>
                       )}
                       {booking.status === "checked_in" && (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1 && (
-                        <p className="text-xs font-semibold text-secondary-content">Check out each person beside their name, or use Checkout All to review everyone’s play and assigned food together.</p>
+                        <p className="text-xs font-semibold text-secondary-content">Sit players out before using their individual checkout. Use “Sit out all &amp; Check out” below to review everyone’s play and assigned food together.</p>
                       )}
                       <div className="space-y-2">
                         {sharedRoster.map((name) => {
@@ -1611,9 +1635,10 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                                   type="button"
                                   size="sm"
                                   variant="outline"
-                                  disabled={participantCheckoutLoading}
+                                  disabled={participantCheckoutLoading || isActive}
+                                  title={isActive ? "Sit this participant out before checkout" : undefined}
                                   onClick={() => void handleOpenParticipantCheckout(participant.id)}
-                                  className="h-8 shrink-0 border-amber-500/50 px-2 text-xs text-amber-300 hover:bg-amber-500/10"
+                                  className="h-8 shrink-0 border-amber-500/50 px-2 text-xs text-amber-300 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-40"
                                 >
                                   {participantCheckoutLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="mr-1 h-3 w-3" />}
                                   Check out
@@ -2381,14 +2406,12 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 {isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).some((participant: any) => !participant.checked_out_at)) && (
                   <Button
                     onClick={handleSessionCheckOut}
-                    disabled={actionLoading}
+                    disabled={actionLoading || (booking.shared_play_enabled && participantCheckoutLoading)}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-sm h-12 px-8 flex items-center gap-2"
                   >
                     {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
                     {booking.shared_play_enabled
-                      ? (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1
-                        ? "Checkout All Participants"
-                        : "Check Out & Calculate Individual Bill"
+                      ? "Sit out all & Check out"
                       : "Check Out & Calculate Bill"}
                   </Button>
                 )}
@@ -2407,12 +2430,12 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 {!isSession && booking.status === "checked_in" && (!booking.shared_play_enabled || (booking.shared_play_participants || []).some((participant: any) => !participant.checked_out_at)) && (
                   <Button
                     onClick={handleCheckOut}
-                    disabled={actionLoading || (!booking.shared_play_enabled && Number(booking.balance_due || 0) > 0 && booking.payment_status !== 'paid')}
+                    disabled={actionLoading || (booking.shared_play_enabled && participantCheckoutLoading) || (!booking.shared_play_enabled && Number(booking.balance_due || 0) > 0 && booking.payment_status !== 'paid')}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-sm h-12 px-8 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {actionLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
-                    {booking.shared_play_enabled && (booking.shared_play_participants || []).filter((participant: any) => !participant.checked_out_at).length > 1
-                      ? "Checkout All Participants"
+                    {booking.shared_play_enabled
+                      ? "Sit out all & Check out"
                       : "Check Out Customer"}
                   </Button>
                 )}
@@ -2815,70 +2838,6 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
-        open={Boolean(participantToSitOutBeforeCheckout)}
-        onOpenChange={(open) => {
-          if (!open && !participantCheckoutLoading) setParticipantToSitOutBeforeCheckout(null);
-        }}
-      >
-        <AlertDialogContent className="border-[#27272a] bg-[var(--surface)] text-white">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-lg font-black">Sit out before checkout?</AlertDialogTitle>
-            <AlertDialogDescription className="text-secondary-content">
-              {participantToSitOutBeforeCheckout?.name} is still playing. Sit them out now and continue to checkout? Their timer will stop at the current time.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={participantCheckoutLoading} className="border-[#3f3f46] bg-transparent text-white hover:bg-white/5">
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={participantCheckoutLoading}
-              onClick={(event) => {
-                event.preventDefault();
-                void handleSitOutAndContinueCheckout();
-              }}
-              className="bg-primary font-black text-black hover:bg-primary-hover"
-            >
-              {participantCheckoutLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Sit out & continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog
-        open={participantsToSitOutBeforeCheckoutAll.length > 0}
-        onOpenChange={(open) => {
-          if (!open && !participantCheckoutLoading) setParticipantsToSitOutBeforeCheckoutAll([]);
-        }}
-      >
-        <AlertDialogContent className="border-[#27272a] bg-[var(--surface)] text-white">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-lg font-black">Sit out before checkout all?</AlertDialogTitle>
-            <AlertDialogDescription className="text-secondary-content">
-              {participantsToSitOutBeforeCheckoutAll.length} player{participantsToSitOutBeforeCheckoutAll.length === 1 ? " is" : "s are"} still playing. Sit them out now and continue to the group checkout? Their timers will stop at the current time.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={participantCheckoutLoading} className="border-[#3f3f46] bg-transparent text-white hover:bg-white/5">
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={participantCheckoutLoading}
-              onClick={(event) => {
-                event.preventDefault();
-                void handleSitOutAllAndContinueCheckout();
-              }}
-              className="bg-primary font-black text-black hover:bg-primary-hover"
-            >
-              {participantCheckoutLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Sit out all & continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       <Dialog open={checkoutAllOpen} onOpenChange={(open) => !open && setCheckoutAllOpen(false)}>
         <DialogContent className="flex max-h-[90dvh] w-[calc(100%-2rem)] max-w-2xl flex-col overflow-hidden border-[#27272a] bg-[var(--surface)] text-white">
           <DialogHeader>
@@ -2888,8 +2847,17 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          <div className="rounded-lg border border-primary/30 bg-[var(--background)] p-4">
+            <Label htmlFor="shared-checkout-discount" className="mb-2 block text-xs font-bold uppercase text-secondary-content">Group discount</Label>
+            <div className="flex gap-2">
+              <input id="shared-checkout-discount" type="number" min="0" max={checkoutAllDiscountKind === "percentage" ? "100" : undefined} step="0.01" value={checkoutAllDiscountValue} onChange={(event) => setCheckoutAllDiscountValue(event.target.value)} className="h-10 min-w-0 flex-1 rounded-md border border-[#3f3f46] bg-[var(--surface)] px-3 text-sm text-white" placeholder="Enter discount" />
+              <Button type="button" variant="outline" disabled={participantCheckoutLoading} onClick={() => setCheckoutAllDiscountKind(checkoutAllDiscountKind === "value" ? "percentage" : "value")} className="h-10 border-zinc-700 text-white whitespace-nowrap">{checkoutAllDiscountKind === "value" ? "₹ Value" : "% Percent"}</Button>
+            </div>
+            <p className="mt-2 text-xs text-secondary-content">{checkoutAllDiscountAmount > 0 && checkoutAllDiscountValid ? `Discount applied across participants: ₹${checkoutAllDiscountAmount.toFixed(2)}` : checkoutAllDiscountKind === "percentage" ? "Enter a percentage from 0 to 100." : "Discount is shared proportionally across play and assigned food."}</p>
+            {!checkoutAllDiscountValid && <p className="mt-1 text-xs text-red-400">Discount cannot exceed the group bill of ₹{checkoutAllGrossTotal.toFixed(2)}.</p>}
+          </div>
           <div className="space-y-3">
-            {checkoutAllQuotes.map((quote: any) => {
+            {checkoutAllDiscountedQuotes.map((quote: any) => {
               const useWallet = checkoutAllWalletIds.includes(quote.participantId);
               const walletUsed = useWallet ? Math.min(Number(quote.totalAmount), Number(quote.walletBalance)) : 0;
               const remaining = Math.max(0, Number(quote.totalAmount) - walletUsed);
@@ -2902,6 +2870,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                     </div>
                     <span className="shrink-0 text-sm font-black text-primary">₹{Number(quote.totalAmount).toFixed(2)}</span>
                   </div>
+                  {quote.manualDiscount > 0 && <div className="mb-2 flex justify-between text-xs text-green-300"><span>Discount</span><span>−₹{Number(quote.manualDiscount).toFixed(2)}</span></div>}
                   <div className="flex justify-between text-xs text-secondary-content">
                     <span>Assigned food</span><span>₹{Number(quote.foodAmount).toFixed(2)}</span>
                   </div>
@@ -2921,7 +2890,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                           ? [...checkoutAllWalletIds, quote.participantId]
                           : checkoutAllWalletIds.filter((id) => id !== quote.participantId);
                         setCheckoutAllWalletIds(nextWalletIds);
-                        const nextDue = checkoutAllQuotes.reduce((sum, row) => {
+                        const nextDue = checkoutAllDiscountedQuotes.reduce((sum, row) => {
                           const wallet = nextWalletIds.includes(row.participantId)
                             ? Math.min(Number(row.totalAmount || 0), Number(row.walletBalance || 0))
                             : 0;
@@ -2942,15 +2911,19 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
           </div>
 
           {(() => {
-            const total = checkoutAllQuotes.reduce((sum, quote) => sum + Number(quote.totalAmount || 0), 0);
-            const walletTotal = checkoutAllQuotes.reduce((sum, quote) => checkoutAllWalletIds.includes(quote.participantId)
+            const total = checkoutAllDiscountedQuotes.reduce((sum, quote) => sum + Number(quote.totalAmount || 0), 0);
+            const walletTotal = checkoutAllDiscountedQuotes.reduce((sum, quote) => checkoutAllWalletIds.includes(quote.participantId)
               ? sum + Math.min(Number(quote.totalAmount || 0), Number(quote.walletBalance || 0))
               : sum, 0);
             const remaining = Math.max(0, total - walletTotal);
             return (
               <div className="space-y-3 rounded-lg border border-primary/30 bg-[var(--background)] p-4">
-                <div className="flex justify-between text-base font-black">
-                  <span>Total for everyone (play + food)</span><span className="text-primary">₹{total.toFixed(2)}</span>
+                <div className="flex justify-between text-xs text-secondary-content">
+                  <span>Subtotal for everyone</span><span>₹{checkoutAllGrossTotal.toFixed(2)}</span>
+                </div>
+                {checkoutAllDiscountAmount > 0 && checkoutAllDiscountValid && <div className="flex justify-between text-xs text-green-300"><span>Manual discount</span><span>−₹{checkoutAllDiscountAmount.toFixed(2)}</span></div>}
+                <div className="flex justify-between border-t border-[#27272a] pt-3 text-base font-black">
+                  <span>Total after discount</span><span className="text-primary">₹{total.toFixed(2)}</span>
                 </div>
                 {walletTotal > 0 && <div className="flex justify-between text-xs text-emerald-300"><span>Wallet credits</span><span>−₹{walletTotal.toFixed(2)}</span></div>}
                 <div className="flex justify-between border-t border-[#27272a] pt-3 text-sm font-bold">
@@ -2996,8 +2969,20 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   <p key={item.id} className="mt-1 text-xs text-secondary-content">{item.quantity} × {item.item_name}</p>
                 ))}
                 <div className="mt-3 flex justify-between border-t border-[#27272a] pt-3 font-black">
-                  <span>Total due</span><span className="text-primary">₹{Number(participantCheckoutQuote.totalAmount).toFixed(2)}</span>
+                  <span>Total due</span><span className="text-primary">₹{participantDiscountedTotal.toFixed(2)}</span>
                 </div>
+                {participantDiscountAmount > 0 && participantDiscountValid && <div className="mt-2 flex justify-between text-xs text-green-300"><span>Manual discount</span><span>−₹{participantDiscountAmount.toFixed(2)}</span></div>}
+                <div className="mt-2 flex justify-between text-xs text-secondary-content"><span>Payment now</span><span>₹{participantPaymentAmount.toFixed(2)}</span></div>
+                <div className="mt-1 flex justify-between text-xs font-bold text-amber-300"><span>Remaining after payment</span><span>₹{participantBalanceAfterPayment.toFixed(2)}</span></div>
+              </div>
+
+              <div className="rounded-lg border border-[#27272a] p-3">
+                <Label htmlFor="participant-checkout-discount" className="mb-2 block text-xs font-bold uppercase text-secondary-content">Discount</Label>
+                <div className="flex gap-2">
+                  <input id="participant-checkout-discount" type="number" min="0" max={participantDiscountKind === "percentage" ? "100" : undefined} step="0.01" value={participantDiscountValue} onChange={(event) => setParticipantDiscountValue(event.target.value)} className="h-10 min-w-0 flex-1 rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white" placeholder="Enter discount" />
+                  <Button type="button" variant="outline" disabled={participantCheckoutLoading} onClick={() => setParticipantDiscountKind(participantDiscountKind === "value" ? "percentage" : "value")} className="h-10 border-zinc-700 text-white whitespace-nowrap">{participantDiscountKind === "value" ? "₹ Value" : "% Percent"}</Button>
+                </div>
+                {!participantDiscountValid && <p className="mt-2 text-xs text-red-400">Discount cannot exceed this participant&apos;s bill of ₹{participantRawTotal.toFixed(2)}.</p>}
               </div>
 
               <label className="flex w-full min-w-0 cursor-pointer items-start gap-3 rounded-lg border border-[#27272a] p-3">
@@ -3008,8 +2993,8 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                   onChange={(event) => {
                     const useWallet = event.target.checked;
                     setParticipantCheckoutUseWallet(useWallet);
-                    const due = Number(participantCheckoutQuote.totalAmount) - (useWallet
-                      ? Math.min(Number(participantCheckoutQuote.totalAmount), Number(participantCheckoutQuote.walletBalance))
+                    const due = participantDiscountedTotal - (useWallet
+                      ? Math.min(participantDiscountedTotal, Number(participantCheckoutQuote.walletBalance))
                       : 0);
                     setParticipantCheckoutUpiAmount(Math.max(0, due - Number(participantCheckoutCashAmount || 0) - Number(participantCheckoutCardAmount || 0)).toFixed(2));
                   }}
@@ -3033,7 +3018,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                     <div><Label htmlFor="participant-upi-amount" className="mb-1 block text-xs text-secondary-content">UPI (INR)</Label><input id="participant-upi-amount" type="number" min="0" step="0.01" value={participantCheckoutUpiAmount} onChange={(event) => setParticipantCheckoutUpiAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white" /></div>
                     <div><Label htmlFor="participant-card-amount" className="mb-1 block text-xs text-secondary-content">Card (INR)</Label><input id="participant-card-amount" type="number" min="0" step="0.01" value={participantCheckoutCardAmount} onChange={(event) => setParticipantCheckoutCardAmount(event.target.value)} className="h-10 w-full rounded-md border border-[#3f3f46] bg-[var(--background)] px-3 text-sm text-white" /></div>
                   </div>
-                  <p className="text-xs text-secondary-content">Remaining INR {participantExternalDue.toFixed(2)}; entered INR {participantSplitTotal.toFixed(2)}{!participantSplitValid && "; amounts must match"}</p>
+                  <p className="text-xs text-secondary-content">Up to INR {participantExternalDue.toFixed(2)} can be collected now; entered INR {participantSplitTotal.toFixed(2)}{!participantSplitValid && "; enter a positive amount no greater than the balance"}</p>
                 </div>
               )}
 
@@ -3041,7 +3026,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 <Button variant="ghost" disabled={participantCheckoutLoading} onClick={() => setParticipantCheckoutQuote(null)}>Cancel</Button>
                 <Button disabled={participantCheckoutLoading || !participantSplitValid} onClick={() => void handleConfirmParticipantCheckout()} className="bg-primary font-black text-black hover:bg-primary-hover">
                   {participantCheckoutLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogOut className="mr-2 h-4 w-4" />}
-                  Confirm checkout
+                  {participantBalanceAfterPayment < 0.01 ? "Mark as Paid" : "Record Partial Payment"}
                 </Button>
               </div>
             </div>

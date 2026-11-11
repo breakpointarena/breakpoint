@@ -10,7 +10,7 @@ import { Loader2, CreditCard, CheckCircle2, XCircle, AlertCircle, IndianRupee, R
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { roundToTwo } from "@/lib/currency";
 import { toast } from "sonner";
-import { getBookingBillingDetails, markBookingAsPaid, closeBooking } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingBillingDetails, markBookingAsPaid, closeBooking, setBookingManualDiscount } from "@/app/(admin)/admin/bookings/actions";
 
 interface CheckoutModalProps {
   bookingId: string | null;
@@ -32,6 +32,8 @@ export function CheckoutModal({ bookingId, isOpen, onClose, onSuccess }: Checkou
    * of one of them and taps through the other on muscle memory.
    */
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'upi'>('upi');
+  const [discountKind, setDiscountKind] = useState<"value" | "percentage">("value");
+  const [discountValue, setDiscountValue] = useState("");
 
   useEffect(() => {
     if (isOpen && bookingId) {
@@ -46,10 +48,30 @@ export function CheckoutModal({ bookingId, isOpen, onClose, onSuccess }: Checkou
     const result = await getBookingBillingDetails(bookingId);
     if (result.success) {
       setBilling(result.booking);
+      setDiscountValue("");
     } else {
       toast.error("Failed to load billing details", { description: result.error });
     }
     setIsLoading(false);
+  };
+
+  const handleApplyDiscount = async () => {
+    if (!bookingId || !billing) return;
+    const value = Number(discountValue || 0);
+    if (!Number.isFinite(value) || value < 0 || (discountKind === "percentage" && value > 100)) {
+      toast.error(discountKind === "percentage" ? "Percentage must be from 0 to 100" : "Enter a valid discount amount");
+      return;
+    }
+    setIsProcessing(true);
+    const result = await setBookingManualDiscount(bookingId, discountKind, value);
+    if (result.success) {
+      toast.success("Discount applied");
+      await loadBillingDetails();
+      onSuccess();
+    } else {
+      toast.error("Could not apply discount", { description: result.error });
+    }
+    setIsProcessing(false);
   };
 
   const handleMarkAsPaid = async () => {
@@ -230,6 +252,27 @@ export function CheckoutModal({ bookingId, isOpen, onClose, onSuccess }: Checkou
               </h3>
 
               <div className="space-y-2 text-sm">
+                <div className="flex items-center gap-2 rounded-lg border border-zinc-800 p-3">
+                  <Label htmlFor="checkout-discount" className="sr-only">Discount</Label>
+                  <input
+                    id="checkout-discount"
+                    type="number"
+                    min="0"
+                    max={discountKind === "percentage" ? "100" : undefined}
+                    step="0.01"
+                    value={discountValue}
+                    onChange={(event) => setDiscountValue(event.target.value)}
+                    placeholder={Number(billing.manual_discount || 0) ? Number(billing.manual_discount).toFixed(2) : "Discount"}
+                    className="h-10 min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-800 px-3 text-white"
+                  />
+                  <Button type="button" variant="outline" disabled={isProcessing} onClick={() => setDiscountKind(discountKind === "value" ? "percentage" : "value")} className="h-10 border-zinc-700 text-white">
+                    {discountKind === "value" ? "₹ Value" : "% Percent"}
+                  </Button>
+                  <Button type="button" disabled={isProcessing} onClick={handleApplyDiscount} className="h-10">Apply</Button>
+                </div>
+                {Number(billing.manual_discount || 0) > 0 && (
+                  <p className="text-right text-xs text-green-400">Manual discount: −₹{Number(billing.manual_discount).toFixed(2)}</p>
+                )}
                 {billing.line_items && billing.line_items.length > 0 ? (
                   <>
                     {billing.line_items.map((item: any) => {

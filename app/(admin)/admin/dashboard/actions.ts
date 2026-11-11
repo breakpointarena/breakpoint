@@ -116,7 +116,7 @@ export async function getDashboardData() {
 
 
       /**
-       * Everything settled or part-settled inside the window, in two reads.
+       * Bookings with money recorded inside the window, in two reads.
        *
        * This was one unbounded query: every settled booking the arena has ever
        * taken, fetched on every dashboard load so the loop below could discard
@@ -132,7 +132,8 @@ export async function getDashboardData() {
        *
        * (a) touched inside the window - covers every booking with no payment
        *     group, which today is all of them, and any whose group is still
-       *     pending.
+       *     pending. Do not filter on payment_status: it can lag behind
+       *     amount_paid when a booking is edited after payment.
        */
       supabaseAdmin
         .from("bookings")
@@ -145,7 +146,6 @@ export async function getDashboardData() {
           updated_at,
           payment_groups(paid_at)
         `)
-        .in("payment_status", ["paid", "partial"])
         .neq("status", "cancelled")
         .gte("updated_at", revenueWindow),
 
@@ -166,7 +166,6 @@ export async function getDashboardData() {
           updated_at,
           payment_groups!inner(paid_at)
         `)
-        .in("payment_status", ["paid", "partial"])
         .neq("status", "cancelled")
         .gte("payment_groups.paid_at", revenueWindow),
 
@@ -484,7 +483,6 @@ export async function getTodaysRevenueDetails() {
       supabaseAdmin
         .from("bookings")
         .select(columns("payment_groups"))
-        .in("payment_status", ["paid", "partial"])
         .neq("status", "cancelled")
         .gte("updated_at", revenueWindow),
 
@@ -493,7 +491,6 @@ export async function getTodaysRevenueDetails() {
       supabaseAdmin
         .from("bookings")
         .select(columns("payment_groups!inner"))
-        .in("payment_status", ["paid", "partial"])
         .neq("status", "cancelled")
         .gte("payment_groups.paid_at", revenueWindow),
     ]);
