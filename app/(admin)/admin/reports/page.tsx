@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Calendar } from "@/components/ui/calendar";
 import {
   IndianRupee, TrendingUp, ShoppingBag, Gamepad2,
-  UtensilsCrossed, BarChart3, CalendarDays, CalendarRange, ReceiptIndianRupee, ShieldAlert, WalletCards
+  UtensilsCrossed, BarChart3, CalendarDays, CalendarRange, ReceiptIndianRupee, ShieldAlert, WalletCards, BadgePercent
 , Ban } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -536,7 +536,7 @@ export default function AdminReportsPage() {
           {activeTab === "overview" && overviewData && (
             <div className="space-y-6">
               {/* Summary Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                 <Card className="bg-gradient-to-br from-green-500/10 to-green-600/5 border-green-500/20 p-5">
                   <div className="flex items-start justify-between">
                     <div>
@@ -572,8 +572,9 @@ export default function AdminReportsPage() {
                 <Card className="bg-gradient-to-br from-amber-500/10 to-amber-600/5 border-amber-500/20 p-5">
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="text-xs font-black uppercase text-amber-500/70 mb-1">
-                        Food Revenue
+                      <p className="text-xs font-black uppercase text-amber-500/70 mb-1 leading-tight">
+                        <span className="block">Food</span>
+                        <span className="block">Revenue</span>
                       </p>
                       <h3 className="text-2xl font-black text-white">
                         <CurrencyCountUp amount={overviewData.foodRevenue} duration={1300} />
@@ -588,7 +589,10 @@ export default function AdminReportsPage() {
                 <Card className="bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20 p-5">
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="text-xs font-black uppercase text-primary/70 mb-1">Wallet Credit Sales</p>
+                      <p className="text-xs font-black uppercase text-primary/70 mb-1 leading-tight">
+                        <span className="block">Wallet</span>
+                        <span className="block">Sales</span>
+                      </p>
                       <h3 className="text-2xl font-black text-white">
                         <CurrencyCountUp amount={overviewData.walletRevenue || 0} duration={1300} />
                       </h3>
@@ -609,6 +613,21 @@ export default function AdminReportsPage() {
                     </div>
                     <div className="p-2 bg-amber-500/10 rounded-lg">
                       <CalendarDays className="h-5 w-5 text-amber-500" />
+                    </div>
+                  </div>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-violet-500/10 to-fuchsia-600/5 border-violet-500/20 p-5">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-xs font-black uppercase text-violet-300/80 mb-1">Discounts Given</p>
+                      <h3 className="text-2xl font-black text-white">
+                        <CurrencyCountUp amount={overviewData.totalDiscountsGiven || 0} duration={1300} />
+                      </h3>
+                      <p className="text-xs text-data-placeholder mt-1">Selected date range</p>
+                    </div>
+                    <div className="p-2 bg-violet-500/10 rounded-lg">
+                      <BadgePercent className="h-5 w-5 text-violet-300" />
                     </div>
                   </div>
                 </Card>

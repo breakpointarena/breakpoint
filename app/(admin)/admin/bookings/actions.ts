@@ -10,7 +10,7 @@ import {
 } from "@/lib/bookings/cancellation";
 import { decideCheckout, type CheckoutDecision } from "@/lib/bookings/checkoutGuard";
 import { deviceCharge, extraPlayersCharge, hourlyRateForPlayerCount, perExtraPlayerCharge } from "@/lib/payments/money";
-import { settlementStatus } from "@/lib/payments/paymentStatus";
+import { isBillableBooking, settlementStatus } from "@/lib/payments/paymentStatus";
 import { roundToTwo } from "@/lib/currency";
 import { calculateSharedPlayShares } from "@/lib/bookings/sharedPlay";
 import { redeemHourPassesForBooking } from "@/lib/subscriptions/redeemHourPasses";
@@ -194,6 +194,7 @@ const BOOKING_LIST_SELECT = `
         promo_discount,
         happy_hour_discount,
         hour_pass_discount,
+        manual_discount,
         status,
         payment_status,
         created_at,
@@ -252,10 +253,11 @@ function withComputedTotals(booking: any) {
   const promoDiscount = Number(booking.promo_discount || 0);
   const happyHourDiscount = Number(booking.happy_hour_discount || 0);
   const hourPassDiscount = Number(booking.hour_pass_discount || 0);
+  const manualDiscount = Number(booking.manual_discount || 0);
   const amountPaid = Number(booking.amount_paid || 0);
 
   const correctTotal = roundToTwo(
-    deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount - hourPassDiscount
+    deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount - hourPassDiscount - manualDiscount
   );
   const balanceDue = roundToTwo(correctTotal - amountPaid);
 
@@ -1252,6 +1254,51 @@ export async function getSharedPlayCheckoutAllQuotes(bookingId: string) {
   }
 }
 
+async function addSharedPlayManualDiscount(bookingId: string, amount: number, kind: "value" | "percentage", participantId?: string) {
+  if (amount <= 0) return;
+  if (participantId) {
+    const { error: participantDiscountError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .update({ manual_discount_amount: amount })
+      .eq("id", participantId)
+      .eq("booking_id", bookingId);
+    if (participantDiscountError) throw participantDiscountError;
+  }
+  const { data: booking, error: readError } = await supabaseAdmin
+    .from("bookings")
+    .select("manual_discount")
+    .eq("id", bookingId)
+    .single();
+  if (readError) throw readError;
+  const totalDiscount = roundToTwo(Number(booking.manual_discount || 0) + amount);
+  const { error: updateError } = await supabaseAdmin
+    .from("bookings")
+    .update({ manual_discount: totalDiscount, manual_discount_type: kind, updated_at: new Date().toISOString() })
+    .eq("id", bookingId);
+  if (updateError) throw updateError;
+
+  const { data: existing, error: lineReadError } = await supabaseAdmin
+    .from("booking_line_items")
+    .select("id")
+    .eq("booking_id", bookingId)
+    .eq("item_type", "manual_discount")
+    .maybeSingle();
+  if (lineReadError) throw lineReadError;
+  const lineItem = {
+    description: "Manual shared-play discount",
+    quantity: 1,
+    unit_price: -totalDiscount,
+    line_total: -totalDiscount,
+    added_by: "admin",
+    is_paid: true,
+    display_order: 6
+  };
+  const { error: lineError } = existing
+    ? await supabaseAdmin.from("booking_line_items").update(lineItem).eq("id", existing.id)
+    : await supabaseAdmin.from("booking_line_items").insert({ booking_id: bookingId, item_type: "manual_discount", ...lineItem });
+  if (lineError) throw lineError;
+}
+
 export async function checkOutAllSharedPlayParticipants(input: {
   bookingId: string;
   useWalletFor: string[];
@@ -1259,6 +1306,8 @@ export async function checkOutAllSharedPlayParticipants(input: {
   upiAmount: number;
   cardAmount: number;
   idempotencyKey: string;
+  discountKind: "value" | "percentage";
+  discountValue: number;
 }) {
   await requireStaff();
   const settledParticipants: string[] = [];
@@ -1286,13 +1335,34 @@ export async function checkOutAllSharedPlayParticipants(input: {
       sharedPlayParticipantCheckoutQuote(input.bookingId, participant.id, checkoutAt)
     ));
 
+    const grossTotal = roundToTwo(quotes.reduce((sum, quote) => sum + Number(quote.totalAmount || 0), 0));
+    if ((input.discountKind !== "value" && input.discountKind !== "percentage") || !Number.isFinite(input.discountValue) || input.discountValue < 0 ||
+        (input.discountKind === "percentage" && input.discountValue > 100)) {
+      throw new Error("Enter a valid discount amount or a percentage from 0 to 100.");
+    }
+    const manualDiscount = roundToTwo(input.discountKind === "percentage"
+      ? grossTotal * input.discountValue / 100
+      : input.discountValue);
+    if (manualDiscount > grossTotal) throw new Error("Discount cannot exceed the group bill.");
+    let discountLeft = manualDiscount;
+    let grossLeft = grossTotal;
+    const discountedQuotes = quotes.map((quote, index) => {
+      const gross = Number(quote.totalAmount || 0);
+      const discount = index === quotes.length - 1
+        ? Math.min(gross, discountLeft)
+        : Math.min(gross, roundToTwo(grossLeft > 0 ? discountLeft * gross / grossLeft : 0));
+      discountLeft = roundToTwo(discountLeft - discount);
+      grossLeft = roundToTwo(grossLeft - gross);
+      return { ...quote, totalAmount: roundToTwo(gross - discount), manualDiscount: discount };
+    });
+
     let cashRemaining = roundToTwo(Number(input.cashAmount));
     let upiRemaining = roundToTwo(Number(input.upiAmount));
     let cardRemaining = roundToTwo(Number(input.cardAmount));
     if (![cashRemaining, upiRemaining, cardRemaining].every(Number.isFinite) || cashRemaining < 0 || upiRemaining < 0 || cardRemaining < 0) {
       throw new Error("Enter valid cash, UPI, and card amounts.");
     }
-    const totalExternalDue = roundToTwo(quotes.reduce((sum, quote) => {
+    const totalExternalDue = roundToTwo(discountedQuotes.reduce((sum, quote) => {
       const wallet = input.useWalletFor.includes(quote.participantId)
         ? Math.min(quote.totalAmount, quote.walletBalance)
         : 0;
@@ -1302,7 +1372,7 @@ export async function checkOutAllSharedPlayParticipants(input: {
       throw new Error(`Cash, UPI, and card must add up to the remaining amount of ₹${totalExternalDue.toFixed(2)}.`);
     }
 
-    for (const quote of quotes) {
+    for (const quote of discountedQuotes) {
       const useWallet = input.useWalletFor.includes(quote.participantId);
       const walletAmount = useWallet ? Math.min(quote.totalAmount, quote.walletBalance) : 0;
       const externalAmount = roundToTwo(quote.totalAmount - walletAmount);
@@ -1313,7 +1383,7 @@ export async function checkOutAllSharedPlayParticipants(input: {
       const cardAmount = roundToTwo(externalAmount - cashAmount - upiAmount);
       if (cardAmount > cardRemaining + 0.005) throw new Error("The payment split could not be allocated.");
       cardRemaining = roundToTwo(cardRemaining - cardAmount);
-      const { error: settleError } = await supabaseAdmin.rpc("wallet_settle_shared_play_participant", {
+      const { data: settlement, error: settleError } = await supabaseAdmin.rpc("wallet_settle_shared_play_participant", {
         p_booking_id: input.bookingId,
         p_participant_id: quote.participantId,
         p_charge_amount: quote.totalAmount,
@@ -1325,6 +1395,9 @@ export async function checkOutAllSharedPlayParticipants(input: {
         p_idempotency_key: `${input.idempotencyKey}:${quote.participantId}`
       });
       if (settleError) throw settleError;
+      if (!settlement?.already_processed) {
+        await addSharedPlayManualDiscount(input.bookingId, quote.manualDiscount, input.discountKind, quote.participantId);
+      }
       settledParticipants.push(quote.participantName);
     }
 
@@ -1391,6 +1464,8 @@ export async function checkOutSharedPlayParticipant(input: {
   upiAmount: number;
   cardAmount: number;
   idempotencyKey: string;
+  discountKind: "value" | "percentage";
+  discountValue: number;
 }) {
   await requireStaff();
   try {
@@ -1398,21 +1473,34 @@ export async function checkOutSharedPlayParticipant(input: {
       throw new Error("Checkout request expired. Reopen the participant checkout.");
     }
     const quote = await sharedPlayParticipantCheckoutQuote(input.bookingId, input.participantId);
-    const walletAmount = input.useWallet ? Math.min(quote.totalAmount, quote.walletBalance) : 0;
-    const externalAmount = roundToTwo(quote.totalAmount - walletAmount);
+    if ((input.discountKind !== "value" && input.discountKind !== "percentage") || !Number.isFinite(input.discountValue) || input.discountValue < 0 ||
+        (input.discountKind === "percentage" && input.discountValue > 100)) {
+      throw new Error("Enter a valid discount amount or a percentage from 0 to 100.");
+    }
+    const manualDiscount = roundToTwo(input.discountKind === "percentage"
+      ? quote.totalAmount * input.discountValue / 100
+      : input.discountValue);
+    if (manualDiscount > quote.totalAmount) throw new Error("Discount cannot exceed this participant's bill.");
+    const discountedTotal = roundToTwo(quote.totalAmount - manualDiscount);
+    const walletAmount = input.useWallet ? Math.min(discountedTotal, quote.walletBalance) : 0;
+    const externalAmount = roundToTwo(discountedTotal - walletAmount);
     const cashAmount = roundToTwo(Number(input.cashAmount));
     const upiAmount = roundToTwo(Number(input.upiAmount));
     const cardAmount = roundToTwo(Number(input.cardAmount));
     if (![cashAmount, upiAmount, cardAmount].every(Number.isFinite) || cashAmount < 0 || upiAmount < 0 || cardAmount < 0) {
       throw new Error("Enter valid cash, UPI, and card amounts.");
     }
-    if (roundToTwo(cashAmount + upiAmount + cardAmount) !== externalAmount) {
-      throw new Error(`Cash, UPI, and card must add up to the remaining amount of ₹${externalAmount.toFixed(2)}.`);
+    const externalPaid = roundToTwo(cashAmount + upiAmount + cardAmount);
+    if (externalPaid > externalAmount + 0.01) {
+      throw new Error(`Payment cannot exceed the remaining amount of ₹${externalAmount.toFixed(2)}.`);
+    }
+    if (externalPaid + walletAmount <= 0 && discountedTotal > 0) {
+      throw new Error("Enter a payment greater than zero.");
     }
     const { data, error } = await supabaseAdmin.rpc("wallet_settle_shared_play_participant", {
       p_booking_id: input.bookingId,
       p_participant_id: input.participantId,
-      p_charge_amount: quote.totalAmount,
+      p_charge_amount: discountedTotal,
       p_cash_amount: cashAmount,
       p_card_amount: cardAmount,
       p_upi_amount: upiAmount,
@@ -1421,7 +1509,16 @@ export async function checkOutSharedPlayParticipant(input: {
       p_idempotency_key: input.idempotencyKey
     });
     if (error) throw error;
-    return { success: true as const, quote, payment: data };
+    if (!data?.already_processed) {
+      await addSharedPlayManualDiscount(input.bookingId, manualDiscount, input.discountKind, input.participantId);
+    }
+    return {
+      success: true as const,
+      quote: { ...quote, totalAmount: discountedTotal, manualDiscount },
+      payment: data,
+      paidAmount: Number(data?.paid_amount || 0),
+      remainingDue: Number(data?.remaining_due || 0),
+    };
   } catch (error: any) {
     console.error("Shared-play participant checkout error:", error);
     return { success: false as const, error: error.message || "Could not check out this participant." };
@@ -1688,7 +1785,7 @@ export async function getHourPackCustomersForSharedPlay(bookingId: string) {
 async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
   const { data: booking, error: bookingError } = await supabaseAdmin
     .from("bookings")
-    .select("customer_phone, customer_name, checked_in_at, shared_play_enabled, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, total_amount, amount_paid, payment_status, booking_device_slots(id, hourly_rate, player_count, included_players, extra_player_charge, duration_hours, slot_total, extra_players_total)")
+    .select("customer_phone, customer_name, checked_in_at, shared_play_enabled, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, manual_discount, total_amount, amount_paid, payment_status, booking_device_slots(id, hourly_rate, player_count, included_players, extra_player_charge, duration_hours, slot_total, extra_players_total)")
     .eq("id", bookingId)
     .maybeSingle();
   if (bookingError) throw bookingError;
@@ -1698,7 +1795,7 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
   if (!slot) return;
   const { data: participants, error: participantsError } = await supabaseAdmin
     .from("shared_play_participants")
-    .select("id, name, customer_id, checked_out_at")
+    .select("id, name, customer_id, checked_out_at, settled_amount, manual_discount_amount")
     .eq("booking_id", bookingId);
   if (participantsError) throw participantsError;
   let playerRows = participants || [];
@@ -1801,7 +1898,7 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
       hourPassDiscount = redeemed.get(bookedPlayer.id)?.amountCovered || 0;
       const totalAmount = Math.max(0, roundToTwo(
         deviceSubtotal + Number(booking.food_subtotal || 0) -
-          otherDiscounts - hourPassDiscount
+          otherDiscounts - hourPassDiscount - Number(booking.manual_discount || 0)
       ));
       const { error: bookingUpdateError } = await supabaseAdmin
         .from("bookings")
@@ -1874,7 +1971,7 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
   );
   const totalDiscount = otherDiscounts + hourPassDiscount;
   const totalAmount = Math.max(0, roundToTwo(
-    sharedDeviceSubtotal + Number(booking.food_subtotal || 0) - totalDiscount
+    sharedDeviceSubtotal + Number(booking.food_subtotal || 0) - totalDiscount - Number(booking.manual_discount || 0)
   ));
   const { error: bookingUpdateError } = await supabaseAdmin
     .from("bookings")
@@ -1940,16 +2037,36 @@ async function saveSharedPlayShares(bookingId: string, endedAt: Date) {
     if (error) throw error;
   }
 
+  const participantIdsForFood = playerRows.map((participant: any) => participant.id);
+  const { data: participantFood, error: participantFoodError } = participantIdsForFood.length > 0
+    ? await supabaseAdmin
+        .from("booking_food_items")
+        .select("participant_id, line_total")
+        .in("participant_id", participantIdsForFood)
+    : { data: [], error: null };
+  if (participantFoodError) throw participantFoodError;
+  const foodByParticipant = new Map<string, number>();
+  for (const item of participantFood || []) {
+    if (!item.participant_id) continue;
+    foodByParticipant.set(item.participant_id, roundToTwo(
+      (foodByParticipant.get(item.participant_id) || 0) + Number(item.line_total || 0)
+    ));
+  }
+
   for (const share of calculation.shares) {
     const player = playerRows.find((row: any) => row.id === share.participantId);
-    if (player?.checked_out_at) continue;
+    const billedAmount = Math.max(0, roundToTwo(
+      share.amount * sharedShareableRatio - (redeemed.get(share.participantId)?.amountCovered || 0)
+    ));
+    const participantUpdate: Record<string, number> = { billed_amount: billedAmount };
+    if (player?.checked_out_at) {
+      participantUpdate.charge_amount = Math.max(0, roundToTwo(
+        billedAmount + (foodByParticipant.get(share.participantId) || 0) - Number(player.manual_discount_amount || 0)
+      ));
+    }
     const { error } = await supabaseAdmin
       .from("shared_play_participants")
-      .update({
-        billed_amount: Math.max(0, roundToTwo(
-          share.amount * sharedShareableRatio - (redeemed.get(share.participantId)?.amountCovered || 0)
-        ))
-      })
+      .update(participantUpdate)
       .eq("id", share.participantId);
     if (error) throw error;
   }
@@ -2633,7 +2750,7 @@ export async function removeFoodItemFromBooking(bookingId: string, foodItemId: s
     const { data: booking, error: bookingError } = await supabaseAdmin
       .from("bookings")
       .select(
-        "status, payment_status, total_amount, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, amount_paid, billed_on_actual_time, completed_at"
+        "status, payment_status, total_amount, device_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, manual_discount, amount_paid, billed_on_actual_time, completed_at"
       )
       .eq("id", bookingId)
       .single();
@@ -4484,10 +4601,13 @@ export async function getBookingBillingDetails(bookingId: string) {
         promo_discount,
         happy_hour_discount,
         hour_pass_discount,
+        manual_discount,
         payment_status,
         status,
+        shared_play_enabled,
         completed_at,
         billed_on_actual_time,
+        shared_play_participants(id, checked_out_at, charge_amount, settled_amount),
         booking_device_slots(
           id,
           duration_hours,
@@ -4537,21 +4657,36 @@ export async function getBookingBillingDetails(bookingId: string) {
     const promoDiscount = Number(data.promo_discount || 0);
     const happyHourDiscount = Number(data.happy_hour_discount || 0);
     const hourPassDiscount = Number(data.hour_pass_discount || 0);
+    const manualDiscount = Number(data.manual_discount || 0);
     const amountPaid = Number(data.amount_paid || 0);
 
-    const correctTotal = Math.max(
+    const componentTotal = Math.max(
       0,
       roundToTwo(
-        deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount - hourPassDiscount
+        deviceSubtotal + foodSubtotal - subscriptionDiscount - promoDiscount - happyHourDiscount - hourPassDiscount - manualDiscount
       )
     );
+    const sharedParticipants = Array.isArray((data as any).shared_play_participants)
+      ? (data as any).shared_play_participants as Array<{ checked_out_at: string | null; charge_amount: number | null }>
+      : [];
+    const sharedParticipantTotal = roundToTwo(sharedParticipants.reduce(
+      (sum, participant) => sum + Number(participant.charge_amount || 0),
+      0
+    ));
+    // Individual shared-play checkout stores the discounted amount on each
+    // participant. The booking-level discount can make the legacy component
+    // total smaller than what was actually charged, so include those saved
+    // participant charges in the booking summary.
+    const correctTotal = data.shared_play_enabled && sharedParticipants.length > 0
+      ? Math.max(componentTotal, sharedParticipantTotal)
+      : componentTotal;
 
     // Calculate unpaid amount
     const unpaidItems = lineItems?.filter((item: any) => !item.is_paid) || [];
     const unpaidAmount = roundToTwo(
       unpaidItems.reduce((sum: number, item: any) => sum + Number(item.line_total), 0)
     );
-    const balanceDue = roundToTwo(correctTotal - amountPaid);
+    const balanceDue = Math.max(0, roundToTwo(correctTotal - amountPaid));
 
     return {
       success: true,
@@ -4574,6 +4709,162 @@ export async function getBookingBillingDetails(bookingId: string) {
   } catch (err: any) {
     console.error("Get billing details error:", err);
     return { success: false, error: err.message, booking: null };
+  }
+}
+
+export async function getOutstandingPayments() {
+  await requireStaff();
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("bookings")
+      .select("id, booking_number, customer_id, customer_name, customer_phone, total_amount, amount_paid, device_subtotal, food_subtotal, subscription_discount, promo_discount, happy_hour_discount, hour_pass_discount, manual_discount, payment_status, status, shared_play_enabled, created_at, updated_at, shared_play_participants(id, name, customer_id, checked_out_at, charge_amount, settled_amount, customer:customers(name, phone))")
+      .neq("payment_status", "refunded")
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+
+    const payments: any[] = [];
+    for (const booking of (data || []) as any[]) {
+      if (booking.status === "cancelled") continue;
+      const totalAmount = Math.max(0, roundToTwo(
+        Number(booking.device_subtotal || 0) + Number(booking.food_subtotal || 0)
+        - Number(booking.subscription_discount || 0) - Number(booking.promo_discount || 0)
+        - Number(booking.happy_hour_discount || 0) - Number(booking.hour_pass_discount || 0)
+        - Number(booking.manual_discount || 0)
+      ));
+      const amountPaid = Number(booking.amount_paid || 0);
+      const balanceDue = roundToTwo(Math.max(0, totalAmount - amountPaid));
+
+      if (booking.shared_play_enabled) {
+        let participantBalanceDue = 0;
+        for (const participant of booking.shared_play_participants || []) {
+          if (!participant.checked_out_at) continue;
+          const participantTotal = Math.max(0, Number(participant.charge_amount || 0));
+          const participantPaid = Math.max(0, Number(participant.settled_amount || 0));
+          const participantDue = roundToTwo(Math.max(0, participantTotal - participantPaid));
+          if (participantDue < 0.01) continue;
+          participantBalanceDue = roundToTwo(participantBalanceDue + participantDue);
+          payments.push({
+            ...booking,
+            payment_target: "participant",
+            participant_id: participant.id,
+            participant_name: participant.name,
+            customer_name: participant.customer?.name || participant.name,
+            customer_phone: participant.customer?.phone || null,
+            total_amount: participantTotal,
+            amount_paid: participantPaid,
+            balance_due: participantDue,
+          });
+        }
+
+        const unallocatedDue = roundToTwo(Math.max(0, balanceDue - participantBalanceDue));
+        if (
+          unallocatedDue >= 0.01 && booking.status === "completed" &&
+          isBillableBooking({ status: booking.status, total: totalAmount })
+        ) {
+          payments.push({
+            ...booking,
+            payment_target: "booking",
+            participant_id: null,
+            participant_name: null,
+            total_amount: totalAmount,
+            amount_paid: amountPaid,
+            balance_due: unallocatedDue,
+          });
+        }
+        continue;
+      }
+
+      if (
+        balanceDue < 0.01 ||
+        !isBillableBooking({ status: booking.status, total: totalAmount })
+      ) continue;
+      payments.push({
+        ...booking,
+        payment_target: "booking",
+        participant_id: null,
+        participant_name: null,
+        total_amount: totalAmount,
+        amount_paid: amountPaid,
+        balance_due: balanceDue,
+      });
+    }
+
+    return { success: true as const, payments };
+  } catch (error: any) {
+    return { success: false as const, error: error.message || "Could not load outstanding payments.", payments: [] };
+  }
+}
+
+export async function markSharedPlayParticipantBalanceAsPaid(
+  bookingId: string,
+  participantId: string,
+  paymentSplit: { cashAmount: number; cardAmount: number; upiAmount: number; idempotencyKey: string }
+) {
+  await requireStaff();
+  try {
+    if (!paymentSplit.idempotencyKey || paymentSplit.idempotencyKey.length < 12) {
+      throw new Error("Payment request expired. Reopen the payment dialog.");
+    }
+    const amounts = [paymentSplit.cashAmount, paymentSplit.cardAmount, paymentSplit.upiAmount].map(Number);
+    if (amounts.some((amount) => !Number.isFinite(amount) || amount < 0)) {
+      throw new Error("Enter valid non-negative payment amounts.");
+    }
+    const { data: participant, error: participantError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .select("id, checked_out_at, charge_amount, settled_amount")
+      .eq("id", participantId)
+      .eq("booking_id", bookingId)
+      .maybeSingle();
+    if (participantError) throw participantError;
+    if (!participant || !participant.checked_out_at) {
+      throw new Error("This participant has not checked out yet.");
+    }
+
+    const chargeAmount = roundToTwo(Number(participant.charge_amount || 0));
+    const balanceDue = roundToTwo(Math.max(0, chargeAmount - Number(participant.settled_amount || 0)));
+    const paymentAmount = roundToTwo(amounts.reduce((sum, amount) => sum + amount, 0));
+    if (paymentAmount <= 0 || paymentAmount > balanceDue + 0.01) {
+      throw new Error(`Payment must be greater than zero and no more than ₹${balanceDue.toFixed(2)}.`);
+    }
+
+    const { data, error } = await supabaseAdmin.rpc("wallet_settle_shared_play_participant", {
+      p_booking_id: bookingId,
+      p_participant_id: participantId,
+      p_charge_amount: chargeAmount,
+      p_cash_amount: amounts[0],
+      p_card_amount: amounts[1],
+      p_upi_amount: amounts[2],
+      p_use_wallet: false,
+      p_checkout_at: new Date().toISOString(),
+      p_idempotency_key: paymentSplit.idempotencyKey,
+    });
+    if (error) throw error;
+    return {
+      success: true as const,
+      paidAmount: Number(data?.paid_amount || 0),
+      remainingDue: Number(data?.remaining_due || 0),
+    };
+  } catch (error: any) {
+    console.error("Error recording shared-play participant balance:", error);
+    return { success: false as const, error: error.message || "Could not record this participant payment." };
+  }
+}
+
+export async function setBookingManualDiscount(bookingId: string, kind: "value" | "percentage", value: number) {
+  await requireStaff();
+  if (!Number.isFinite(value) || value < 0 || (kind === "percentage" && value > 100)) {
+    return { success: false, error: "Enter a valid non-negative discount." };
+  }
+  try {
+    const { error } = await supabaseAdmin.rpc("set_booking_manual_discount", {
+      p_booking_id: bookingId,
+      p_kind: kind,
+      p_value: value
+    });
+    if (error) throw error;
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
   }
 }
 

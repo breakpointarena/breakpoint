@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Calendar, Monitor, Utensils, Tag,
   PartyPopper, BarChart2, LogOut, ChevronLeft,
-  User2Icon, Crown, Clock, Loader2, WalletCards
+  User2Icon, Crown, Clock, Loader2, WalletCards, ReceiptIndianRupee
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -18,6 +18,7 @@ import { getUserRole, type UserRole } from "@/lib/auth/roles";
 const navItems = [
   { name: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
   { name: "Bookings", href: "/admin/bookings", icon: Calendar },
+  { name: "Due Payments", href: "/admin/due-payments", icon: ReceiptIndianRupee },
   { name: "Timeline", href: "/admin/timeline", icon: Clock },
   { name: "Devices", href: "/admin/devices", icon: Monitor },
   { name: "Food", href: "/admin/food", icon: Utensils },

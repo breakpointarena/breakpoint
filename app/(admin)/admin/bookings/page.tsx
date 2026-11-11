@@ -19,7 +19,7 @@ import { RevealAmount } from "@/components/admin/dashboard/RevealAmount";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { CheckoutModal } from "@/components/admin/bookings/CheckoutModal";
 import { CheckOutSessionDialog, type CheckOutTarget } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkInBookingOnStation, getBookingStationOptions, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, cancelBooking, markBookingRefunded, deleteBooking, type BookingFilters } from "./actions";
+import { getAllBookings, getAttentionBookings, getBookingStats, checkInBooking, checkInBookingOnStation, getBookingStationOptions, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, getBookingBillingDetails, markBookingAsPaid, setBookingManualDiscount, cancelBooking, markBookingRefunded, deleteBooking, type BookingFilters } from "./actions";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { Search, Filter, Calendar, CalendarDays, IndianRupee, Users, CheckCircle2, Clock, Loader2, Eye, ReceiptIndianRupee, PlusCircle, UserCheck, LogOut, UtensilsCrossed, ChevronDown, ChevronRight, Link2, CreditCard, Grid3x3, List, AlertCircle, RefreshCw, ShieldAlert, AlertTriangle, Ban, Undo2, LogIn, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -150,6 +150,39 @@ export default function AdminBookingsPage() {
     upiAmount: 0,
     walletAmount: 0
   });
+  const [checkoutDiscountKind, setCheckoutDiscountKind] = useState<"value" | "percentage">("value");
+  const [checkoutDiscountValue, setCheckoutDiscountValue] = useState("");
+  const [isApplyingCheckoutDiscount, setIsApplyingCheckoutDiscount] = useState(false);
+
+  const handleApplyCheckoutDiscount = async () => {
+    if (!pendingPaymentModal.bookingId || isApplyingCheckoutDiscount) return;
+    const value = Number(checkoutDiscountValue || 0);
+    if (!Number.isFinite(value) || value < 0 || (checkoutDiscountKind === "percentage" && value > 100)) {
+      toast.error(checkoutDiscountKind === "percentage" ? "Percentage must be from 0 to 100" : "Enter a valid discount amount");
+      return;
+    }
+    setIsApplyingCheckoutDiscount(true);
+    try {
+      const result = await setBookingManualDiscount(pendingPaymentModal.bookingId, checkoutDiscountKind, value);
+      if (!result.success) {
+        toast.error("Could not apply discount", { description: result.error });
+        return;
+      }
+      const billingResult = await getBookingBillingDetails(pendingPaymentModal.bookingId);
+      if (!billingResult.success || !billingResult.booking) {
+        toast.error("Discount was saved, but the updated balance could not be loaded");
+        return;
+      }
+      const balanceDue = Number(billingResult.booking.balance_due || 0);
+      setPendingPaymentModal((current) => ({ ...current, balanceDue }));
+      setCheckoutDiscountValue("");
+      toast.success("Discount applied", { description: `New balance: ₹${balanceDue.toFixed(2)}` });
+    } catch (error) {
+      toast.error("Could not apply discount", { description: error instanceof Error ? error.message : "Please try again." });
+    } finally {
+      setIsApplyingCheckoutDiscount(false);
+    }
+  };
 
   // Initialize payment split when modal opens
   useEffect(() => {
@@ -168,8 +201,13 @@ export default function AdminBookingsPage() {
         upiAmount: pendingPaymentModal.balanceDue,
         walletAmount: 0
       });
+    } else if (pendingPaymentModal.open) {
+      setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: 0, walletAmount: 0 });
     }
   }, [pendingPaymentModal.open, pendingPaymentModal.balanceDue]);
+
+  const pendingPaymentSplitTotal = paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount;
+  const pendingPaymentSplitValid = pendingPaymentSplitTotal > 0 && pendingPaymentSplitTotal <= pendingPaymentModal.balanceDue + 0.01;
 
   // --- Date range validation -------------------------------------------------
   // Recomputed every render so the pickers stay in step with each other: the
@@ -819,11 +857,29 @@ export default function AdminBookingsPage() {
   const handleMarkAsPaidAndProceed = async () => {
     if (!pendingPaymentModal.bookingId) return;
 
+    if (pendingPaymentModal.balanceDue <= 0.01) {
+      const bookingIdToProcess = pendingPaymentModal.bookingId;
+      const isCheckoutAttempt = pendingPaymentModal.isCheckout;
+      setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false, walletBalance: 0, paymentRequestId: "" });
+      if (!isCheckoutAttempt) {
+        setCheckoutBookingId(bookingIdToProcess);
+        setOpenCheckoutModal(true);
+        return;
+      }
+      startTransition(async () => {
+        const result = await checkOutBooking(bookingIdToProcess);
+        if (result.success) toast.success("Customer checked out successfully");
+        else toast.error("Check-out failed", { description: result.error });
+        refreshAll();
+      });
+      return;
+    }
+
     // Validate split amounts
-    const totalSplit = paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount;
-    if (Math.abs(totalSplit - pendingPaymentModal.balanceDue) > 0.01) {
+    const totalSplit = pendingPaymentSplitTotal;
+    if (totalSplit <= 0 || totalSplit - pendingPaymentModal.balanceDue > 0.01) {
       toast.error("Invalid payment split", {
-        description: `Total split (₹${totalSplit.toFixed(2)}) must equal balance due (₹${pendingPaymentModal.balanceDue.toFixed(2)})`
+        description: `Enter a payment greater than ₹0 and no more than the balance due of ₹${pendingPaymentModal.balanceDue.toFixed(2)}`
       });
       return;
     }
@@ -844,8 +900,9 @@ export default function AdminBookingsPage() {
         if (paymentSplit.cardAmount > 0) methods.push(`Card: ₹${paymentSplit.cardAmount}`);
         if (paymentSplit.walletAmount > 0) methods.push(`Wallet: ₹${paymentSplit.walletAmount}`);
 
-        toast.success("Payment marked as paid", {
-          description: methods.join(', ')
+        const remaining = Math.max(0, pendingPaymentModal.balanceDue - totalSplit);
+        toast.success(remaining > 0.01 ? "Partial payment recorded" : "Payment marked as paid", {
+          description: `${methods.join(', ')}${remaining > 0.01 ? ` · ₹${remaining.toFixed(2)} still due` : ""}`
         });
         setPendingPaymentModal({ open: false, bookingId: null, balanceDue: 0, bookingNumber: "", isCheckout: false, walletBalance: 0, paymentRequestId: "" });
         setPaymentSplit({ cashAmount: 0, cardAmount: 0, upiAmount: 0, walletAmount: 0 }); // Reset
@@ -1867,7 +1924,30 @@ export default function AdminBookingsPage() {
               <p className="text-4xl font-black text-amber-400">
                 ₹{pendingPaymentModal.balanceDue.toFixed(2)}
               </p>
-              <p className="text-xs text-amber-300/60 mt-2">This amount must be paid before checkout</p>
+              <p className="text-xs text-amber-300/60 mt-2">You can record a partial payment; the remaining balance will appear in Due Payments.</p>
+            </div>
+
+            {/* Manual discount is applied before the split and payment are recorded. */}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-2">
+              <Label htmlFor="checkout-manual-discount" className="text-xs font-black uppercase text-secondary-content">Discount</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="checkout-manual-discount"
+                  type="number"
+                  min="0"
+                  max={checkoutDiscountKind === "percentage" ? "100" : undefined}
+                  step="0.01"
+                  value={checkoutDiscountValue}
+                  onChange={(event) => setCheckoutDiscountValue(event.target.value)}
+                  placeholder="Enter amount"
+                  className="min-w-0 bg-zinc-800 border-zinc-700 text-white h-10"
+                />
+                <Button type="button" variant="outline" disabled={isPending || isApplyingCheckoutDiscount} onClick={() => setCheckoutDiscountKind(checkoutDiscountKind === "value" ? "percentage" : "value")} className="h-10 border-zinc-700 text-white whitespace-nowrap">
+                  {checkoutDiscountKind === "value" ? "₹ Value" : "% Percent"}
+                </Button>
+                <Button type="button" disabled={isPending || isApplyingCheckoutDiscount} onClick={handleApplyCheckoutDiscount} className="h-10">{isApplyingCheckoutDiscount ? <Loader2 className="h-4 w-4 animate-spin" /> : "Apply"}</Button>
+              </div>
+              {checkoutDiscountKind === "percentage" && <p className="text-xs text-zinc-500">Enter a percentage from 0 to 100.</p>}
             </div>
 
             {/* Warning Message */}
@@ -1961,14 +2041,14 @@ export default function AdminBookingsPage() {
               <div className="pt-2 border-t border-zinc-800">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-zinc-400">Total Split:</span>
-                  <span className={`text-sm font-black ${Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount) - pendingPaymentModal.balanceDue) < 0.01 ? 'text-green-400' : 'text-red-400'}`}>
+                  <span className={`text-sm font-black ${pendingPaymentSplitValid ? 'text-green-400' : 'text-red-400'}`}>
                     ₹{(paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount).toFixed(2)}
                   </span>
                 </div>
-                {Math.abs((paymentSplit.cashAmount + paymentSplit.cardAmount + paymentSplit.upiAmount + paymentSplit.walletAmount) - pendingPaymentModal.balanceDue) >= 0.01 && (
-                  <p className="text-xs text-red-400 mt-1">
-                    ⚠️ Total must equal ₹{pendingPaymentModal.balanceDue.toFixed(2)}
-                  </p>
+                {pendingPaymentSplitValid ? (
+                  <p className="mt-1 text-xs text-secondary-content">Remaining after this payment: ₹{Math.max(0, pendingPaymentModal.balanceDue - pendingPaymentSplitTotal).toFixed(2)}</p>
+                ) : (
+                  <p className="text-xs text-red-400 mt-1">Enter a payment up to ₹{pendingPaymentModal.balanceDue.toFixed(2)}</p>
                 )}
               </div>
 
@@ -2036,7 +2116,9 @@ export default function AdminBookingsPage() {
               ) : (
                 <CheckCircle2 className="h-4 w-4 mr-2" />
               )}
-              Mark as Paid
+              {(() => {
+                return pendingPaymentSplitTotal + 0.01 < pendingPaymentModal.balanceDue ? "Mark as Partially Paid" : "Mark as Paid";
+              })()}
             </Button>
           </DialogFooter>
         </DialogContent>
