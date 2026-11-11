@@ -4741,7 +4741,9 @@ export async function getOutstandingPayments() {
           const participantTotal = Math.max(0, Number(participant.charge_amount || 0));
           const participantPaid = Math.max(0, Number(participant.settled_amount || 0));
           const participantDue = roundToTwo(Math.max(0, participantTotal - participantPaid));
-          if (participantDue < 0.01) continue;
+          // This is the partial-payments list, not a queue of every bill that
+          // has not been paid yet. A balance appears after a payment is recorded.
+          if (participantPaid < 0.01 || participantDue < 0.01) continue;
           participantBalanceDue = roundToTwo(participantBalanceDue + participantDue);
           payments.push({
             ...booking,
@@ -4758,7 +4760,7 @@ export async function getOutstandingPayments() {
 
         const unallocatedDue = roundToTwo(Math.max(0, balanceDue - participantBalanceDue));
         if (
-          unallocatedDue >= 0.01 && booking.status === "completed" &&
+          amountPaid >= 0.01 && unallocatedDue >= 0.01 && booking.status === "completed" &&
           isBillableBooking({ status: booking.status, total: totalAmount })
         ) {
           payments.push({
@@ -4775,7 +4777,7 @@ export async function getOutstandingPayments() {
       }
 
       if (
-        balanceDue < 0.01 ||
+        amountPaid < 0.01 || balanceDue < 0.01 ||
         !isBillableBooking({ status: booking.status, total: totalAmount })
       ) continue;
       payments.push({

@@ -252,24 +252,26 @@ export function CheckoutModal({ bookingId, isOpen, onClose, onSuccess }: Checkou
               </h3>
 
               <div className="space-y-2 text-sm">
-                <div className="flex items-center gap-2 rounded-lg border border-zinc-800 p-3">
-                  <Label htmlFor="checkout-discount" className="sr-only">Discount</Label>
-                  <input
-                    id="checkout-discount"
-                    type="number"
-                    min="0"
-                    max={discountKind === "percentage" ? "100" : undefined}
-                    step="0.01"
-                    value={discountValue}
-                    onChange={(event) => setDiscountValue(event.target.value)}
-                    placeholder={Number(billing.manual_discount || 0) ? Number(billing.manual_discount).toFixed(2) : "Discount"}
-                    className="h-10 min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-800 px-3 text-white"
-                  />
-                  <Button type="button" variant="outline" disabled={isProcessing} onClick={() => setDiscountKind(discountKind === "value" ? "percentage" : "value")} className="h-10 border-zinc-700 text-white">
-                    {discountKind === "value" ? "₹ Value" : "% Percent"}
-                  </Button>
-                  <Button type="button" disabled={isProcessing} onClick={handleApplyDiscount} className="h-10">Apply</Button>
-                </div>
+                {!isPaid && (
+                  <div className="flex items-center gap-2 rounded-lg border border-zinc-800 p-3">
+                    <Label htmlFor="checkout-discount" className="sr-only">Discount</Label>
+                    <input
+                      id="checkout-discount"
+                      type="number"
+                      min="0"
+                      max={discountKind === "percentage" ? "100" : undefined}
+                      step="0.01"
+                      value={discountValue}
+                      onChange={(event) => setDiscountValue(event.target.value)}
+                      placeholder={Number(billing.manual_discount || 0) ? Number(billing.manual_discount).toFixed(2) : "Discount"}
+                      className="h-10 min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-800 px-3 text-white"
+                    />
+                    <Button type="button" variant="outline" disabled={isProcessing} onClick={() => setDiscountKind(discountKind === "value" ? "percentage" : "value")} className="h-10 border-zinc-700 text-white">
+                      {discountKind === "value" ? "₹ Value" : "% Percent"}
+                    </Button>
+                    <Button type="button" disabled={isProcessing} onClick={handleApplyDiscount} className="h-10">Apply</Button>
+                  </div>
+                )}
                 {Number(billing.manual_discount || 0) > 0 && (
                   <p className="text-right text-xs text-green-400">Manual discount: −₹{Number(billing.manual_discount).toFixed(2)}</p>
                 )}
