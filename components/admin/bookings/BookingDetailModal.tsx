@@ -119,6 +119,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [checkoutAllQuotes, setCheckoutAllQuotes] = useState<any[]>([]);
   const [checkoutAllOpen, setCheckoutAllOpen] = useState(false);
   const [checkoutAllWalletIds, setCheckoutAllWalletIds] = useState<string[]>([]);
+  const [checkoutAllPaymentMethods, setCheckoutAllPaymentMethods] = useState<Record<string, "cash" | "upi" | "card">>({});
   const [checkoutAllCashAmount, setCheckoutAllCashAmount] = useState("0");
   const [checkoutAllUpiAmount, setCheckoutAllUpiAmount] = useState("0");
   const [checkoutAllCardAmount, setCheckoutAllCardAmount] = useState("0");
@@ -446,6 +447,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
     setCheckoutAllQuotes(result.quotes);
     setCheckoutAllWalletIds([]);
+    setCheckoutAllPaymentMethods(Object.fromEntries(
+      result.quotes.map((quote: any) => [quote.participantId, "upi"])
+    ));
     setCheckoutAllDiscountKind("value");
     setCheckoutAllDiscountValue("");
     const due = result.quotes.reduce((sum: number, quote: any) => sum + Number(quote.totalAmount || 0), 0);
@@ -494,6 +498,93 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     }
     await loadBookingDetails();
     onUpdate?.();
+  };
+
+  const handleMarkCheckoutAllParticipantPaid = async (quote: any) => {
+    if (!bookingId || participantCheckoutLoading) return;
+    const method = checkoutAllPaymentMethods[quote.participantId];
+    const useWallet = checkoutAllWalletIds.includes(quote.participantId);
+    const walletAmount = useWallet
+      ? Math.min(Number(quote.totalAmount || 0), Number(quote.walletBalance || 0))
+      : 0;
+    const externalDue = roundToTwo(Math.max(0, Number(quote.totalAmount || 0) - walletAmount));
+    if (externalDue > 0 && !method) {
+      toast.error("Choose how this participant paid first.");
+      return;
+    }
+
+    setParticipantCheckoutLoading(true);
+    const result = await checkOutSharedPlayParticipant({
+      bookingId,
+      participantId: quote.participantId,
+      useWallet,
+      cashAmount: method === "cash" ? externalDue : 0,
+      upiAmount: method === "upi" ? externalDue : 0,
+      cardAmount: method === "card" ? externalDue : 0,
+      idempotencyKey: crypto.randomUUID(),
+      discountKind: "value",
+      discountValue: Number(quote.manualDiscount || 0),
+    });
+    if (!result.success) {
+      setParticipantCheckoutLoading(false);
+      toast.error("Could not mark this participant as paid", { description: result.error });
+      return;
+    }
+    if (Number(result.remainingDue || 0) >= 0.01) {
+      setParticipantCheckoutLoading(false);
+      toast.error("Participant still has a balance due", {
+        description: `Remaining ₹${Number(result.remainingDue).toFixed(2)}.`,
+      });
+      return;
+    }
+
+    setCheckoutAllWalletIds((current) => current.filter((id) => id !== quote.participantId));
+    setCheckoutAllPaymentMethods((current) => {
+      const next = { ...current };
+      delete next[quote.participantId];
+      return next;
+    });
+    if (checkoutAllDiscountKind === "value") {
+      setCheckoutAllDiscountValue(Math.max(0, checkoutAllDiscountNumber - Number(quote.manualDiscount || 0)).toFixed(2));
+    }
+    if (method === "cash") {
+      setCheckoutAllCashAmount((current) => Math.max(0, Number(current || 0) - externalDue).toFixed(2));
+    } else if (method === "card") {
+      setCheckoutAllCardAmount((current) => Math.max(0, Number(current || 0) - externalDue).toFixed(2));
+    }
+
+    const remainingQuotes = checkoutAllQuotes.length - 1;
+    if (remainingQuotes === 0) {
+      setCheckoutAllOpen(false);
+      setCheckoutAllQuotes([]);
+      const closeResult = booking?.billed_on_actual_time
+        ? await checkOutWalkInSession(bookingId)
+        : await checkOutBooking(bookingId);
+      if (!closeResult.success) {
+        toast.error("Payment recorded, but booking could not be closed", { description: closeResult.error });
+      } else {
+        toast.success("Participant marked as paid", { description: "Everyone has now checked out." });
+      }
+      await loadBookingDetails();
+      onUpdate?.();
+      setParticipantCheckoutLoading(false);
+      return;
+    }
+
+    const [quotesResult] = await Promise.all([
+      getSharedPlayCheckoutAllQuotes(bookingId),
+      loadBookingDetails(),
+    ]);
+    if (quotesResult.success) {
+      setCheckoutAllQuotes(quotesResult.quotes);
+    } else {
+      setCheckoutAllQuotes((current) => current.filter((row) => row.participantId !== quote.participantId));
+    }
+    toast.success("Participant marked as paid", {
+      description: `${quote.participantName} paid ₹${Number(result.paidAmount || 0).toFixed(2)}.`,
+    });
+    onUpdate?.();
+    setParticipantCheckoutLoading(false);
   };
 
   const handleConfirmParticipantCheckout = async () => {
@@ -2880,6 +2971,44 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                       <span>₹{Number(item.line_total).toFixed(2)}</span>
                     </div>
                   ))}
+                  <div className="mt-3 flex items-center gap-2 border-t border-[#27272a] pt-3">
+                    <div role="group" aria-label={`Payment method for ${quote.participantName}`} className="flex min-w-0 flex-1 gap-1">
+                      {(["cash", "upi", "card"] as const).map((method) => {
+                        const selected = checkoutAllPaymentMethods[quote.participantId] === method;
+                        return (
+                          <Button
+                            key={method}
+                            type="button"
+                            variant={selected ? "default" : "outline"}
+                            disabled={participantCheckoutLoading || remaining <= 0}
+                            aria-pressed={selected}
+                            onClick={() => setCheckoutAllPaymentMethods((current) => ({
+                              ...current,
+                              [quote.participantId]: method,
+                            }))}
+                            className={`h-9 flex-1 px-2 text-xs uppercase ${selected
+                              ? "border-2 border-primary text-black hover:glow-primary-hover"
+                              : "border-zinc-700 text-secondary-content hover:bg-zinc-800 hover:text-white"}`}
+                          >
+                            {method}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={participantCheckoutLoading || (remaining > 0 && !checkoutAllPaymentMethods[quote.participantId])}
+                      onClick={() => void handleMarkCheckoutAllParticipantPaid(quote)}
+                      aria-label={`Mark ${quote.participantName} as paid`}
+                      className="h-9 shrink-0 border-emerald-700 px-3 text-emerald-300 hover:bg-emerald-950"
+                    >
+                      {participantCheckoutLoading
+                        ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                        : <CheckCircle2 className="mr-1 h-3.5 w-3.5" />}
+                      Mark paid
+                    </Button>
+                  </div>
                   <label className="mt-3 flex w-full min-w-0 cursor-pointer flex-wrap items-start gap-x-2 gap-y-1 border-t border-[#27272a] pt-3">
                     <input
                       type="checkbox"
