@@ -35,7 +35,17 @@ export default async function EventDetailPage({ params }: { params: Promise<{ sl
             <div className="relative flex items-center gap-2 text-xs font-black uppercase tracking-widest text-primary">{event.event_type === 'tournament' ? <Trophy className="h-4 w-4" /> : <Gamepad2 className="h-4 w-4" />}{typeLabel}</div>
             <h1 className="relative mt-4 text-3xl font-black tracking-tight text-white sm:text-5xl">{event.title}</h1>
             <p className="relative mt-4 max-w-2xl whitespace-pre-line text-sm leading-7 text-secondary-content sm:text-base">{event.description || 'Join us for an event at Breakpoint Arena.'}</p>
-            {event.public_prize_description && <p className="relative mt-5 flex items-start gap-2 rounded-xl border border-primary/20 bg-black/20 p-4 text-sm text-primary"><Trophy className="mt-0.5 h-4 w-4 shrink-0" />{event.public_prize_description}</p>}
+            {(event.first_place_prize_description || event.second_place_prize_description || event.third_place_prize_description || event.public_prize_description) && (
+              <div className="relative mt-5 rounded-xl border border-primary/20 bg-black/20 p-4">
+                <h2 className="flex items-center gap-2 text-sm font-black text-primary"><Trophy className="h-4 w-4" />Prizes</h2>
+                {event.public_prize_description && <p className="mt-3 text-sm text-secondary-content">{event.public_prize_description}</p>}
+                <ol className="mt-3 space-y-2 text-sm text-white">
+                  {event.first_place_prize_description && <li><span className="mr-2 text-primary">1st place</span>{event.first_place_prize_description}</li>}
+                  {event.second_place_prize_description && <li><span className="mr-2 text-primary">2nd place</span>{event.second_place_prize_description}</li>}
+                  {event.third_place_prize_description && <li><span className="mr-2 text-primary">3rd place</span>{event.third_place_prize_description}</li>}
+                </ol>
+              </div>
+            )}
           </section>
 
           <Card className="border-white/10 bg-[#111114]/90 p-5 sm:p-7">

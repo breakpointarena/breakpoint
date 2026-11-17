@@ -74,7 +74,15 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
           <div className="space-y-2"><Label>Entry type</Label><select name="registration_mode" defaultValue={event.registration_mode} className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white"><option value="individual">Individual</option><option value="team">Team</option></select></div>
           <div className="space-y-2"><Label>Team size</Label><Input name="team_size" type="number" min="1" max="20" defaultValue={event.team_size} /></div>
           <div className="space-y-2 md:col-span-2 xl:col-span-3"><Label>Description</Label><textarea name="description" rows={4} defaultValue={event.description} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" /></div>
-          <div className="space-y-2 md:col-span-2 xl:col-span-3"><Label>Public prize description (optional)</Label><Input name="public_prize_description" defaultValue={event.public_prize_description || ''} placeholder="Prizes for the top finishers" /><p className="text-xs text-secondary-content">Prize costs remain private to admin reports.</p></div>
+          <div className="space-y-2 md:col-span-2 xl:col-span-3">
+            <Label>Prizes shown publicly (optional)</Label>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Input name="first_place_prize_description" defaultValue={event.first_place_prize_description || ''} placeholder="1st place prize" />
+              <Input name="second_place_prize_description" defaultValue={event.second_place_prize_description || ''} placeholder="2nd place prize" />
+              <Input name="third_place_prize_description" defaultValue={event.third_place_prize_description || ''} placeholder="3rd place prize" />
+            </div>
+            <p className="text-xs text-secondary-content">Prize descriptions appear on the event page. Record payout costs separately in admin-only prize expenses.</p>
+          </div>
           <div className="md:col-span-2 xl:col-span-3"><Button type="submit">Save event</Button></div>
         </form>
       </Card>

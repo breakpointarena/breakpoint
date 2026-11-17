@@ -62,7 +62,9 @@ function eventFields(form: FormData) {
     capacity,
     registration_mode: text(form, 'registration_mode') === 'team' ? 'team' : 'individual',
     team_size: teamSize,
-    public_prize_description: nullable(form, 'public_prize_description'),
+    first_place_prize_description: nullable(form, 'first_place_prize_description'),
+    second_place_prize_description: nullable(form, 'second_place_prize_description'),
+    third_place_prize_description: nullable(form, 'third_place_prize_description'),
   }
 }
 
