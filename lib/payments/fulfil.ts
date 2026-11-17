@@ -4,6 +4,7 @@ import type {
   FoodOrderQuote,
   SubscriptionQuote,
   WalletTopUpQuote,
+  EventRegistrationQuote,
 } from './quote'
 import { addMonthsToDateString, arenaToday } from '@/lib/utils/dates'
 import { perExtraPlayerCharge } from './money'
@@ -32,19 +33,62 @@ export type FulfilResult =
       subscriptionId?: string
       planName?: string
       walletTransactionId?: string
+      eventRegistrationId?: string
+      registrationCode?: string
     }
   | { success: false; error: string; refundRequired: boolean }
 
 /** Dispatches a stored quote to the right fulfilment routine. */
 export async function fulfilQuote(
-  purpose: 'device_booking' | 'food_order' | 'subscription' | 'wallet_top_up',
+  purpose: 'device_booking' | 'food_order' | 'subscription' | 'wallet_top_up' | 'event_registration',
   quote: unknown,
   payment: PaymentReference
 ): Promise<FulfilResult> {
   if (purpose === 'device_booking') return fulfilDeviceBooking(quote as DeviceBookingQuote, payment)
   if (purpose === 'subscription') return fulfilSubscription(quote as SubscriptionQuote, payment)
   if (purpose === 'wallet_top_up') return fulfilWalletTopUp(quote as WalletTopUpQuote, payment)
+  if (purpose === 'event_registration') return fulfilEventRegistration(quote as EventRegistrationQuote, payment)
   return fulfilFoodOrder(quote as FoodOrderQuote, payment)
+}
+
+async function fulfilEventRegistration(
+  quote: EventRegistrationQuote,
+  payment: PaymentReference
+): Promise<FulfilResult> {
+  if (
+    quote.kind !== 'event_registration' ||
+    !quote.registrationId ||
+    !quote.eventId ||
+    quote.totalAmount <= 0 ||
+    !payment.razorpayOrderId ||
+    !payment.razorpayPaymentId
+  ) {
+    return { success: false, error: 'Event registration payment details are invalid.', refundRequired: true }
+  }
+
+  const { data, error } = await supabaseAdmin.rpc('complete_event_registration_payment', {
+    p_registration_id: quote.registrationId,
+    p_event_id: quote.eventId,
+    p_razorpay_order_id: payment.razorpayOrderId,
+    p_razorpay_payment_id: payment.razorpayPaymentId,
+    p_amount: quote.totalAmount,
+  })
+
+  const registration = Array.isArray(data) ? data[0] : data
+  if (error || !registration?.registration_id || !registration?.registration_code) {
+    console.error('Could not complete paid event registration:', error)
+    return {
+      success: false,
+      error: 'We could not confirm your event registration. Your payment is being refunded.',
+      refundRequired: true,
+    }
+  }
+
+  return {
+    success: true,
+    eventRegistrationId: registration.registration_id,
+    registrationCode: registration.registration_code,
+  }
 }
 
 async function fulfilWalletTopUp(

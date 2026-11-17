@@ -129,6 +129,15 @@ export interface WalletTopUpQuote {
   totalAmount: number
 }
 
+export interface EventRegistrationQuote {
+  kind: 'event_registration'
+  registrationId: string
+  eventId: string
+  eventTitle: string
+  registrationCode: string
+  totalAmount: number
+}
+
 export type QuoteResult<T> =
   | { success: true; quote: T }
   | { success: false; error: string }

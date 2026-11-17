@@ -16,7 +16,8 @@ const navLinks = [
   { label: "Browse Plans", path: "/subscription" },
   { label: "Wallet", path: "/wallet" },
   { label: "My Bookings", path: "/retrieve" },
-  { label: "FOOD MENU", path: "/food" }
+  { label: "FOOD MENU", path: "/food" },
+  { label: "EVENTS", path: "/events" },
 ];
 
 // Framer Motion variants

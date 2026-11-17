@@ -13,6 +13,7 @@ export default function Footer() {
     { label: 'Wallet', path: '/wallet' },
     { label: 'Retrieve Booking', path: '/retrieve' },
     { label: 'Food Menu', path: '/food' },
+    { label: 'Events', path: '/events' },
     { label: 'Book Slot', path: '/booking' },
   ];
 

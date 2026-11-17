@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Calendar } from "@/components/ui/calendar";
 import {
   IndianRupee, TrendingUp, ShoppingBag, Gamepad2,
-  UtensilsCrossed, BarChart3, CalendarDays, CalendarRange, ReceiptIndianRupee, ShieldAlert, WalletCards, BadgePercent
+  UtensilsCrossed, BarChart3, CalendarDays, CalendarRange, ReceiptIndianRupee, ShieldAlert, WalletCards, BadgePercent, Trophy
 , Ban } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -536,7 +536,7 @@ export default function AdminReportsPage() {
           {activeTab === "overview" && overviewData && (
             <div className="space-y-6">
               {/* Summary Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4">
                 <Card className="bg-gradient-to-br from-green-500/10 to-green-600/5 border-green-500/20 p-5">
                   <div className="flex items-start justify-between">
                     <div>
@@ -598,6 +598,16 @@ export default function AdminReportsPage() {
                       </h3>
                     </div>
                     <div className="rounded-lg bg-primary/10 p-2"><WalletCards className="h-5 w-5 text-primary" /></div>
+                  </div>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border-emerald-500/20 p-5">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="mb-1 text-xs font-black uppercase text-emerald-400/80">Event Revenue</p>
+                      <h3 className="text-2xl font-black text-white"><CurrencyCountUp amount={overviewData.eventRevenue || 0} duration={1300} /></h3>
+                    </div>
+                    <div className="rounded-lg bg-emerald-500/10 p-2"><Trophy className="h-5 w-5 text-emerald-400" /></div>
                   </div>
                 </Card>
 
@@ -1193,6 +1203,13 @@ export default function AdminReportsPage() {
                         />
                       </div>
                     </div>
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs text-data-placeholder">Events</span>
+                        <span className="text-sm font-black text-emerald-400"><CountUp end={revenueData.summary.eventRevenuePercentage || 0} duration={1000} decimals={1} suffix="%" /></span>
+                      </div>
+                      <div className="w-full rounded-full bg-zinc-900 h-2"><div className="h-2 rounded-full bg-emerald-500" style={{ width: `${revenueData.summary.eventRevenuePercentage || 0}%` }} /></div>
+                    </div>
                   </div>
                 </Card>
               </div>
@@ -1209,13 +1226,13 @@ export default function AdminReportsPage() {
                       className="p-4 bg-[var(--background)] border border-[#27272a] rounded-lg"
                     >
                       <p className="text-xs font-black uppercase text-white mb-2">
-                        {source.source === "wallet_online" ? "Online Wallet Top-Ups" : source.source === "wallet_admin" ? "Admin Wallet Sales" : source.source === "walk-in" ? "Walk-In Booking" : "Pre-Booking"}
+                        {source.source === "event_registration" ? "Event Registrations" : source.source === "wallet_online" ? "Online Wallet Top-Ups" : source.source === "wallet_admin" ? "Admin Wallet Sales" : source.source === "walk-in" ? "Walk-In Booking" : "Pre-Booking"}
                       </p>
                       <h4 className="text-xl font-black text-primary mb-1">
                         <CurrencyCountUp amount={source.totalRevenue} duration={1200} />
                       </h4>
                       <p className="text-xs text-data-placeholder">
-                        <CountUp end={source.transactionCount || source.bookingCount} duration={800} /> {source.source.startsWith("wallet_") ? "sales" : "bookings"}
+                        <CountUp end={source.transactionCount || source.bookingCount} duration={800} /> {source.source === "event_registration" ? "payments" : source.source.startsWith("wallet_") ? "sales" : "bookings"}
                       </p>
                     </div>
                   ))}
@@ -1327,6 +1344,7 @@ export default function AdminReportsPage() {
                               className="bg-violet-500 transition-all duration-[1500ms] ease-out"
                               style={{ width: `${(day.walletRevenue / day.totalRevenue) * percentage}%` }}
                             />
+                            <div className="bg-emerald-500 transition-all duration-[1500ms] ease-out" style={{ width: `${day.totalRevenue > 0 ? Math.max(0, day.eventRevenue || 0) / day.totalRevenue * percentage : 0}%` }} />
                           </div>
                         </div>
                         <div className="flex justify-between text-xs mt-1">
@@ -1339,6 +1357,7 @@ export default function AdminReportsPage() {
                           <span className="text-violet-400">
                             Wallet: <CurrencyCountUp amount={day.walletRevenue || 0} duration={800} />
                           </span>
+                          <span className="text-emerald-400">Events: <CurrencyCountUp amount={day.eventRevenue || 0} duration={800} /></span>
                         </div>
                       </div>
                     );
@@ -1357,6 +1376,7 @@ export default function AdminReportsPage() {
                     <div className="w-3 h-3 bg-violet-500 rounded"></div>
                     <span className="text-xs text-data-placeholder">Wallet Top-ups</span>
                   </div>
+                  <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-emerald-500"></div><span className="text-xs text-data-placeholder">Events</span></div>
                 </div>
               </Card>
             </div>
