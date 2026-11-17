@@ -26,6 +26,7 @@ export function AddFoodModal({ onFormSuccess, open, setOpen }: AddFoodModalProps
   const [previewCategory, setPreviewCategory] = useState<FoodCategory>("Snacks");
   const [previewStatus, setPreviewStatus] = useState<FoodStatus>("available");
   const [price, setPrice] = useState("");
+  const [isMrpItem, setIsMrpItem] = useState(false);
   const [quantity, setQuantity] = useState("10");
   const [localFile, setLocalFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -89,6 +90,7 @@ export function AddFoodModal({ onFormSuccess, open, setOpen }: AddFoodModalProps
         clearImage();
         setPreviewName("");
         setPrice("");
+        setIsMrpItem(false);
         setQuantity("10");
 
         toast.success("New Item Registered", {
@@ -187,6 +189,20 @@ export function AddFoodModal({ onFormSuccess, open, setOpen }: AddFoodModalProps
                 />
               </div>
             </div>
+
+            <label className="flex items-start gap-3 rounded-lg border border-[#27272a] bg-[var(--surface)] p-3 cursor-pointer">
+              <input
+                type="checkbox"
+                name="is_mrp_item"
+                checked={isMrpItem}
+                onChange={(event) => setIsMrpItem(event.target.checked)}
+                className="mt-0.5 accent-primary"
+              />
+              <span>
+                <span className="block text-xs font-bold text-white">MRP item</span>
+                <span className="block mt-1 text-xs text-[#a1a1aa]">Track its sales separately in Food Reports.</span>
+              </span>
+            </label>
 
             <div className="space-y-2">
               <label className="text-xs font-bold text-[#a1a1aa] uppercase tracking-wider">Food Visual Asset</label>

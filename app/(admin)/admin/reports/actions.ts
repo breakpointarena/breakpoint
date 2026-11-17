@@ -60,11 +60,13 @@ export async function getFoodReports(filters?: ReportFilters) {
           id,
           item_name,
           item_category,
+          is_mrp_item,
           quantity,
           unit_price,
           line_total,
           status,
-          created_at
+          created_at,
+          menu_item:menu_items(is_mrp_item)
         )
       `)
       .neq("status", "cancelled")
@@ -108,7 +110,11 @@ export async function getFoodReports(filters?: ReportFilters) {
     }> = {};
 
     let totalRevenue = 0;
+    let mrpRevenue = 0;
+    let otherRevenue = 0;
     let totalItemsSold = 0;
+    let mrpItemsSold = 0;
+    let otherItemsSold = 0;
     const uniqueBookings = new Set<string>();
 
     (data || []).forEach((booking: any) => {
@@ -136,6 +142,7 @@ export async function getFoodReports(filters?: ReportFilters) {
       soldItems.forEach((item: any) => {
         const itemName = item.item_name;
         const category = item.item_category || "Uncategorized";
+        const isMrpItem = item.is_mrp_item ?? item.menu_item?.is_mrp_item ?? false;
 
         // What this item has earned so far. A booking is settled as a whole, so
         // a part-paid order is shared across its items rather than pretending
@@ -171,6 +178,13 @@ export async function getFoodReports(filters?: ReportFilters) {
 
         totalRevenue += itemRevenue;
         totalItemsSold += item.quantity;
+        if (isMrpItem) {
+          mrpRevenue += itemRevenue;
+          mrpItemsSold += item.quantity;
+        } else {
+          otherRevenue += itemRevenue;
+          otherItemsSold += item.quantity;
+        }
       });
     });
 
@@ -188,7 +202,11 @@ export async function getFoodReports(filters?: ReportFilters) {
       success: true,
       summary: {
         totalRevenue,
+        mrpRevenue,
+        otherRevenue,
         totalItemsSold,
+        mrpItemsSold,
+        otherItemsSold,
         totalOrders,
         averageOrderValue: totalOrders ? totalRevenue / totalOrders : 0
       },
