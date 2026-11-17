@@ -25,6 +25,7 @@ export function EditFoodModal({ item, onFormSuccess, onClose }: EditFoodModalPro
   const [previewName, setPreviewName] = useState(item.name || "");
   const [category, setCategory] = useState<FoodCategory>(item.category || "Snacks");
   const [price, setPrice] = useState(item.price || "");
+  const [isMrpItem, setIsMrpItem] = useState(Boolean(item.is_mrp_item));
   const [quantity, setQuantity] = useState(item.quantity || "0");
   const [status, setStatus] = useState<FoodStatus>(item.status || "available");
   const [description, setDescription] = useState(item.description || "");
@@ -185,6 +186,20 @@ export function EditFoodModal({ item, onFormSuccess, onClose }: EditFoodModalPro
                 />
               </div>
             </div>
+
+            <label className="flex items-start gap-3 rounded-lg border border-[#27272a] bg-[var(--surface)] p-3 cursor-pointer">
+              <input
+                type="checkbox"
+                name="is_mrp_item"
+                checked={isMrpItem}
+                onChange={(event) => setIsMrpItem(event.target.checked)}
+                className="mt-0.5 accent-primary"
+              />
+              <span>
+                <span className="block text-xs font-bold text-white">MRP item</span>
+                <span className="block mt-1 text-xs text-[#a1a1aa]">Track its sales separately in Food Reports.</span>
+              </span>
+            </label>
 
             <div className="space-y-2">
               <label className="text-xs font-bold text-[#a1a1aa] uppercase tracking-wider">Override Image Asset</label>

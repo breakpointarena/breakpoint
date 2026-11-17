@@ -6,6 +6,7 @@ export interface MenuItem {
   name: string;
   category: FoodCategory;
   price: number;
+  is_mrp_item?: boolean;
   quantity: number;
   status: FoodStatus;
   description: string | null;

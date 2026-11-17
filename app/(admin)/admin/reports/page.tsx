@@ -778,6 +778,28 @@ export default function AdminReportsPage() {
                 </Card>
               </div>
 
+              <Card className="bg-[var(--surface)] border-[#27272a] p-6">
+                <div className="flex items-center justify-between gap-4 mb-5">
+                  <div>
+                    <h3 className="text-sm font-black uppercase text-white">Revenue by item type</h3>
+                    <p className="mt-1 text-xs text-secondary-content">Collected food revenue for the selected date range</p>
+                  </div>
+                  <UtensilsCrossed className="h-5 w-5 text-primary" />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wide text-amber-400">MRP items</p>
+                    <p className="mt-2 text-2xl font-black text-white"><CurrencyCountUp amount={foodData.summary.mrpRevenue || 0} duration={1000} /></p>
+                    <p className="mt-1 text-xs text-secondary-content"><CountUp end={foodData.summary.mrpItemsSold || 0} duration={800} /> items sold</p>
+                  </div>
+                  <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wide text-blue-400">Other food items</p>
+                    <p className="mt-2 text-2xl font-black text-white"><CurrencyCountUp amount={foodData.summary.otherRevenue || 0} duration={1000} /></p>
+                    <p className="mt-1 text-xs text-secondary-content"><CountUp end={foodData.summary.otherItemsSold || 0} duration={800} /> items sold</p>
+                  </div>
+                </div>
+              </Card>
+
               {/* Category Breakdown */}
               <Card className="bg-[var(--surface)] border-[#27272a] p-6">
                 <div className="flex items-center gap-2 mb-6">
