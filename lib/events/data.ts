@@ -79,11 +79,12 @@ async function registrationsFor(eventIds: string[]): Promise<RegistrationRow[]> 
 }
 
 export async function getPublishedEvents(): Promise<PublicEvent[]> {
+  const now = new Date().toISOString()
   const { data, error } = await supabaseAdmin
     .from('events')
     .select(PUBLIC_EVENT_FIELDS)
     .eq('status', 'published')
-    .gte('starts_at', new Date().toISOString())
+    .or(`starts_at.gte.${now},ends_at.gte.${now}`)
     .order('starts_at', { ascending: true })
 
   if (error) throw error
