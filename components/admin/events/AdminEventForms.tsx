@@ -125,7 +125,7 @@ export function RegistrationPaymentForm({ eventId, registrationId, amountDue }: 
       <input type="hidden" name="event_id" value={eventId} />
       <input type="hidden" name="registration_id" value={registrationId} />
       <Input name="amount" type="number" min="0.01" max={amountDue} step="0.01" defaultValue={amountDue} placeholder="Amount received" required className="h-8 w-28 text-xs" />
-      <select name="payment_method" required className="h-8 rounded-md border border-white/10 bg-[#111114] px-2 text-xs text-white"><option value="">Payment method</option><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option></select>
+      <select name="payment_method" defaultValue="upi" required className="h-8 rounded-md border border-white/10 bg-[#111114] px-2 text-xs text-white"><option value="upi">UPI</option><option value="cash">Cash</option><option value="card">Card</option></select>
       <Input name="payment_reference" placeholder="Reference (optional)" className="h-8 w-36 text-xs" />
       <Button type="submit" size="sm" variant="outline" disabled={pending} className="h-8">{pending ? 'Saving…' : 'Record payment'}</Button>
     </form>
