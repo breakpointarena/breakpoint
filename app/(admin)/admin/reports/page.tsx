@@ -536,7 +536,7 @@ export default function AdminReportsPage() {
           {activeTab === "overview" && overviewData && (
             <div className="space-y-6">
               {/* Summary Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
                 <Card className="bg-gradient-to-br from-green-500/10 to-green-600/5 border-green-500/20 p-5">
                   <div className="flex items-start justify-between">
                     <div>
