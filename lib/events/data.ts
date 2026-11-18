@@ -14,6 +14,7 @@ export interface PublicEvent {
   registration_opens_at: string | null
   registration_closes_at: string | null
   entry_fee: number
+  service_fee_percent: number
   capacity: number | null
   registration_mode: 'individual' | 'team'
   team_size: number
@@ -21,6 +22,7 @@ export interface PublicEvent {
   first_place_prize_description: string | null
   second_place_prize_description: string | null
   third_place_prize_description: string | null
+  cover_image_url: string | null
   registered_count: number
   spots_left: number | null
   registration_open: boolean
@@ -28,9 +30,10 @@ export interface PublicEvent {
 
 const PUBLIC_EVENT_FIELDS = [
   'id', 'slug', 'title', 'event_type', 'description', 'venue', 'starts_at', 'ends_at',
-  'registration_opens_at', 'registration_closes_at', 'entry_fee', 'capacity',
+  'registration_opens_at', 'registration_closes_at', 'entry_fee', 'service_fee_percent', 'capacity',
   'registration_mode', 'team_size', 'public_prize_description',
   'first_place_prize_description', 'second_place_prize_description', 'third_place_prize_description',
+  'cover_image_url',
 ].join(', ')
 
 function withAvailability(event: any, registrations: any[]): PublicEvent {
@@ -47,6 +50,7 @@ function withAvailability(event: any, registrations: any[]): PublicEvent {
   return {
     ...event,
     entry_fee: Number(event.entry_fee || 0),
+    service_fee_percent: Number(event.service_fee_percent ?? 2),
     capacity: event.capacity == null ? null : Number(event.capacity),
     team_size: Number(event.team_size || 1),
     registered_count: registeredCount,

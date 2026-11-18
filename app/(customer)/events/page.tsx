@@ -47,11 +47,13 @@ export default async function EventsPage() {
           <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
             {events.map((event) => (
               <Card key={event.id} className="group flex flex-col overflow-hidden border-white/10 bg-[#111114]/90 transition hover:-translate-y-1 hover:border-primary/40">
-                <div className="flex h-36 items-end bg-gradient-to-br from-primary/20 via-[#1b1710] to-[#111114] p-5">
+                <div className="relative flex h-36 items-end overflow-hidden bg-gradient-to-br from-primary/20 via-[#1b1710] to-[#111114] p-5">
+                  {event.cover_image_url && <img src={event.cover_image_url} alt="" className="absolute inset-0 h-full w-full object-cover" />}
+                  {event.cover_image_url && <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/25 to-black/20" />}
                   <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-primary/20 bg-black/30 text-primary">
                     {event.event_type === 'tournament' ? <Trophy className="h-6 w-6" /> : <Gamepad2 className="h-6 w-6" />}
                   </div>
-                  <span className="ml-auto rounded-full border border-white/10 bg-black/30 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-primary">{eventTypeLabel(event.event_type)}</span>
+                  <span className="relative ml-auto rounded-full border border-white/10 bg-black/50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-primary">{eventTypeLabel(event.event_type)}</span>
                 </div>
                 <div className="flex flex-1 flex-col p-5">
                   <h3 className="text-xl font-black text-white">{event.title}</h3>
@@ -62,7 +64,7 @@ export default async function EventsPage() {
                     <p className="flex items-center gap-2"><Users className="h-4 w-4 text-primary" />{event.spots_left === null ? 'Open registration' : `${event.spots_left} spot${event.spots_left === 1 ? '' : 's'} left`}</p>
                   </div>
                   <div className="mt-auto flex items-center justify-between gap-3 pt-5">
-                    <p className="font-black text-white">{event.entry_fee > 0 ? `₹${event.entry_fee.toLocaleString('en-IN')}` : 'Free'}<span className="ml-1 text-xs font-medium text-secondary-content">entry</span></p>
+                    <div><p className="font-black text-white">{event.entry_fee > 0 ? `₹${event.entry_fee.toLocaleString('en-IN')}` : 'Free'}<span className="ml-1 text-xs font-medium text-secondary-content">entry</span></p>{event.entry_fee > 0 && event.service_fee_percent > 0 && <p className="text-[10px] text-secondary-content">+ {event.service_fee_percent}% service charge</p>}</div>
                     <Link href={`/events/${event.slug}`} className="rounded-lg bg-primary px-4 py-2 text-xs font-black uppercase tracking-wide text-black transition hover:brightness-110">View event</Link>
                   </div>
                 </div>

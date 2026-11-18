@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { createEvent, getAdminEvents } from '@/app/(admin)/admin/events/actions'
 import { requireStaff } from '@/lib/auth/require-admin'
+import { EventImageUpload } from '@/components/admin/events/EventImageUpload'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,7 +31,7 @@ export default async function AdminEventsPage() {
           <div className="space-y-2"><Label>Entry fee (₹)</Label><Input name="entry_fee" type="number" min="0" step="0.01" defaultValue="0" required /></div>
           </div>
           <details className="rounded-xl border border-white/10 bg-black/20 p-4">
-            <summary className="cursor-pointer list-none text-sm font-bold text-primary">More options <span className="ml-1 text-xs font-normal text-secondary-content">(venue, registration, team settings, prizes)</span></summary>
+            <summary className="cursor-pointer list-none text-sm font-bold text-primary">More options <span className="ml-1 text-xs font-normal text-secondary-content">(venue, registration, team settings, prizes, image)</span></summary>
             <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <div className="space-y-2"><Label>Ends (optional)</Label><Input name="ends_at" type="datetime-local" /></div>
           <div className="space-y-2"><Label>Venue</Label><Input name="venue" defaultValue="Breakpoint Arena" /></div>
@@ -39,12 +40,14 @@ export default async function AdminEventsPage() {
           <div className="space-y-2"><Label>Capacity (blank = unlimited)</Label><Input name="capacity" type="number" min="1" step="1" /></div>
           <div className="space-y-2"><Label>Entry type</Label><select name="registration_mode" className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white"><option value="individual">Individual</option><option value="team">Team</option></select></div>
           <div className="space-y-2"><Label>Players per team</Label><Input name="team_size" type="number" min="1" max="20" defaultValue="1" /></div>
+          <div className="space-y-2"><Label>Event service charge (%)</Label><Input name="service_fee_percent" type="number" min="0" max="2" step="0.1" defaultValue="2" /><p className="text-xs text-secondary-content">Shown before payment and applied regardless of payment method.</p></div>
           <div className="space-y-2 sm:col-span-2 xl:col-span-3"><Label>Description (optional)</Label><textarea name="description" rows={3} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" placeholder="Rules and details for participants" /></div>
           <div className="space-y-2 sm:col-span-2 xl:col-span-3">
             <Label>Prizes shown publicly (optional)</Label>
             <textarea name="prizes" rows={3} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" placeholder={'1st place: ...\n2nd place: ...\n3rd place: ...'} />
             <p className="text-xs text-secondary-content">One prize per line. Payout costs are recorded separately in admin-only expenses.</p>
           </div>
+          <EventImageUpload />
             </div>
           </details>
           <Button type="submit"><CalendarDays className="mr-2 h-4 w-4" />Save draft</Button>

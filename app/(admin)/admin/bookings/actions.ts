@@ -440,6 +440,7 @@ export async function getBookingDetails(bookingId: string) {
 
     if (error) throw error;
 
+    let latestSharedPlayChange: { id: string; action_label: string; created_at: string } | null = null;
     if (data.shared_play_enabled || data.status === "checked_in") {
       const { data: participants, error: participantError } = await supabaseAdmin
         .from("shared_play_participants")
@@ -448,6 +449,50 @@ export async function getBookingDetails(bookingId: string) {
         .order("created_at", { ascending: true });
       if (participantError) throw participantError;
       data.shared_play_participants = participants || [];
+      if (data.status === "checked_in" && data.billed_on_actual_time === true) {
+        const { data: latestChange, error: historyError } = await supabaseAdmin
+          .from("shared_play_change_history")
+          .select("id, action_label, created_at")
+          .eq("booking_id", bookingId)
+          .is("undone_at", null)
+          .not("after_periods", "is", null)
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (historyError) throw historyError;
+        latestSharedPlayChange = latestChange;
+        if (!latestSharedPlayChange) {
+          const periods = (participants || []).flatMap((participant: any) => participant.shared_play_periods || []);
+          const boundaries = new Map<number, { started: number; ended: number }>();
+          for (const period of periods) {
+            const startedAt = new Date(period.started_at).getTime();
+            const started = boundaries.get(startedAt) || { started: 0, ended: 0 };
+            started.started += 1;
+            boundaries.set(startedAt, started);
+            if (period.ended_at) {
+              const endedAt = new Date(period.ended_at).getTime();
+              const ended = boundaries.get(endedAt) || { started: 0, ended: 0 };
+              ended.ended += 1;
+              boundaries.set(endedAt, ended);
+            }
+          }
+          const latestBoundary = [...boundaries.keys()].sort((a, b) => b - a)[0];
+          const latest = latestBoundary == null ? null : boundaries.get(latestBoundary);
+          if (latest && ((latest.started > 0) !== (latest.ended > 0))) {
+            const isInitialPeriod = latest.started > 0 && latest.ended === 0 &&
+              latestBoundary === new Date(data.checked_in_at).getTime() &&
+              periods.every((period: any) => !period.ended_at);
+            if (!isInitialPeriod) {
+              latestSharedPlayChange = {
+                id: "legacy-period-boundary",
+                action_label: latest.started > 0 ? "Sit in" : "Sit out",
+                created_at: new Date(latestBoundary).toISOString(),
+              };
+            }
+          }
+        }
+      }
     } else {
       data.shared_play_participants = [];
     }
@@ -484,6 +529,7 @@ export async function getBookingDetails(bookingId: string) {
       success: true,
       booking: {
         ...data,
+        latest_shared_play_change: latestSharedPlayChange,
         total_amount: correctTotal, // Override with calculated value
         // Flags the food an admin added and nobody has paid for yet, which is
         // the only food the UI may offer to remove.
@@ -1022,7 +1068,7 @@ export async function setSharedPlayParticipants(
   /** Optional arena-clock time for a participant who sat out earlier this shift. */
   sitOutClock: string | null = null
 ) {
-  await requireStaff();
+  const actor = await requireStaff();
   try {
     if (enabled) {
       const { data: booking, error: bookingError } = await supabaseAdmin
@@ -1100,6 +1146,45 @@ export async function setSharedPlayParticipants(
       return { success: false, error: "A checked-out participant cannot rejoin this session." };
     }
 
+    const shouldTrackUndo = Boolean(sitInClock || sitOutClock);
+    let historyId: string | null = null;
+    if (shouldTrackUndo) {
+      const { data: booking, error: bookingError } = await supabaseAdmin
+        .from("bookings")
+        .select("status, billed_on_actual_time, shared_play_enabled")
+        .eq("id", bookingId)
+        .maybeSingle();
+      if (bookingError) throw bookingError;
+      if (!booking || booking.status !== "checked_in" || booking.billed_on_actual_time !== true) {
+        return { success: false, error: "Undo history is available only for an active play session." };
+      }
+
+      const { data: participants, error: participantsError } = await supabaseAdmin
+        .from("shared_play_participants")
+        .select("id")
+        .eq("booking_id", bookingId);
+      if (participantsError) throw participantsError;
+      const participantIds = (participants || []).map((participant: any) => participant.id);
+      const { data: periods, error: periodsError } = participantIds.length
+        ? await supabaseAdmin.from("shared_play_periods").select("*").in("participant_id", participantIds)
+        : { data: [], error: null };
+      if (periodsError) throw periodsError;
+
+      const { data: history, error: historyError } = await supabaseAdmin
+        .from("shared_play_change_history")
+        .insert({
+          booking_id: bookingId,
+          action_label: sitInClock ? "Sit in" : "Sit out",
+          before_shared_play_enabled: booking.shared_play_enabled,
+          before_periods: periods || [],
+          created_by: actor.userId,
+        })
+        .select("id")
+        .single();
+      if (historyError) throw historyError;
+      historyId = history.id;
+    }
+
     const { error } = await supabaseAdmin.rpc("set_shared_play_participants", {
       p_booking_id: bookingId,
       p_enabled: enabled,
@@ -1108,7 +1193,28 @@ export async function setSharedPlayParticipants(
       p_sit_in_clock: sitInClock,
       p_sit_out_clock: sitOutClock
     });
-    if (error) throw error;
+    if (error) {
+      if (historyId) await supabaseAdmin.from("shared_play_change_history").delete().eq("id", historyId);
+      throw error;
+    }
+
+    if (historyId) {
+      const { data: updatedParticipants, error: updatedParticipantsError } = await supabaseAdmin
+        .from("shared_play_participants")
+        .select("id")
+        .eq("booking_id", bookingId);
+      if (updatedParticipantsError) throw updatedParticipantsError;
+      const ids = (updatedParticipants || []).map((participant: any) => participant.id);
+      const { data: updatedPeriods, error: updatedPeriodsError } = ids.length
+        ? await supabaseAdmin.from("shared_play_periods").select("*").in("participant_id", ids)
+        : { data: [], error: null };
+      if (updatedPeriodsError) throw updatedPeriodsError;
+      const { error: saveHistoryError } = await supabaseAdmin
+        .from("shared_play_change_history")
+        .update({ after_periods: updatedPeriods || [] })
+        .eq("id", historyId);
+      if (saveHistoryError) throw saveHistoryError;
+    }
 
     for (const customer of customerLinks) {
       const { data: participant, error: participantError } = await supabaseAdmin
@@ -1136,6 +1242,19 @@ export async function setSharedPlayParticipants(
   } catch (err: any) {
     console.error("Update shared play participants error:", err);
     return { success: false, error: err.message };
+  }
+}
+
+export async function undoLatestSharedPlayChange(bookingId: string) {
+  await requireStaff();
+  try {
+    const { data, error } = await supabaseAdmin.rpc("undo_latest_shared_play_change", {
+      p_booking_id: bookingId,
+    });
+    if (error) throw error;
+    return { success: true as const, action: data as string };
+  } catch (error: any) {
+    return { success: false as const, error: error.message || "Could not undo the last play change." };
   }
 }
 

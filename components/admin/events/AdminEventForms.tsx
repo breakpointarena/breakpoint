@@ -9,9 +9,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { addEventPrizeExpense, adminRegisterForEvent, recordEventRegistrationPayment, recordEventRegistrationRefund } from '@/app/(admin)/admin/events/actions'
 
-export function AdminRegistrationForm({ eventId, entryFee, registrationMode, teamSize }: {
-  eventId: string; entryFee: number; registrationMode: 'individual' | 'team'; teamSize: number
+export function AdminRegistrationForm({ eventId, entryFee, serviceChargePercent, registrationMode, teamSize }: {
+  eventId: string; entryFee: number; serviceChargePercent: number; registrationMode: 'individual' | 'team'; teamSize: number
 }) {
+  const serviceCharge = entryFee > 0 ? Number((entryFee * serviceChargePercent / 100).toFixed(2)) : 0
+  const totalDue = entryFee + serviceCharge
   const router = useRouter()
   const [pending, setPending] = useState(false)
   const submit = async (form: FormData) => {
@@ -36,7 +38,7 @@ export function AdminRegistrationForm({ eventId, entryFee, registrationMode, tea
         <div className="space-y-2"><Label>Team name</Label><Input name="team_name" required maxLength={100} /></div>
         <div className="space-y-2 md:col-span-2"><Label>Players (one name per line, {teamSize} total)</Label><textarea name="participant_names" rows={teamSize} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" /></div>
       </>}
-      <div className="space-y-2"><Label>Amount collected (max ₹{entryFee.toLocaleString('en-IN')})</Label><Input name="amount_paid" type="number" min="0" max={entryFee} step="0.01" defaultValue="0" /></div>
+      <div className="space-y-2"><Label>Amount collected (max ₹{totalDue.toLocaleString('en-IN')})</Label><Input name="amount_paid" type="number" min="0" max={totalDue} step="0.01" defaultValue="0" /><p className="text-xs text-secondary-content">Includes the {serviceChargePercent}% event service charge.</p></div>
       <div className="space-y-2"><Label>Payment method</Label><select name="payment_method" className="h-10 w-full rounded-lg border border-white/10 bg-[#111114] px-3 text-sm text-white"><option value="">Unpaid / not collected</option><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option></select></div>
       {entryFee > 0 && <label className="flex items-center gap-2 text-sm text-secondary-content md:col-span-2"><input type="checkbox" name="comped" className="accent-primary" /> Waive entry fee (complimentary entry)</label>}
       <div className="md:col-span-2"><Button type="submit" disabled={pending}>{pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Register customer</Button></div>

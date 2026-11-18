@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { AdminRegistrationForm, EventPrizeExpenseForm, RegistrationPaymentForm, RegistrationRefundForm } from '@/components/admin/events/AdminEventForms'
 import { getAdminEvent, setEventStatus, setRegistrationStatus, updateEvent } from '@/app/(admin)/admin/events/actions'
 import { requireStaff } from '@/lib/auth/require-admin'
+import { EventImageUpload } from '@/components/admin/events/EventImageUpload'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,7 +54,7 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Metric icon={<Users className="h-4 w-4" />} label="Registrations" value={String(registrations.filter((r: any) => ['registered', 'checked_in'].includes(r.registration_status)).length)} />
-        <Metric icon={<IndianRupee className="h-4 w-4" />} label="Collected entry revenue" value={`₹${collected.toLocaleString('en-IN')}`} />
+        <Metric icon={<IndianRupee className="h-4 w-4" />} label="Collected registration revenue" value={`₹${collected.toLocaleString('en-IN')}`} />
         {data.userRole === 'admin' && <Metric icon={<IndianRupee className="h-4 w-4" />} label="Prize expenses" value={`₹${prizeTotal.toLocaleString('en-IN')}`} />}
       </div>
 
@@ -68,7 +69,7 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
             <div className="space-y-2"><Label>Entry fee (₹)</Label><Input name="entry_fee" type="number" min="0" step="0.01" defaultValue={event.entry_fee} required /></div>
           </div>
           <details className="rounded-xl border border-white/10 bg-black/20 p-4">
-            <summary className="cursor-pointer list-none text-sm font-bold text-primary">More options <span className="ml-1 text-xs font-normal text-secondary-content">(venue, registration, team settings, prizes)</span></summary>
+            <summary className="cursor-pointer list-none text-sm font-bold text-primary">More options <span className="ml-1 text-xs font-normal text-secondary-content">(venue, registration, team settings, prizes, image)</span></summary>
             <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <div className="space-y-2"><Label>Slug</Label><Input name="slug" defaultValue={event.slug} required /></div>
           <div className="space-y-2"><Label>Ends</Label><Input name="ends_at" type="datetime-local" defaultValue={inputDateTime(event.ends_at)} /></div>
@@ -78,12 +79,14 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
           <div className="space-y-2"><Label>Capacity (blank = unlimited)</Label><Input name="capacity" type="number" min="1" defaultValue={event.capacity || ''} /></div>
           <div className="space-y-2"><Label>Entry type</Label><select name="registration_mode" defaultValue={event.registration_mode} className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white"><option value="individual">Individual</option><option value="team">Team</option></select></div>
           <div className="space-y-2"><Label>Team size</Label><Input name="team_size" type="number" min="1" max="20" defaultValue={event.team_size} /></div>
+          <div className="space-y-2"><Label>Event service charge (%)</Label><Input name="service_fee_percent" type="number" min="0" max="2" step="0.1" defaultValue={event.service_fee_percent ?? 2} /><p className="text-xs text-secondary-content">Shown before payment and applied regardless of payment method.</p></div>
           <div className="space-y-2 sm:col-span-2 xl:col-span-3"><Label>Description (optional)</Label><textarea name="description" rows={3} defaultValue={event.description} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" /></div>
           <div className="space-y-2 sm:col-span-2 xl:col-span-3">
             <Label>Prizes shown publicly (optional)</Label>
             <textarea name="prizes" rows={3} defaultValue={[event.first_place_prize_description ? `1st place: ${event.first_place_prize_description}` : '', event.second_place_prize_description ? `2nd place: ${event.second_place_prize_description}` : '', event.third_place_prize_description ? `3rd place: ${event.third_place_prize_description}` : ''].filter(Boolean).join('\n')} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" placeholder={'1st place: ...\n2nd place: ...\n3rd place: ...'} />
             <p className="text-xs text-secondary-content">One prize per line. Payout costs are recorded separately in admin-only expenses.</p>
           </div>
+          <EventImageUpload defaultValue={event.cover_image_url} />
             </div>
           </details>
           <Button type="submit">Save event</Button>
@@ -92,8 +95,8 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
       {event.status !== 'cancelled' && <form action={setEventStatus} className="-mt-4 flex justify-end"><input type="hidden" name="event_id" value={event.id} /><input type="hidden" name="status" value="cancelled" /><Button type="submit" variant="outline" className="border-red-500/30 text-red-300">Cancel event</Button></form>}
 
       {data.userRole === 'admin' && <section className="space-y-4">
-        <div><h2 className="text-xl font-black text-white">Register on behalf of a customer</h2><p className="mt-1 text-sm text-secondary-content">Entry fee: ₹{Number(event.entry_fee).toLocaleString('en-IN')} per entry. Collected payments are counted as event revenue.</p></div>
-        <AdminRegistrationForm eventId={event.id} entryFee={Number(event.entry_fee)} registrationMode={event.registration_mode} teamSize={Number(event.team_size)} />
+        <div><h2 className="text-xl font-black text-white">Register on behalf of a customer</h2><p className="mt-1 text-sm text-secondary-content">Entry ₹{Number(event.entry_fee).toLocaleString('en-IN')} + service charge {Number(event.service_fee_percent ?? 2)}%. Collected payments are counted as event revenue.</p></div>
+        <AdminRegistrationForm eventId={event.id} entryFee={Number(event.entry_fee)} serviceChargePercent={Number(event.service_fee_percent ?? 2)} registrationMode={event.registration_mode} teamSize={Number(event.team_size)} />
       </section>}
 
       <section className="space-y-4">
@@ -107,7 +110,7 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
                   <td className="p-3"><p className="font-bold text-white">{registration.customer_name}{registration.team_name ? ` · ${registration.team_name}` : ''}</p><p className="text-xs text-secondary-content">{registration.customer_phone}{registration.customer_email ? ` · ${registration.customer_email}` : ''}</p>{registration.participant_names?.length > 0 && <p className="mt-1 text-xs text-secondary-content">{registration.participant_names.join(', ')}</p>}</td>
                   <td className="p-3 font-mono text-primary">{registration.registration_code}</td>
                   <td className="p-3 capitalize text-white">{registration.registration_status.replace('_', ' ')}</td>
-                  <td className="p-3"><p className="capitalize text-white">{registration.payment_status.replace('_', ' ')}</p><p className="text-xs text-secondary-content">₹{Number(registration.amount_paid).toLocaleString('en-IN')} / ₹{Number(registration.entry_fee).toLocaleString('en-IN')}</p></td>
+                  <td className="p-3"><p className="capitalize text-white">{registration.payment_status.replace('_', ' ')}</p><p className="text-xs text-secondary-content">₹{Number(registration.amount_paid).toLocaleString('en-IN')} / ₹{(Number(registration.entry_fee) + Number(registration.service_charge_amount || 0)).toLocaleString('en-IN')}</p><p className="text-[10px] text-secondary-content">Entry ₹{Number(registration.entry_fee).toLocaleString('en-IN')} + service ₹{Number(registration.service_charge_amount || 0).toLocaleString('en-IN')}</p></td>
                   <td className="p-3 text-secondary-content">{displayDate(registration.created_at)}</td>
                   <td className="p-3">
                     <div className="flex flex-wrap gap-2">
@@ -115,7 +118,7 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
                       {registration.registration_status === 'waitlisted' && <StatusAction eventId={event.id} registrationId={registration.id} status="registered" label="Confirm" />}
                       {registration.registration_status !== 'cancelled' && registration.registration_status !== 'checked_in' && <StatusAction eventId={event.id} registrationId={registration.id} status="cancelled" label="Cancel" />}
                     </div>
-                    {data.userRole === 'admin' && ['registered', 'checked_in'].includes(registration.registration_status) && <RegistrationPaymentForm eventId={event.id} registrationId={registration.id} amountDue={Math.max(0, Number(registration.entry_fee) - Number(registration.amount_paid))} />}
+                    {data.userRole === 'admin' && ['registered', 'checked_in'].includes(registration.registration_status) && registration.payment_status !== 'comped' && <RegistrationPaymentForm eventId={event.id} registrationId={registration.id} amountDue={Math.max(0, Number(registration.entry_fee) + Number(registration.service_charge_amount || 0) - Number(registration.amount_paid))} />}
                     {data.userRole === 'admin' && <RegistrationRefundForm eventId={event.id} registrationId={registration.id} amountPaid={Number(registration.amount_paid)} />}
                   </td>
                 </tr>

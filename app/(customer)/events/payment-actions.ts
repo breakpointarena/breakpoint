@@ -48,7 +48,7 @@ export async function createEventRegistrationOrder(input: RegistrationInput): Pr
 
     const { data: event, error: eventError } = await supabaseAdmin
       .from('events')
-      .select('id, slug, title, status, starts_at, registration_opens_at, registration_closes_at, entry_fee, registration_mode, team_size')
+      .select('id, slug, title, status, starts_at, registration_opens_at, registration_closes_at, entry_fee, service_fee_percent, registration_mode, team_size')
       .eq('id', input.eventId)
       .eq('status', 'published')
       .maybeSingle()
@@ -64,14 +64,19 @@ export async function createEventRegistrationOrder(input: RegistrationInput): Pr
       return { success: false, error: 'Online payments are unavailable. Please contact the arena.' }
     }
 
-    const isFree = Number(event.entry_fee) === 0
+    const entryFee = Number(event.entry_fee)
+    const serviceCharge = entryFee > 0
+      ? Number((entryFee * Number(event.service_fee_percent || 0) / 100).toFixed(2))
+      : 0
+    const totalDue = entryFee + serviceCharge
+    const isFree = entryFee === 0
     // Reuse a live checkout after a customer dismisses Razorpay or loses the
     // confirmation response. This keeps the same seat hold and prevents a
     // duplicate-registration error on retry.
     if (!isFree) {
       const { data: pendingRegistration, error: pendingError } = await supabaseAdmin
         .from('event_registrations')
-        .select('id, registration_code, razorpay_order_id, reservation_expires_at')
+        .select('id, registration_code, razorpay_order_id, reservation_expires_at, entry_fee, service_charge_amount')
         .eq('event_id', event.id)
         .eq('customer_phone', auth.phone)
         .eq('registration_status', 'pending_payment')
@@ -87,7 +92,7 @@ export async function createEventRegistrationOrder(input: RegistrationInput): Pr
           registrationCode: pendingRegistration.registration_code,
           keyId: getRazorpayKeyId()!,
           orderId: pendingRegistration.razorpay_order_id,
-          amount: Number(event.entry_fee),
+          amount: Number(pendingRegistration.entry_fee) + Number(pendingRegistration.service_charge_amount || 0),
           eventTitle: event.title,
         }
       }
@@ -114,6 +119,7 @@ export async function createEventRegistrationOrder(input: RegistrationInput): Pr
       p_registration_source: 'customer',
       p_created_by: null,
       p_reservation_expires_at: isFree ? null : new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      p_service_charge_amount: serviceCharge,
     })
     if (reserveError) {
       const message = reserveError.message || ''
@@ -151,7 +157,9 @@ export async function createEventRegistrationOrder(input: RegistrationInput): Pr
       eventId: event.id,
       eventTitle: event.title,
       registrationCode: registration.registration_code,
-      totalAmount: Number(registration.entry_fee),
+      totalAmount: Number(registration.total_due),
+      entryFee: Number(registration.entry_fee),
+      serviceCharge: Number(registration.service_charge_amount || 0),
     }
 
     try {

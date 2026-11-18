@@ -44,6 +44,7 @@ function eventFields(form: FormData) {
   const opensAt = opensRaw ? arenaDateTime(opensRaw) : null
   const closesAt = closesRaw ? arenaDateTime(closesRaw) : null
   const entryFee = Number(text(form, 'entry_fee') || 0)
+  const serviceFeePercent = Number(text(form, 'service_fee_percent') || 0)
   const capacityRaw = text(form, 'capacity')
   const capacity = capacityRaw ? Number(capacityRaw) : null
   const teamSize = Number(text(form, 'team_size') || 1)
@@ -54,6 +55,7 @@ function eventFields(form: FormData) {
   if (opensRaw && !opensAt) throw new Error('The registration opening time is invalid.')
   if (closesRaw && !closesAt) throw new Error('The registration closing time is invalid.')
   if (!Number.isFinite(entryFee) || entryFee < 0) throw new Error('Entry fee must be zero or more.')
+  if (!Number.isFinite(serviceFeePercent) || serviceFeePercent < 0 || serviceFeePercent > 2) throw new Error('Service charge must be from 0% to 2%.')
   if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1)) throw new Error('Capacity must be a positive whole number.')
   if (!Number.isInteger(teamSize) || teamSize < 1 || teamSize > 20) throw new Error('Team size must be between 1 and 20.')
   if (endsAt && endsAt <= startsAt) throw new Error('Event end time must be after its start time.')
@@ -63,12 +65,14 @@ function eventFields(form: FormData) {
     title,
     event_type: text(form, 'event_type') || 'tournament',
     description: text(form, 'description'),
+    cover_image_url: text(form, 'cover_image_url') || null,
     venue: text(form, 'venue') || 'Breakpoint Arena',
     starts_at: startsAt,
     ends_at: endsAt,
     registration_opens_at: opensAt,
     registration_closes_at: closesAt,
     entry_fee: entryFee,
+    service_fee_percent: serviceFeePercent,
     capacity,
     registration_mode: text(form, 'registration_mode') === 'team' ? 'team' : 'individual',
     team_size: teamSize,
@@ -161,7 +165,7 @@ export async function adminRegisterForEvent(form: FormData) {
   if (!isComped && method && !['cash', 'card', 'upi'].includes(method)) throw new Error('Choose a valid payment method.')
 
   const { data: event, error: eventError } = await supabaseAdmin
-    .from('events').select('entry_fee, registration_mode, team_size, status').eq('id', eventId).maybeSingle()
+    .from('events').select('entry_fee, service_fee_percent, registration_mode, team_size, status').eq('id', eventId).maybeSingle()
   if (eventError) throw eventError
   if (!event || event.status !== 'published') throw new Error('Only published events accept registrations.')
   if (event.registration_mode === 'team' && !teamName) throw new Error('Enter a team name for this event.')
@@ -171,10 +175,12 @@ export async function adminRegisterForEvent(form: FormData) {
   }
 
   const fee = Number(event.entry_fee)
+  const serviceCharge = isComped || fee === 0 ? 0 : Number((fee * Number(event.service_fee_percent || 0) / 100).toFixed(2))
+  const totalDue = fee + serviceCharge
   const amountPaid = isComped ? 0 : (form.get('amount_paid') === null ? 0 : Number(text(form, 'amount_paid') || 0))
-  if (!Number.isFinite(amountPaid) || amountPaid < 0 || amountPaid > fee) throw new Error('Amount collected must be between zero and the entry fee.')
+  if (!Number.isFinite(amountPaid) || amountPaid < 0 || amountPaid > totalDue) throw new Error('Amount collected must be between zero and the total due.')
   if (amountPaid > 0 && !method) throw new Error('Choose how the payment was collected.')
-  const paymentStatus = fee === 0 ? 'not_required' : isComped ? 'comped' : amountPaid >= fee ? 'paid' : amountPaid > 0 ? 'partial' : 'pending'
+  const paymentStatus = fee === 0 ? 'not_required' : isComped ? 'comped' : amountPaid >= totalDue ? 'paid' : amountPaid > 0 ? 'partial' : 'pending'
 
   const { error } = await supabaseAdmin.rpc('create_event_registration', {
     p_event_id: eventId,
@@ -190,6 +196,7 @@ export async function adminRegisterForEvent(form: FormData) {
     p_registration_source: 'admin',
     p_created_by: actor.userId,
     p_reservation_expires_at: null,
+    p_service_charge_amount: serviceCharge,
   })
   if (error) throw new Error(error.message.includes('full') ? 'This event has no spots left.' : error.message)
 

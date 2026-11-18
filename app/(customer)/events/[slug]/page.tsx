@@ -31,6 +31,8 @@ export default async function EventDetailPage({ params }: { params: Promise<{ sl
       <div className="grid gap-6 lg:grid-cols-[1fr_420px]">
         <div className="space-y-6">
           <section className="relative overflow-hidden rounded-3xl border border-primary/20 bg-gradient-to-br from-[#231a07] via-[#111114] to-[#09090b] p-7 sm:p-10">
+            {event.cover_image_url && <img src={event.cover_image_url} alt="" className="absolute inset-0 h-full w-full object-cover" />}
+            {event.cover_image_url && <div className="absolute inset-0 bg-black/65" />}
             <div className="absolute -right-12 -top-12 h-56 w-56 rounded-full bg-primary/10 blur-3xl" />
             <div className="relative flex items-center gap-2 text-xs font-black uppercase tracking-widest text-primary">{event.event_type === 'tournament' ? <Trophy className="h-4 w-4" /> : <Gamepad2 className="h-4 w-4" />}{typeLabel}</div>
             <h1 className="relative mt-4 text-3xl font-black tracking-tight text-white sm:text-5xl">{event.title}</h1>

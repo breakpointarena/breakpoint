@@ -18,6 +18,7 @@ interface Props {
     id: string
     title: string
     entry_fee: number
+    service_fee_percent: number
     registration_mode: 'individual' | 'team'
     team_size: number
     registration_open: boolean
@@ -48,6 +49,10 @@ export function EventRegistrationForm({ event }: Props) {
   }, [])
 
   const participants = useMemo(() => participantNames.split(/\r?\n/).map((value) => value.trim()).filter(Boolean), [participantNames])
+  const serviceCharge = event.entry_fee > 0
+    ? Number((event.entry_fee * event.service_fee_percent / 100).toFixed(2))
+    : 0
+  const totalDue = event.entry_fee + serviceCharge
 
   const beginVerification = async () => {
     const normalized = phone.replace(/\D/g, '').slice(-10)
@@ -166,6 +171,14 @@ export function EventRegistrationForm({ event }: Props) {
         <CalendarDays className="h-5 w-5 text-primary" />
       </div>
 
+      {event.entry_fee > 0 && (
+        <div className="mt-5 space-y-1 rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+          <div className="flex justify-between text-secondary-content"><span>Entry fee</span><span>₹{event.entry_fee.toLocaleString('en-IN')}</span></div>
+          {serviceCharge > 0 && <div className="flex justify-between text-secondary-content"><span>Event service charge ({event.service_fee_percent}%)</span><span>₹{serviceCharge.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>}
+          <div className="flex justify-between border-t border-white/10 pt-2 font-bold text-white"><span>Total</span><span>₹{totalDue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+        </div>
+      )}
+
       {event.registration_mode === 'team' && (
         <div className="mb-5 flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
           <Users className="h-4 w-4" /> Team entry · {event.team_size} participants
@@ -221,7 +234,7 @@ export function EventRegistrationForm({ event }: Props) {
       </div>
 
       <Button className="mt-6 w-full" onClick={register} disabled={!verifiedPhone || loading}>
-        {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing…</> : event.entry_fee > 0 ? `Pay ₹${event.entry_fee.toLocaleString('en-IN')} and register` : 'Complete free registration'}
+        {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing…</> : event.entry_fee > 0 ? `Pay ₹${totalDue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} and register` : 'Complete free registration'}
       </Button>
       <p className="mt-3 text-center text-xs text-secondary-content">Your phone number is used for registration and event updates.</p>
     </Card>

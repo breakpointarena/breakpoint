@@ -135,6 +135,8 @@ export interface EventRegistrationQuote {
   eventId: string
   eventTitle: string
   registrationCode: string
+  entryFee: number
+  serviceCharge: number
   totalAmount: number
 }
 
