@@ -53,6 +53,7 @@ function withAvailability(event: PublicEventRow, registrations: RegistrationRow[
   const spotsLeft = event.capacity == null ? null : Math.max(0, Number(event.capacity) - registeredCount)
   const opensAt = event.registration_opens_at ? new Date(event.registration_opens_at).getTime() : 0
   const closesAt = event.registration_closes_at ? new Date(event.registration_closes_at).getTime() : Infinity
+  const hasGamingRegistrationDeadline = event.event_type === 'gaming' && event.registration_closes_at !== null
 
   return {
     ...event,
@@ -63,7 +64,8 @@ function withAvailability(event: PublicEventRow, registrations: RegistrationRow[
     registered_count: registeredCount,
     spots_left: spotsLeft,
     registration_open: now >= opensAt && now <= closesAt &&
-      now < new Date(event.starts_at).getTime() && (spotsLeft == null || spotsLeft > 0),
+      (hasGamingRegistrationDeadline || now < new Date(event.starts_at).getTime()) &&
+      (spotsLeft == null || spotsLeft > 0),
   }
 }
 
