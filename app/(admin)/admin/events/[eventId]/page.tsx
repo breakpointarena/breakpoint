@@ -59,31 +59,34 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
 
       <Card className="border-white/10 bg-[#111114] p-5 sm:p-7">
         <h2 className="mb-5 text-lg font-black text-white">Event settings</h2>
-        <form action={updateEvent} className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <form action={updateEvent} className="space-y-5">
           <input type="hidden" name="event_id" value={event.id} />
-          <div className="space-y-2"><Label>Title</Label><Input name="title" defaultValue={event.title} required /></div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="space-y-2"><Label>Title</Label><Input name="title" defaultValue={event.title} required /></div>
+            <div className="space-y-2"><Label>Type</Label><select name="event_type" defaultValue={event.event_type} className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white"><option value="tournament">Tournament</option><option value="gaming">Gaming event</option><option value="community">Community</option><option value="other">Other</option></select></div>
+            <div className="space-y-2"><Label>Starts (India time)</Label><Input name="starts_at" type="datetime-local" defaultValue={inputDateTime(event.starts_at)} required /></div>
+            <div className="space-y-2"><Label>Entry fee (₹)</Label><Input name="entry_fee" type="number" min="0" step="0.01" defaultValue={event.entry_fee} required /></div>
+          </div>
+          <details className="rounded-xl border border-white/10 bg-black/20 p-4">
+            <summary className="cursor-pointer list-none text-sm font-bold text-primary">More options <span className="ml-1 text-xs font-normal text-secondary-content">(venue, registration, team settings, prizes)</span></summary>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <div className="space-y-2"><Label>Slug</Label><Input name="slug" defaultValue={event.slug} required /></div>
-          <div className="space-y-2"><Label>Type</Label><select name="event_type" defaultValue={event.event_type} className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white"><option value="tournament">Tournament</option><option value="gaming">Gaming event</option><option value="community">Community</option><option value="other">Other</option></select></div>
-          <div className="space-y-2"><Label>Starts (India time)</Label><Input name="starts_at" type="datetime-local" defaultValue={inputDateTime(event.starts_at)} required /></div>
           <div className="space-y-2"><Label>Ends</Label><Input name="ends_at" type="datetime-local" defaultValue={inputDateTime(event.ends_at)} /></div>
-          <div className="space-y-2"><Label>Venue</Label><Input name="venue" defaultValue={event.venue} required /></div>
+          <div className="space-y-2"><Label>Venue</Label><Input name="venue" defaultValue={event.venue} /></div>
           <div className="space-y-2"><Label>Registration opens</Label><Input name="registration_opens_at" type="datetime-local" defaultValue={inputDateTime(event.registration_opens_at)} /></div>
           <div className="space-y-2"><Label>Registration closes</Label><Input name="registration_closes_at" type="datetime-local" defaultValue={inputDateTime(event.registration_closes_at)} /></div>
-          <div className="space-y-2"><Label>Entry fee per entry (₹)</Label><Input name="entry_fee" type="number" min="0" step="0.01" defaultValue={event.entry_fee} required /></div>
           <div className="space-y-2"><Label>Capacity (blank = unlimited)</Label><Input name="capacity" type="number" min="1" defaultValue={event.capacity || ''} /></div>
           <div className="space-y-2"><Label>Entry type</Label><select name="registration_mode" defaultValue={event.registration_mode} className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white"><option value="individual">Individual</option><option value="team">Team</option></select></div>
           <div className="space-y-2"><Label>Team size</Label><Input name="team_size" type="number" min="1" max="20" defaultValue={event.team_size} /></div>
-          <div className="space-y-2 md:col-span-2 xl:col-span-3"><Label>Description</Label><textarea name="description" rows={4} defaultValue={event.description} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" /></div>
-          <div className="space-y-2 md:col-span-2 xl:col-span-3">
+          <div className="space-y-2 sm:col-span-2 xl:col-span-3"><Label>Description (optional)</Label><textarea name="description" rows={3} defaultValue={event.description} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" /></div>
+          <div className="space-y-2 sm:col-span-2 xl:col-span-3">
             <Label>Prizes shown publicly (optional)</Label>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Input name="first_place_prize_description" defaultValue={event.first_place_prize_description || ''} placeholder="1st place prize" />
-              <Input name="second_place_prize_description" defaultValue={event.second_place_prize_description || ''} placeholder="2nd place prize" />
-              <Input name="third_place_prize_description" defaultValue={event.third_place_prize_description || ''} placeholder="3rd place prize" />
-            </div>
-            <p className="text-xs text-secondary-content">Prize descriptions appear on the event page. Record payout costs separately in admin-only prize expenses.</p>
+            <textarea name="prizes" rows={3} defaultValue={[event.first_place_prize_description ? `1st place: ${event.first_place_prize_description}` : '', event.second_place_prize_description ? `2nd place: ${event.second_place_prize_description}` : '', event.third_place_prize_description ? `3rd place: ${event.third_place_prize_description}` : ''].filter(Boolean).join('\n')} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" placeholder={'1st place: ...\n2nd place: ...\n3rd place: ...'} />
+            <p className="text-xs text-secondary-content">One prize per line. Payout costs are recorded separately in admin-only expenses.</p>
           </div>
-          <div className="md:col-span-2 xl:col-span-3"><Button type="submit">Save event</Button></div>
+            </div>
+          </details>
+          <Button type="submit">Save event</Button>
         </form>
       </Card>
       {event.status !== 'cancelled' && <form action={setEventStatus} className="-mt-4 flex justify-end"><input type="hidden" name="event_id" value={event.id} /><input type="hidden" name="status" value="cancelled" /><Button type="submit" variant="outline" className="border-red-500/30 text-red-300">Cancel event</Button></form>}

@@ -22,30 +22,32 @@ export default async function AdminEventsPage() {
 
       <Card className="border-white/10 bg-[#111114] p-5 sm:p-7">
         <div className="mb-5 flex items-center gap-2"><Plus className="h-5 w-5 text-primary" /><h2 className="text-lg font-black text-white">Create event</h2></div>
-        <form action={createEvent} className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <form action={createEvent} className="space-y-5">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="space-y-2"><Label>Event title</Label><Input name="title" placeholder="8-ball Tournament" required maxLength={140} /></div>
-          <div className="space-y-2"><Label>Event URL slug (optional)</Label><Input name="slug" placeholder="8-ball-tournament" /></div>
           <div className="space-y-2"><Label>Type</Label><select name="event_type" className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white"><option value="tournament">Tournament</option><option value="gaming">Gaming event</option><option value="community">Community</option><option value="other">Other</option></select></div>
           <div className="space-y-2"><Label>Starts (India time)</Label><Input name="starts_at" type="datetime-local" required /></div>
+          <div className="space-y-2"><Label>Entry fee (₹)</Label><Input name="entry_fee" type="number" min="0" step="0.01" defaultValue="0" required /></div>
+          </div>
+          <details className="rounded-xl border border-white/10 bg-black/20 p-4">
+            <summary className="cursor-pointer list-none text-sm font-bold text-primary">More options <span className="ml-1 text-xs font-normal text-secondary-content">(venue, registration, team settings, prizes)</span></summary>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <div className="space-y-2"><Label>Ends (optional)</Label><Input name="ends_at" type="datetime-local" /></div>
-          <div className="space-y-2"><Label>Venue</Label><Input name="venue" defaultValue="Breakpoint Arena" required /></div>
+          <div className="space-y-2"><Label>Venue</Label><Input name="venue" defaultValue="Breakpoint Arena" /></div>
           <div className="space-y-2"><Label>Registration opens (optional)</Label><Input name="registration_opens_at" type="datetime-local" /></div>
           <div className="space-y-2"><Label>Registration closes (optional)</Label><Input name="registration_closes_at" type="datetime-local" /></div>
-          <div className="space-y-2"><Label>Entry fee per entry (₹)</Label><Input name="entry_fee" type="number" min="0" step="0.01" defaultValue="0" required /></div>
           <div className="space-y-2"><Label>Capacity (blank = unlimited)</Label><Input name="capacity" type="number" min="1" step="1" /></div>
           <div className="space-y-2"><Label>Entry type</Label><select name="registration_mode" className="h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white"><option value="individual">Individual</option><option value="team">Team</option></select></div>
-          <div className="space-y-2"><Label>Team size</Label><Input name="team_size" type="number" min="1" max="20" defaultValue="2" /></div>
-          <div className="space-y-2 md:col-span-2 xl:col-span-3"><Label>Description</Label><textarea name="description" rows={4} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" placeholder="Event details, rules, and what participants should bring." /></div>
-          <div className="space-y-2 md:col-span-2 xl:col-span-3">
+          <div className="space-y-2"><Label>Players per team</Label><Input name="team_size" type="number" min="1" max="20" defaultValue="1" /></div>
+          <div className="space-y-2 sm:col-span-2 xl:col-span-3"><Label>Description (optional)</Label><textarea name="description" rows={3} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" placeholder="Rules and details for participants" /></div>
+          <div className="space-y-2 sm:col-span-2 xl:col-span-3">
             <Label>Prizes shown publicly (optional)</Label>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Input name="first_place_prize_description" placeholder="1st place prize" />
-              <Input name="second_place_prize_description" placeholder="2nd place prize" />
-              <Input name="third_place_prize_description" placeholder="3rd place prize" />
-            </div>
-            <p className="text-xs text-secondary-content">Prize descriptions appear on the event page. Record payout costs separately in admin-only prize expenses.</p>
+            <textarea name="prizes" rows={3} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-primary" placeholder={'1st place: ...\n2nd place: ...\n3rd place: ...'} />
+            <p className="text-xs text-secondary-content">One prize per line. Payout costs are recorded separately in admin-only expenses.</p>
           </div>
-          <div className="md:col-span-2 xl:col-span-3"><Button type="submit"><CalendarDays className="mr-2 h-4 w-4" />Save draft</Button></div>
+            </div>
+          </details>
+          <Button type="submit"><CalendarDays className="mr-2 h-4 w-4" />Save draft</Button>
         </form>
       </Card>
 

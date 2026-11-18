@@ -9,10 +9,6 @@ function text(form: FormData, key: string): string {
   return String(form.get(key) || '').trim()
 }
 
-function nullable(form: FormData, key: string): string | null {
-  return text(form, key) || null
-}
-
 function arenaDateTime(value: string): string | null {
   if (!value) return null
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null
@@ -23,6 +19,19 @@ function arenaDateTime(value: string): string | null {
 function slugify(value: string): string {
   return value.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
+function parsePrizeDescriptions(value: string) {
+  const prizes: Array<string | null> = [null, null, null]
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  for (const line of lines) {
+    const labelled = line.match(/^(1st|first|1|2nd|second|2|3rd|third|3)(?:\s+place)?\s*[:\-]\s*(.+)$/i)
+    const index = labelled
+      ? /^(1st|first|1)$/i.test(labelled[1]) ? 0 : /^(2nd|second|2)$/i.test(labelled[1]) ? 1 : 2
+      : prizes.findIndex((prize) => prize === null)
+    if (index >= 0 && index < prizes.length) prizes[index] = labelled ? labelled[2].trim() : line
+  }
+  return prizes
 }
 
 function eventFields(form: FormData) {
@@ -38,8 +47,9 @@ function eventFields(form: FormData) {
   const capacityRaw = text(form, 'capacity')
   const capacity = capacityRaw ? Number(capacityRaw) : null
   const teamSize = Number(text(form, 'team_size') || 1)
+  const [firstPlacePrize, secondPlacePrize, thirdPlacePrize] = parsePrizeDescriptions(text(form, 'prizes'))
 
-  if (!title || !startsAt || !text(form, 'venue')) throw new Error('Add an event title, venue, and valid start time.')
+  if (!title || !startsAt) throw new Error('Add an event title and valid start time.')
   if (endsRaw && !endsAt) throw new Error('The event end time is invalid.')
   if (opensRaw && !opensAt) throw new Error('The registration opening time is invalid.')
   if (closesRaw && !closesAt) throw new Error('The registration closing time is invalid.')
@@ -53,7 +63,7 @@ function eventFields(form: FormData) {
     title,
     event_type: text(form, 'event_type') || 'tournament',
     description: text(form, 'description'),
-    venue: text(form, 'venue'),
+    venue: text(form, 'venue') || 'Breakpoint Arena',
     starts_at: startsAt,
     ends_at: endsAt,
     registration_opens_at: opensAt,
@@ -62,9 +72,9 @@ function eventFields(form: FormData) {
     capacity,
     registration_mode: text(form, 'registration_mode') === 'team' ? 'team' : 'individual',
     team_size: teamSize,
-    first_place_prize_description: nullable(form, 'first_place_prize_description'),
-    second_place_prize_description: nullable(form, 'second_place_prize_description'),
-    third_place_prize_description: nullable(form, 'third_place_prize_description'),
+    first_place_prize_description: firstPlacePrize,
+    second_place_prize_description: secondPlacePrize,
+    third_place_prize_description: thirdPlacePrize,
   }
 }
 
