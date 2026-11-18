@@ -32,6 +32,7 @@ export async function getMyWalletOverview() {
     if (!customer) {
       return {
         success: true as const,
+        verified: true,
         customerId: null,
         customerName: '',
         balance: { balance: 0, paidBalance: 0, bonusBalance: 0, reservedBalance: 0 },
@@ -58,6 +59,7 @@ export async function getMyWalletOverview() {
 
     return {
       success: true as const,
+      verified: true,
       customerId: customer.id,
       customerName: customer.name,
       balance,
