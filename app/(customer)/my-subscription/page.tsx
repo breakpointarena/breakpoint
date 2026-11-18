@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
+import { WalletSection } from '@/components/customer/account/WalletSection'
 
 /**
  * Rendered only once CustomerAuthGate has a verified session, so `phone` is the
@@ -149,18 +150,22 @@ function MySubscriptionPageContent({ phone }: { phone: string }) {
       <div className="max-w-300 mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
         {/* Breadcrumb */}
         <div className="animate-in fade-in slide-in-from-left-4 duration-500">
-          <Breadcrumb items={[{ label: 'Home', href: '/' }, { label: 'My Subscription' }]} />
+          <Breadcrumb items={[{ label: 'Home', href: '/' }, { label: 'My Account' }]} />
         </div>
 
+        <nav aria-label="Account sections" className="mb-8 flex w-fit gap-2 rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
+          <a href="#membership" className="rounded-lg bg-primary px-4 py-2 text-xs font-black uppercase tracking-wider text-black">Membership</a>
+          <a href="#wallet" className="rounded-lg px-4 py-2 text-xs font-black uppercase tracking-wider text-zinc-300 transition hover:bg-zinc-800">Wallet</a>
+        </nav>
+
         {/* Header Section */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-100">
+        <div id="membership" className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-100">
           <div className="max-w-2xl">
             <h1 className="text-3xl md:text-[42px] font-black tracking-tight leading-tight mb-3 text-transparent bg-gradient-to-r from-white via-amber-100 to-white bg-clip-text">
-              Your Subscription
+              Your Arena Account
             </h1>
             <p className="text-zinc-400 text-sm md:text-base leading-relaxed">
-              Manage your elite gaming access and monitor your exclusive benefits across the Break
-              Point Arena ecosystem.
+              Manage your membership, wallet balance, credit offers, and recent activity in one place.
             </p>
           </div>
           <div className="flex flex-row gap-3 md:gap-4 shrink-0">
@@ -473,6 +478,13 @@ function MySubscriptionPageContent({ phone }: { phone: string }) {
             )}
           </div>
         )}
+
+        <section id="wallet" className="mt-16 scroll-mt-28 border-t border-zinc-800 pt-10">
+          <div className="mx-auto mb-6 max-w-5xl">
+            <h2 className="text-2xl font-black text-white">Wallet</h2>
+          </div>
+          <WalletSection showBreadcrumb={false} showHeader={false} />
+        </section>
       </div>
     </main>
   )

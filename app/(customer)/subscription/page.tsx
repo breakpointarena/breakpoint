@@ -6,6 +6,8 @@ import SubscriptionPricingCard from '@/components/customer/subscription/Subscrip
 import { getPublicSubscriptionPlans } from './actions'
 import { getMyActivePlanSummary } from '@/app/(customer)/my-subscription/action'
 import { ActivePlanBanner } from '@/components/customer/subscription/ActivePlanBanner'
+import { WalletCreditPlans } from '@/components/customer/subscription/WalletCreditPlans'
+import { BrowsePlanTabs } from '@/components/customer/subscription/BrowsePlanTabs'
 
 /**
  * Reads the session cookie to decide whether to show the customer's own plan, so
@@ -50,35 +52,36 @@ export default async function SubscriptionPage() {
           <div className="inline-flex items-center justify-center space-x-2 bg-gradient-to-r from-primary/10 via-amber-400/10 to-primary/10 border border-primary/20 rounded-full px-5 py-2 mb-6 backdrop-blur-sm">
             <Award className="w-4 h-4 text-primary animate-pulse" />
             <span className="text-primary text-xs font-black tracking-[0.2em] uppercase">
-              Memberships
+              Arena plans
             </span>
           </div>
           <h1 className="text-4xl md:text-6xl font-black text-transparent bg-gradient-to-r from-white via-amber-100 to-white bg-clip-text mb-6 tracking-tight leading-tight">
-            Choose How You Play
+            Wallet or membership?
           </h1>
           <p className="text-zinc-400 text-lg leading-relaxed">
-            Save on every booking with a membership and enjoy arena-wide benefits.{' '}
-            <span className="text-transparent bg-gradient-to-r from-primary via-amber-300 to-primary bg-clip-text font-bold">elite gaming status</span>
-            {' '}and arena-wide benefits.
+            Choose a wallet pack for flexible credit or a membership for ongoing booking benefits.
           </p>
         </div>
 
-        {/* What this customer already has, above what they could buy. */}
-        {activePlan && (
-          <div className="px-4 mb-8 animate-in fade-in slide-in-from-top-4 duration-500">
-            <ActivePlanBanner plan={activePlan} />
-          </div>
-        )}
-
-        {/* Pricing card */}
-        <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
-          <SubscriptionPricingCard initialPlans={membershipPlans} />
-        </div>
-
-        {/* Comparison table */}
-        <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-300">
-          <ComparisonTable plans={membershipPlans} />
-        </div>
+        <BrowsePlanTabs
+          wallet={<WalletCreditPlans />}
+          subscription={(
+            <>
+              {activePlan && (
+                <div className="px-4 mb-6 animate-in fade-in slide-in-from-top-4 duration-500">
+                  <ActivePlanBanner plan={activePlan} />
+                </div>
+              )}
+              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <SubscriptionPricingCard initialPlans={membershipPlans} />
+              </div>
+              <details className="mx-auto mt-5 max-w-5xl rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4">
+                <summary className="cursor-pointer text-center text-sm font-bold text-zinc-300">Compare membership benefits</summary>
+                <div className="pt-4"><ComparisonTable plans={membershipPlans} /></div>
+              </details>
+            </>
+          )}
+        />
 
         {hourPacks.length > 0 && (
           <section className="mt-14 px-4 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-300">

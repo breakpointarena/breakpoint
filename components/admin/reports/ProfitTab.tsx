@@ -207,6 +207,15 @@ export function ProfitTab({ dateFrom, dateTo }: ProfitTabProps) {
                 />
               </div>
             </div>
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <p className="text-xs text-secondary-content">Event Registrations</p>
+                <p className="text-sm font-black text-white"><CurrencyCountUp amount={data.eventRevenue || 0} duration={1100} /></p>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-zinc-900">
+                <div className="h-full bg-emerald-500 transition-all duration-[1500ms] ease-out" style={{ width: `${data.revenue > 0 ? Math.max(0, data.eventRevenue || 0) / data.revenue * 100 : 0}%` }} />
+              </div>
+            </div>
             <div className="pt-2 border-t border-zinc-800">
               <div className="flex justify-between items-center">
                 <p className="text-xs font-black text-primary uppercase">Total Revenue</p>

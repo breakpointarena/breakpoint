@@ -5,6 +5,7 @@ import type {
   FoodOrderQuote,
   SubscriptionQuote,
   WalletTopUpQuote,
+  EventRegistrationQuote,
 } from './quote'
 
 /**
@@ -13,8 +14,8 @@ import type {
  * amount back from the database rather than trusting whatever the browser posts.
  */
 
-export type PaymentPurpose = 'device_booking' | 'food_order' | 'subscription' | 'wallet_top_up'
-export type StoredQuote = DeviceBookingQuote | FoodOrderQuote | SubscriptionQuote | WalletTopUpQuote
+export type PaymentPurpose = 'device_booking' | 'food_order' | 'subscription' | 'wallet_top_up' | 'event_registration'
+export type StoredQuote = DeviceBookingQuote | FoodOrderQuote | SubscriptionQuote | WalletTopUpQuote | EventRegistrationQuote
 
 export interface PaymentOrderRow {
   id: string
@@ -28,6 +29,7 @@ export interface PaymentOrderRow {
   /** The membership a subscription order produced. Null on the booking flows. */
   subscription_id: string | null
   wallet_transaction_id: string | null
+  event_registration_id: string | null
   razorpay_payment_id: string | null
   paid_at: string | null
   fulfilling_at: string | null
@@ -49,6 +51,8 @@ function buildReceipt(purpose: PaymentPurpose): string {
       ? 'sb'
       : purpose === 'wallet_top_up'
         ? 'wl'
+      : purpose === 'event_registration'
+        ? 'ev'
         : 'fd'
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
@@ -192,7 +196,7 @@ export async function claimStrandedOrder(
 
 export async function markOrderFulfilled(
   razorpayOrderId: string,
-  produced: { bookingId?: string; subscriptionId?: string; walletTransactionId?: string }
+  produced: { bookingId?: string; subscriptionId?: string; walletTransactionId?: string; eventRegistrationId?: string }
 ): Promise<void> {
   // Whichever of the two the purpose produced. Written separately rather than
   // into one column, so "which membership did this order pay for" stays a
@@ -204,11 +208,42 @@ export async function markOrderFulfilled(
       ...(produced.bookingId ? { booking_id: produced.bookingId } : {}),
       ...(produced.subscriptionId ? { subscription_id: produced.subscriptionId } : {}),
       ...(produced.walletTransactionId ? { wallet_transaction_id: produced.walletTransactionId } : {}),
+      ...(produced.eventRegistrationId ? { event_registration_id: produced.eventRegistrationId } : {}),
       fulfilled_at: new Date().toISOString(),
     })
     .eq('razorpay_order_id', razorpayOrderId)
 
   if (error) console.error('Failed to mark payment order fulfilled:', error)
+}
+
+export async function getEventRegistrationForOrder(
+  registrationId: string
+): Promise<{ id: string; registration_code: string } | null> {
+  if (!registrationId) return null
+
+  const { data } = await supabaseAdmin
+    .from('event_registrations')
+    .select('id, registration_code')
+    .eq('id', registrationId)
+    .eq('registration_status', 'registered')
+    .maybeSingle()
+
+  return data || null
+}
+
+export async function getEventRegistrationByPaymentId(
+  razorpayPaymentId: string
+): Promise<{ id: string; registration_code: string } | null> {
+  if (!razorpayPaymentId) return null
+
+  const { data } = await supabaseAdmin
+    .from('event_registrations')
+    .select('id, registration_code')
+    .eq('razorpay_payment_id', razorpayPaymentId)
+    .eq('registration_status', 'registered')
+    .maybeSingle()
+
+  return data || null
 }
 
 /**

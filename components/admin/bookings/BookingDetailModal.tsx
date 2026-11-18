@@ -18,7 +18,7 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, increaseFoodItemQuantity, decreaseFoodItemQuantity, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, increaseFoodItemQuantity, decreaseFoodItemQuantity, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, undoLatestSharedPlayChange, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
 import { getDeviceTypes } from "@/app/(admin)/admin/devices/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
@@ -26,7 +26,7 @@ import { Label } from "@/components/ui/label";
 import { QRCodeSVG } from "qrcode.react";
 import {
   User, Phone, Mail, Calendar, Clock, IndianRupee, Pencil, X,
-  Loader2, CheckCircle2, LogIn, LogOut,
+  Loader2, CheckCircle2, LogIn, LogOut, Undo2,
   UtensilsCrossed, QrCode, MapPin, Gamepad2, Plus, Minus, Search, Filter, Trash2, Play, Pause, UserPlus, ChevronDown
 } from "lucide-react";
 import { toast } from "sonner";
@@ -201,6 +201,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [loadingSharedPlayCustomers, setLoadingSharedPlayCustomers] = useState(false);
   const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
   const [savingSharedPlay, setSavingSharedPlay] = useState(false);
+  const [undoingSharedPlay, setUndoingSharedPlay] = useState(false);
   const [sitInDialogOpen, setSitInDialogOpen] = useState(false);
   const [sitInClockDraft, setSitInClockDraft] = useState("");
   const [sitOutDialogOpen, setSitOutDialogOpen] = useState(false);
@@ -850,6 +851,21 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
     await loadBookingDetails();
     onUpdate?.();
     return true;
+  };
+
+  const handleUndoSharedPlayChange = async () => {
+    if (!bookingId || undoingSharedPlay || !booking?.latest_shared_play_change) return;
+    setUndoingSharedPlay(true);
+    const result = await undoLatestSharedPlayChange(bookingId);
+    setUndoingSharedPlay(false);
+    if (!result.success) {
+      toast.error("Could not undo the play change", { description: result.error });
+      await loadBookingDetails();
+      return;
+    }
+    toast.success(`${result.action} change undone`, { description: "Previous players and session times restored." });
+    await loadBookingDetails();
+    onUpdate?.();
   };
 
   const handleLinkParticipantCustomer = async (participantId: string, name: string) => {
@@ -1645,6 +1661,20 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                             >
                               <Pause className="mr-1 h-3 w-3" /> Sit out all
                             </Button>
+                            {booking.latest_shared_play_change && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={savingSharedPlay || undoingSharedPlay}
+                                onClick={handleUndoSharedPlayChange}
+                                className="border-white/15 text-secondary-content hover:text-white"
+                                title={`Undo last ${booking.latest_shared_play_change.action_label.toLowerCase()} change`}
+                              >
+                                {undoingSharedPlay ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Undo2 className="mr-1 h-3 w-3" />}
+                                Undo last change
+                              </Button>
+                            )}
                           </div>
                         )}
                       </div>

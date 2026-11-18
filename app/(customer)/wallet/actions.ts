@@ -10,28 +10,38 @@ import { getWalletBalance, getWalletTransactions } from '@/lib/wallet/server'
 export async function getMyWalletOverview() {
   try {
     const phone = await getVerifiedCustomerPhone()
-    if (!phone) {
-      return { success: false as const, error: 'Please verify your mobile number to view your wallet.' }
-    }
-
-    const [
-      { data: customer, error: customerError },
-      { data: offers, error: offersError },
-    ] = await Promise.all([
-      supabaseAdmin.from('customers').select('id, name').eq('phone', phone).maybeSingle(),
+    const [{ data: offers, error: offersError }, customerResult] = await Promise.all([
       supabaseAdmin
         .from('wallet_offers')
         .select('id, name, price, paid_credits, bonus_credits, bonus_validity_days')
         .eq('is_active', true)
         .order('display_order', { ascending: true })
         .order('price', { ascending: true }),
+      phone
+        ? supabaseAdmin.from('customers').select('id, name').eq('phone', phone).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
     ])
-    if (customerError) throw customerError
     if (offersError) throw offersError
+    if (customerResult.error) throw customerResult.error
 
+    if (!phone) {
+      return {
+        success: true as const,
+        verified: false,
+        customerId: null,
+        customerName: '',
+        balance: { balance: 0, paidBalance: 0, bonusBalance: 0, reservedBalance: 0 },
+        transactions: [],
+        offers: offers || [],
+        bonusExpiries: [],
+      }
+    }
+
+    const customer = customerResult.data
     if (!customer) {
       return {
         success: true as const,
+        verified: true,
         customerId: null,
         customerName: '',
         balance: { balance: 0, paidBalance: 0, bonusBalance: 0, reservedBalance: 0 },
@@ -58,6 +68,7 @@ export async function getMyWalletOverview() {
 
     return {
       success: true as const,
+      verified: true,
       customerId: customer.id,
       customerName: customer.name,
       balance,

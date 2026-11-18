@@ -27,6 +27,7 @@ const navItems = [
   { name: "Wallet Credits", href: "/admin/wallet-credits", icon: WalletCards },
   { name: "Promo Codes", href: "/admin/promo-code", icon: Tag },
   { name: "Happy Hours", href: "/admin/happy-hours", icon: PartyPopper },
+  { name: "Events", href: "/admin/events", icon: Calendar },
   { name: "Reports", href: "/admin/reports", icon: BarChart2 },
 ];
 

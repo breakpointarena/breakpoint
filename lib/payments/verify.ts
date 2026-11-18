@@ -12,6 +12,8 @@ import {
   FULFILMENT_LEASE_MS,
   getBookingByPaymentId,
   getBookingForOrder,
+  getEventRegistrationByPaymentId,
+  getEventRegistrationForOrder,
   getPaymentOrder,
   getSubscriptionByPaymentId,
   getSubscriptionForOrder,
@@ -44,6 +46,8 @@ export type SettleResult =
       subscriptionId?: string
       planName?: string
       walletTransactionId?: string
+      eventRegistrationId?: string
+      registrationCode?: string
       amountPaid: number
       purpose: PaymentPurpose
     }
@@ -68,6 +72,8 @@ export type SettleResult =
 const inFlightMessage = (purpose: PaymentPurpose): string =>
   purpose === 'subscription'
     ? 'This payment is already being processed. Please check "My Subscription" shortly.'
+    : purpose === 'event_registration'
+      ? 'This payment is already being processed. Please check your event registration shortly.'
     : purpose === 'wallet_top_up'
       ? 'This wallet purchase is already being processed. Please check your wallet shortly.'
     : 'This payment is already being processed. Please check "Retrieve Booking" shortly.'
@@ -75,6 +81,8 @@ const inFlightMessage = (purpose: PaymentPurpose): string =>
 const goneMessage = (purpose: PaymentPurpose): string =>
   purpose === 'subscription'
     ? 'This membership is no longer available. Please contact support.'
+    : purpose === 'event_registration'
+      ? 'This event registration could not be completed. Please contact the arena.'
     : purpose === 'wallet_top_up'
       ? 'This wallet purchase could not be completed. Please contact support.'
     : 'This booking is no longer available. Please contact support.'
@@ -274,6 +282,7 @@ async function settlePayment(
     bookingId: result.bookingId,
     subscriptionId: result.subscriptionId,
     walletTransactionId: result.walletTransactionId,
+    eventRegistrationId: result.eventRegistrationId,
   })
 
   return {
@@ -283,6 +292,8 @@ async function settlePayment(
     subscriptionId: result.subscriptionId,
     planName: result.planName,
     walletTransactionId: result.walletTransactionId,
+    eventRegistrationId: result.eventRegistrationId,
+    registrationCode: result.registrationCode,
     amountPaid: Number(order.amount),
     purpose: order.purpose,
   }
@@ -324,6 +335,14 @@ async function alreadyHandled(
     purpose: order.purpose,
   })
 
+  const settledEventRegistration = (registration: { id: string; registration_code: string }): SettleResult => ({
+    success: true,
+    eventRegistrationId: registration.id,
+    registrationCode: registration.registration_code,
+    amountPaid: Number(order.amount),
+    purpose: order.purpose,
+  })
+
   if (order.purpose === 'wallet_top_up') {
     let transactionId = order.wallet_transaction_id
     if (!transactionId) {
@@ -351,7 +370,20 @@ async function alreadyHandled(
     }
   }
 
-  if (order.purpose === 'subscription') {
+  if (order.purpose === 'event_registration') {
+    const registration = (order.event_registration_id
+      ? await getEventRegistrationForOrder(order.event_registration_id)
+      : null) || await getEventRegistrationByPaymentId(razorpayPaymentId)
+
+    if (registration) {
+      if (!order.event_registration_id) {
+        await markOrderFulfilled(order.razorpay_order_id, {
+          eventRegistrationId: registration.id,
+        })
+      }
+      return settledEventRegistration(registration)
+    }
+  } else if (order.purpose === 'subscription') {
     if (order.subscription_id) {
       const membership = await getSubscriptionForOrder(order.subscription_id)
       if (membership) return settledMembership(membership)
