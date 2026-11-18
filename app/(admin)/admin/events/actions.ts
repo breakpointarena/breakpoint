@@ -246,6 +246,37 @@ export async function setRegistrationStatus(form: FormData) {
   revalidatePath('/events')
 }
 
+export async function recordEventRegistrationPayment(form: FormData) {
+  const actor = await requireAdmin()
+  const eventId = text(form, 'event_id')
+  const registrationId = text(form, 'registration_id')
+  const amount = Number(text(form, 'amount'))
+  const paymentMethod = text(form, 'payment_method')
+  const paymentReference = text(form, 'payment_reference')
+
+  if (!eventId || !registrationId || !Number.isFinite(amount) || amount <= 0) {
+    throw new Error('Enter a positive payment amount.')
+  }
+  if (!['cash', 'card', 'upi'].includes(paymentMethod)) {
+    throw new Error('Choose cash, card, or UPI as the payment method.')
+  }
+
+  const { error } = await supabaseAdmin.rpc('record_event_registration_payment', {
+    p_registration_id: registrationId,
+    p_amount: amount,
+    p_payment_method: paymentMethod,
+    p_payment_reference: paymentReference || null,
+    p_created_by: actor.userId,
+  })
+  if (error) {
+    if (error.message.includes('exceeds')) throw new Error('Payment cannot exceed the remaining entry fee.')
+    throw new Error(error.message)
+  }
+
+  revalidatePath(`/admin/events/${eventId}`)
+  revalidatePath('/admin/reports')
+}
+
 export async function recordEventRegistrationRefund(form: FormData) {
   const actor = await requireAdmin()
   const eventId = text(form, 'event_id')

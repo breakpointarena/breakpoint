@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { addEventPrizeExpense, adminRegisterForEvent, recordEventRegistrationRefund } from '@/app/(admin)/admin/events/actions'
+import { addEventPrizeExpense, adminRegisterForEvent, recordEventRegistrationPayment, recordEventRegistrationRefund } from '@/app/(admin)/admin/events/actions'
 
 export function AdminRegistrationForm({ eventId, entryFee, registrationMode, teamSize }: {
   eventId: string; entryFee: number; registrationMode: 'individual' | 'team'; teamSize: number
@@ -97,6 +97,37 @@ export function RegistrationRefundForm({ eventId, registrationId, amountPaid }: 
       <select name="payment_method" required className="h-8 rounded-md border border-white/10 bg-[#111114] px-2 text-xs text-white"><option value="">Refund method</option><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="online">Online</option></select>
       <Input name="payment_reference" placeholder="Reference (optional)" className="h-8 w-36 text-xs" />
       <Button type="submit" size="sm" variant="outline" disabled={pending} className="h-8">{pending ? 'Saving…' : 'Record refund'}</Button>
+    </form>
+  )
+}
+
+export function RegistrationPaymentForm({ eventId, registrationId, amountDue }: {
+  eventId: string; registrationId: string; amountDue: number
+}) {
+  const router = useRouter()
+  const [pending, setPending] = useState(false)
+  if (amountDue <= 0) return null
+
+  const submit = async (form: FormData) => {
+    if (pending) return
+    setPending(true)
+    try {
+      await recordEventRegistrationPayment(form)
+      toast.success('Payment recorded in event revenue')
+      router.refresh()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not record payment')
+    } finally { setPending(false) }
+  }
+
+  return (
+    <form action={submit} className="mt-2 flex flex-wrap items-center gap-2">
+      <input type="hidden" name="event_id" value={eventId} />
+      <input type="hidden" name="registration_id" value={registrationId} />
+      <Input name="amount" type="number" min="0.01" max={amountDue} step="0.01" defaultValue={amountDue} placeholder="Amount received" required className="h-8 w-28 text-xs" />
+      <select name="payment_method" required className="h-8 rounded-md border border-white/10 bg-[#111114] px-2 text-xs text-white"><option value="">Payment method</option><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option></select>
+      <Input name="payment_reference" placeholder="Reference (optional)" className="h-8 w-36 text-xs" />
+      <Button type="submit" size="sm" variant="outline" disabled={pending} className="h-8">{pending ? 'Saving…' : 'Record payment'}</Button>
     </form>
   )
 }

@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { AdminRegistrationForm, EventPrizeExpenseForm, RegistrationRefundForm } from '@/components/admin/events/AdminEventForms'
+import { AdminRegistrationForm, EventPrizeExpenseForm, RegistrationPaymentForm, RegistrationRefundForm } from '@/components/admin/events/AdminEventForms'
 import { getAdminEvent, setEventStatus, setRegistrationStatus, updateEvent } from '@/app/(admin)/admin/events/actions'
 import { requireStaff } from '@/lib/auth/require-admin'
 
@@ -115,6 +115,7 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
                       {registration.registration_status === 'waitlisted' && <StatusAction eventId={event.id} registrationId={registration.id} status="registered" label="Confirm" />}
                       {registration.registration_status !== 'cancelled' && registration.registration_status !== 'checked_in' && <StatusAction eventId={event.id} registrationId={registration.id} status="cancelled" label="Cancel" />}
                     </div>
+                    {data.userRole === 'admin' && ['registered', 'checked_in'].includes(registration.registration_status) && <RegistrationPaymentForm eventId={event.id} registrationId={registration.id} amountDue={Math.max(0, Number(registration.entry_fee) - Number(registration.amount_paid))} />}
                     {data.userRole === 'admin' && <RegistrationRefundForm eventId={event.id} registrationId={registration.id} amountPaid={Number(registration.amount_paid)} />}
                   </td>
                 </tr>
