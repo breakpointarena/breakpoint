@@ -26,8 +26,14 @@ export default async function EventDetailPage({ params }: { params: Promise<{ sl
   const typeLabel = event.event_type === 'gaming' ? 'Gaming event' : event.event_type === 'community' ? 'Community' : event.event_type === 'other' ? 'Event' : 'Tournament'
 
   return (
-    <div className="w-full space-y-6">
-      <Link href="/events" className="inline-flex items-center gap-2 text-sm font-semibold text-secondary-content transition hover:text-white"><ArrowLeft className="h-4 w-4" /> All events</Link>
+    <div className="w-full space-y-6 pt-6 md:pt-8">
+      <Link
+        href="/events"
+        prefetch
+        className="relative z-20 inline-flex min-h-10 items-center gap-2 rounded-lg border border-white/10 bg-[#111114]/90 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      >
+        <ArrowLeft className="h-4 w-4" /> All events
+      </Link>
       <div className="grid gap-6 lg:grid-cols-[1fr_420px]">
         <div className="space-y-6">
           <section className="relative overflow-hidden rounded-3xl border border-primary/20 bg-gradient-to-br from-[#231a07] via-[#111114] to-[#09090b] p-7 sm:p-10">
