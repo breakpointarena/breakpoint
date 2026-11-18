@@ -20,7 +20,7 @@ export default async function EventsPage() {
   const events = await getPublishedEvents()
 
   return (
-    <div className="w-full space-y-8">
+    <div className="w-full space-y-8 pt-0 md:pt-12">
       <section className="relative overflow-hidden rounded-3xl border border-primary/20 bg-gradient-to-br from-[#231a07] via-[#111114] to-[#09090b] px-6 py-10 sm:px-10 sm:py-14">
         <div className="absolute -right-12 -top-12 h-56 w-56 rounded-full bg-primary/10 blur-3xl" />
         <p className="relative text-xs font-black uppercase tracking-[0.28em] text-primary">Breakpoint Arena · Events</p>
