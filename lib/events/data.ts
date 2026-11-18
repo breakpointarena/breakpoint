@@ -28,6 +28,13 @@ export interface PublicEvent {
   registration_open: boolean
 }
 
+type PublicEventRow = Omit<PublicEvent, 'registered_count' | 'spots_left' | 'registration_open'>
+type RegistrationRow = {
+  event_id: string
+  registration_status: string
+  reservation_expires_at: string | null
+}
+
 const PUBLIC_EVENT_FIELDS = [
   'id', 'slug', 'title', 'event_type', 'description', 'venue', 'starts_at', 'ends_at',
   'registration_opens_at', 'registration_closes_at', 'entry_fee', 'service_fee_percent', 'capacity',
@@ -36,7 +43,7 @@ const PUBLIC_EVENT_FIELDS = [
   'cover_image_url',
 ].join(', ')
 
-function withAvailability(event: any, registrations: any[]): PublicEvent {
+function withAvailability(event: PublicEventRow, registrations: RegistrationRow[]): PublicEvent {
   const now = Date.now()
   const registeredCount = registrations.filter((row) =>
     row.registration_status === 'registered' || row.registration_status === 'checked_in' ||
@@ -60,7 +67,7 @@ function withAvailability(event: any, registrations: any[]): PublicEvent {
   }
 }
 
-async function registrationsFor(eventIds: string[]) {
+async function registrationsFor(eventIds: string[]): Promise<RegistrationRow[]> {
   if (eventIds.length === 0) return []
   const { data, error } = await supabaseAdmin
     .from('event_registrations')
@@ -68,7 +75,7 @@ async function registrationsFor(eventIds: string[]) {
     .in('event_id', eventIds)
 
   if (error) throw error
-  return data || []
+  return (data || []) as RegistrationRow[]
 }
 
 export async function getPublishedEvents(): Promise<PublicEvent[]> {
@@ -80,7 +87,7 @@ export async function getPublishedEvents(): Promise<PublicEvent[]> {
     .order('starts_at', { ascending: true })
 
   if (error) throw error
-  const events = data || []
+  const events = (data || []) as PublicEventRow[]
   const registrations = await registrationsFor(events.map((event) => event.id))
   return events.map((event) => withAvailability(
     event,
@@ -99,5 +106,5 @@ export async function getPublishedEventBySlug(slug: string): Promise<PublicEvent
   if (error) throw error
   if (!data) return null
   const registrations = await registrationsFor([data.id])
-  return withAvailability(data, registrations)
+  return withAvailability(data as PublicEventRow, registrations)
 }
