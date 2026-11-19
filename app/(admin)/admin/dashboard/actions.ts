@@ -103,6 +103,8 @@ export async function getDashboardData() {
             customer_name,
             status,
             total_amount,
+            amount_paid,
+            wallet_amount,
             device_subtotal,
             food_subtotal,
             cash_amount,
@@ -111,7 +113,8 @@ export async function getDashboardData() {
             online_amount
           )
         `)
-        .eq("slot_date", today),
+        .eq("slot_date", today)
+        .gte("slot_start_time", "00:00:00"),
 
 
 
@@ -252,16 +255,24 @@ export async function getDashboardData() {
       settledInWindow as { id: string }[] | null
     );
 
-    // One pass over the paid set for both windows; `paid_at` falls back the same
-    // way it always has, so a booking with no payment group still counts.
-    let todaysRevenue = 0;
+    // Booking revenue is assigned to the scheduled session date. A booking
+    // with several device slots is counted once, not once per device.
+    const sessionBookings = new Map<string, any>();
+    for (const slot of slots) {
+      const booking = slot.bookings;
+      if (booking?.id && booking.status !== "cancelled") sessionBookings.set(booking.id, booking);
+    }
+    let todaysRevenue = Array.from(sessionBookings.values()).reduce(
+      (sum, booking) => sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)),
+      0
+    );
     let todaysBookingSettlements = 0;
     let thisWeekRevenue = 0;
 
     /**
-     * Either read failing zeroes both figures, which is what a single failing
-     * query did before. Reporting the half that succeeded would be worse than
-     * reporting nothing: an understated takings figure reads as real.
+     * The payment-date reads still drive booking settlements and the rolling
+     * seven-day figure. Today's main revenue tile uses today's slots above, so
+     * it does not move when a booking is paid on a different day.
      */
     if (!paymentsError && !settledError) {
       for (const booking of paidBookings as any[]) {
@@ -269,25 +280,22 @@ export async function getDashboardData() {
         if (!paidAt) continue;
 
         const day = arenaDate(new Date(paidAt));
-        // Wallet redemptions settle a booking but were recognized when the
-        // wallet was funded, so they are not new revenue on the booking date.
         const amount = Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0));
 
         if (day === today) {
-          todaysRevenue += amount;
           // The alternate view counts the wallet credits redeemed on bookings,
           // but leaves top-ups out so the two collection measures stay distinct.
           todaysBookingSettlements += Number(booking.amount_paid || 0);
         }
         if (day >= sevenDaysAgo) thisWeekRevenue += amount;
       }
-      if (!walletTopUpsError) {
-        for (const topUp of (walletTopUps || []) as any[]) {
-          const day = arenaDate(new Date(topUp.created_at));
-          const amount = Number(topUp.paid_amount || 0);
-          if (day === today) todaysRevenue += amount;
-          if (day >= sevenDaysAgo) thisWeekRevenue += amount;
-        }
+    }
+    if (!walletTopUpsError) {
+      for (const topUp of (walletTopUps || []) as any[]) {
+        const day = arenaDate(new Date(topUp.created_at));
+        const amount = Number(topUp.paid_amount || 0);
+        if (day === today) todaysRevenue += amount;
+        if (!paymentsError && !settledError && day >= sevenDaysAgo) thisWeekRevenue += amount;
       }
     }
 
@@ -434,83 +442,49 @@ export async function getTodaysRevenueDetails() {
   try {
     const today = arenaToday();
 
-    /**
-     * Same two-read shape as the dashboard tile this list sits behind, and for
-     * the same reason: unbounded, it read every settled booking the arena has
-     * ever taken so that the filter below could keep one day of it.
-     *
-     * The column list is built once and shared, so the two reads cannot drift
-     * apart - they must return the same shape to be merged.
-     */
+    /** Booking payments are listed by the scheduled session date. */
     const revenueWindow = revenueWindowStart(today);
-    const columns = (paymentGroups: string) => `
-        id,
-        booking_number,
-        customer_name,
-        customer_phone,
-        total_amount,
-        amount_paid,
-        wallet_amount,
-        device_subtotal,
-        food_subtotal,
-        subscription_discount,
-        promo_discount,
-        happy_hour_discount,
-        hour_pass_discount,
-        cash_amount,
-        card_amount,
-        upi_amount,
-        online_amount,
-        status,
-        payment_status,
-        created_at,
-        updated_at,
-        booking_device_slots(
-          slot_date,
-          slot_start_time,
-          slot_end_time,
-          device_type,
-          device_station_number
-        ),
-        ${paymentGroups}(paid_at)
-      `;
+    const { data: sessionBookings, error: sessionBookingsError } = await supabaseAdmin
+      .from("bookings")
+      .select(`
+          id,
+          booking_number,
+          customer_name,
+          customer_phone,
+          total_amount,
+          amount_paid,
+          wallet_amount,
+          device_subtotal,
+          food_subtotal,
+          subscription_discount,
+          promo_discount,
+          happy_hour_discount,
+          hour_pass_discount,
+          cash_amount,
+          card_amount,
+          upi_amount,
+          online_amount,
+          status,
+          payment_status,
+          created_at,
+          updated_at,
+          booking_device_slots!inner(
+            slot_date,
+            slot_start_time,
+            slot_end_time,
+            device_type,
+            device_station_number
+          )
+      `)
+      .neq("status", "cancelled")
+      .eq("booking_device_slots.slot_date", today)
+      .gte("booking_device_slots.slot_start_time", "00:00:00");
 
-    const [
-      { data: touchedInWindow, error: touchedError },
-      { data: settledInWindow, error: settledError },
-    ] = await Promise.all([
-      // Touched inside the window - every booking with no payment group.
-      supabaseAdmin
-        .from("bookings")
-        .select(columns("payment_groups"))
-        .neq("status", "cancelled")
-        .gte("updated_at", revenueWindow),
+    if (sessionBookingsError) throw sessionBookingsError;
 
-      // Settled inside the window by a payment group, whenever the booking row
-      // itself was last touched. `!inner` is what lets the filter reach it.
-      supabaseAdmin
-        .from("bookings")
-        .select(columns("payment_groups!inner"))
-        .neq("status", "cancelled")
-        .gte("payment_groups.paid_at", revenueWindow),
-    ]);
-
-    if (touchedError) throw touchedError;
-    if (settledError) throw settledError;
-
-    // Merged on the row id: a booking both settled and touched inside the
-    // window comes back from both reads, and this list must not show it twice.
-    const data = mergeBookingRows(
-      touchedInWindow as { id: string }[] | null,
-      settledInWindow as { id: string }[] | null
+    const filteredBookings = (sessionBookings || []).filter((booking: any) =>
+      Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)) > 0
     );
-
-    // Filter by payment date being today (using paid_at, updated_at, or created_at)
-    const filteredBookings = (data || []).filter((booking: any) => {
-      const paidAt = effectivePaidAt(booking);
-      if (!paidAt) return false;
-      return arenaDate(new Date(paidAt)) === today;
-    });
 
     const { data: walletSales, error: walletSalesError } = await supabaseAdmin
       .from("wallet_transactions")

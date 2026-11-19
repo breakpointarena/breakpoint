@@ -239,7 +239,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
       </div>
 
       {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         <Card
           className="bg-gradient-to-br from-green-500/10 to-green-600/5 border-green-500/20 p-5 cursor-pointer hover:border-green-500/40 transition-all hover:scale-[1.02]"
           onClick={handleRevenueClick}
@@ -248,13 +248,13 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
             <div className="flex-1">
               <p className="text-stat-label text-green-400 mb-1">
                 <span className="inline xl:block">Today's</span>{' '}
-                <span className="inline xl:block">Collections</span>
+                <span className="inline xl:block">Revenue</span>
               </p>
               <h3 className="text-2xl font-black text-white mb-1">
-                <RevealAmount amount={stats?.todaysRevenue || 0} label="today's collections" />
+                <RevealAmount amount={stats?.todaysRevenue || 0} label="today's revenue" />
               </h3>
               <p className="text-min-enhanced text-secondary-content">
-                Booking payments and wallet top-ups
+                Sessions starting today; top-ups by purchase date
               </p>
             </div>
             <div className="p-2 bg-green-500/10 rounded-lg">
@@ -264,7 +264,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
         </Card>
 
         <Card
-          className="xl:order-3 bg-gradient-to-br from-blue-500/10 to-blue-600/5 border-blue-500/20 p-5 cursor-pointer hover:border-blue-500/40 transition-all hover:scale-[1.02]"
+          className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 border-blue-500/20 p-5 cursor-pointer hover:border-blue-500/40 transition-all hover:scale-[1.02]"
           onClick={handleSessionsClick}
         >
           <div className="flex items-start justify-between">
@@ -286,7 +286,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
         </Card>
 
         <Card
-          className="xl:order-4 bg-gradient-to-br from-amber-500/10 to-amber-600/5 border-amber-500/20 p-5 cursor-pointer hover:border-amber-500/40 transition-all hover:scale-[1.02]"
+          className="bg-gradient-to-br from-amber-500/10 to-amber-600/5 border-amber-500/20 p-5 cursor-pointer hover:border-amber-500/40 transition-all hover:scale-[1.02]"
           onClick={handleUpcomingClick}
         >
           <div className="flex items-start justify-between">
@@ -308,7 +308,7 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
         </Card>
 
         <Card
-          className="xl:order-5 bg-gradient-to-br from-amber-500/10 to-orange-600/5 border-amber-500/20 p-5 cursor-pointer hover:border-amber-500/40 transition-all hover:scale-[1.02]"
+          className="bg-gradient-to-br from-amber-500/10 to-orange-600/5 border-amber-500/20 p-5 cursor-pointer hover:border-amber-500/40 transition-all hover:scale-[1.02]"
           onClick={handleDevicesClick}
         >
           <div className="flex items-start justify-between">
@@ -329,25 +329,6 @@ export default function DashboardClient({ initialData }: { initialData: Dashboar
           </div>
         </Card>
 
-        <Card className="xl:order-2 bg-gradient-to-br from-cyan-500/10 to-cyan-600/5 border-cyan-500/20 p-5">
-          <div className="flex items-start justify-between">
-            <div className="flex-1 min-w-0">
-              <p className="text-stat-label text-cyan-300 mb-1">Booking Settlements</p>
-              <h3 className="text-2xl font-black text-white mb-1">
-                <RevealAmount
-                  amount={stats?.todaysBookingSettlements || 0}
-                  label="today's booking settlements including wallet credits"
-                />
-              </h3>
-              <p className="text-min-enhanced text-secondary-content">
-                Includes wallet credits; excludes top-ups
-              </p>
-            </div>
-            <div className="p-2 bg-cyan-500/10 rounded-lg">
-              <Wallet className="h-5 w-5 text-cyan-400" />
-            </div>
-          </div>
-        </Card>
       </div>
 
       {/* Secondary Stats */}

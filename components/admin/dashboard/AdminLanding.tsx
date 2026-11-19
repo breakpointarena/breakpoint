@@ -47,7 +47,7 @@ export default function AdminLanding({ initialData }: { initialData: DashboardIn
     if (query) router.push(`/admin/bookings?q=${encodeURIComponent(query)}`);
   };
   const metrics = [
-    { label: "Today’s collections", value: `₹${Number(data.stats?.todaysRevenue || 0).toLocaleString("en-IN")}`, note: "Bookings and wallet top-ups", icon: IndianRupee },
+    { label: "Today's revenue", value: `₹${Number(data.stats?.todaysRevenue || 0).toLocaleString("en-IN")}`, note: "Sessions starting today; top-ups by purchase date", icon: IndianRupee },
     { label: "Active sessions", value: data.stats?.activeSessions || 0, note: "Players currently in the arena", icon: Activity },
     { label: "Upcoming bookings", value: data.stats?.upcomingBookings || 0, note: "Starting in the next 2 hours", icon: CalendarDays },
     { label: "Available devices", value: data.stats?.availableDevices || 0, note: "Ready for the next player", icon: Gamepad2 },
@@ -101,8 +101,6 @@ export default function AdminLanding({ initialData }: { initialData: DashboardIn
               <div className="mb-3"><h2 className="text-[13px] font-semibold text-slate-900">At a glance</h2><p className="mt-0.5 text-[11px] text-slate-600">Today and the past 7 days</p></div>
               <div className="space-y-2.5">
                 {metrics.map(({label,value}) => <div key={label} className="flex items-center justify-between gap-3"><span className="text-xs text-slate-600">{label}</span><span className="text-xs font-semibold tabular-nums text-slate-900">{value}</span></div>)}
-                <div className="border-t border-slate-100 pt-2.5" />
-                <div className="flex items-center justify-between gap-3"><span className="text-xs text-slate-600">Booking settlements</span><span className="text-xs font-semibold tabular-nums text-slate-900">₹{Number(data.stats?.todaysBookingSettlements || 0).toLocaleString("en-IN")}</span></div>
                 <div className="flex items-center justify-between gap-3"><span className="text-xs text-slate-600">Collections this week</span><span className="text-xs font-semibold tabular-nums text-slate-900">₹{Number(data.quickStats?.thisWeekRevenue || 0).toLocaleString("en-IN")}</span></div>
                 <div className="flex items-center justify-between gap-3"><span className="text-xs text-slate-600">Food orders</span><span className="text-xs font-semibold tabular-nums text-slate-900">{data.quickStats?.todaysFoodOrders || 0}</span></div>
                 <div className="flex items-center justify-between gap-3"><span className="text-xs text-slate-600">Peak hour</span><span className="text-xs font-semibold text-slate-900">{data.quickStats?.peakHour || "—"}</span></div>

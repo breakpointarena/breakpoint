@@ -65,17 +65,19 @@ export function TodaysRevenueModal({ open, onClose, bookings, walletSales, total
         <DialogHeader>
           <DialogTitle className="text-xl font-black uppercase text-white flex items-center gap-2">
             <IndianRupee className="h-5 w-5 text-green-500" />
-            Today's Collections
+            Today's Revenue
           </DialogTitle>
         </DialogHeader>
 
         {/* Summary Stats */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div className="p-4 bg-gradient-to-br from-green-500/10 to-green-600/5 border border-green-500/20 rounded-lg">
-            <p className="text-xs text-green-400 mb-1">Total Collections</p>
+            <p className="text-xs text-green-400 mb-1">Total Revenue</p>
             <p className="text-2xl font-black text-white">₹{totalRevenue.toLocaleString('en-IN')}</p>
             <p className="text-label mt-1">{bookings.length} bookings · {walletSales.length} wallet top-ups</p>
           </div>
+
+          <p className="col-span-2 text-xs text-secondary-content">Booking revenue is assigned to sessions starting today (from midnight), regardless of payment date. Wallet top-ups are assigned to the date paid.</p>
 
           <div className="p-4 bg-[var(--surface)] border border-[#27272a] rounded-lg">
             <p className="text-xs text-muted-content mb-1">Booking Payments</p>

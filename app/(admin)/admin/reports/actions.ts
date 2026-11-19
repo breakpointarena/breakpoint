@@ -479,7 +479,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
         status,
         created_at,
         updated_at,
-        booking_device_slots(slot_date),
+        booking_device_slots(slot_date, slot_start_time),
         payment_groups(paid_at)
       `)
       // Unpaid bookings are fetched too. They add nothing to revenue - their
@@ -522,15 +522,16 @@ export async function getRevenueReports(filters?: ReportFilters) {
     if (adminWalletError) throw adminWalletError;
     if (eventRegistrationPaymentsError) throw eventRegistrationPaymentsError;
 
-    /**
-     * The date a booking belongs to in this report.
-     *
-     * Paid bookings are placed on the day the money arrived, which is what a
-     * revenue report is about. An unpaid one has no such day, so it is placed on
-     * the day it was raised - the alternative, `updated_at`, moves every time
-     * anybody edits the booking.
-     */
+    /** Booking revenue belongs to the day its scheduled session starts. */
     const reportDate = (booking: any): string | null => {
+      const sessionDate = (booking.booking_device_slots || [])
+        .map((slot: any) => slot?.slot_date)
+        .filter(Boolean)
+        .sort()[0];
+      if (sessionDate) return sessionDate;
+
+      // Rows without a device session (for example, food-only bookings) retain
+      // their payment date, with the same stable fallbacks used previously.
       const paidAt =
         booking.payment_status === 'pending'
           ? booking.created_at
@@ -683,7 +684,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
     revenueBookings.forEach((booking: any) => {
       const source = booking.booking_source || "online";
 
-      // Track revenue by payment date, on the same rule the range filter used
+      // Attribute booking revenue to the scheduled session date.
       const revenueDate = reportDate(booking) as string;
 
       // Calculate actual revenue based on what was actually paid (amount_paid)
@@ -727,7 +728,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
       sourceBreakdown[source].totalRevenue += revenue;
       sourceBreakdown[source].bookingCount += 1;
 
-      // Daily revenue - track by payment date
+      // Daily revenue - track booking revenue by session date
       if (!dailyRevenue[revenueDate]) {
         dailyRevenue[revenueDate] = {
           date: revenueDate,

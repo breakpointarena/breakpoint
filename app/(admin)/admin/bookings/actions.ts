@@ -37,8 +37,6 @@ import {
 } from "@/lib/bookings/walkInSession";
 import { arenaDate, arenaToday } from "@/lib/utils/dates";
 import {
-  effectivePaidAt,
-  mergeBookingRows,
   revenueWindowStart,
 } from "@/lib/reports/revenueWindow";
 import { needsAttention } from "@/lib/bookings/attention";
@@ -2272,83 +2270,38 @@ export async function getBookingStats(
         )
       : (allStatuses || []);
 
-    // Read bookings paid inside the revenue window. A booking can be created
-    // earlier and paid today, so created_at is not the date revenue belongs to.
+    // Attribute booking collections to the scheduled session date. The joined
+    // slot filter keeps this independent of when the booking was created or paid.
     const today = arenaToday();
     const revenueWindow = revenueWindowStart(today);
-    const revenueColumns = `
-      id,
-      amount_paid,
-      wallet_amount,
-      payment_status,
-      status,
-      created_at,
-      updated_at,
-      payment_groups(paid_at)
-    `;
     const [
-      { data: touchedInWindow, error: touchedError },
-      { data: settledInWindow, error: settledError },
-      { data: onlineWalletSales, error: onlineWalletError },
-      { data: adminWalletSales, error: adminWalletError },
+      { data: sessionBookings, error: sessionBookingsError },
+      { data: walletTopUps, error: walletTopUpsError },
     ] = await Promise.all([
       supabaseAdmin
         .from("bookings")
-        .select(revenueColumns)
-        .in("payment_status", ["paid", "partial"])
+        .select("amount_paid, wallet_amount, booking_device_slots!inner(slot_date, slot_start_time)")
         .neq("status", "cancelled")
-        .gte("updated_at", revenueWindow),
-      supabaseAdmin
-        .from("bookings")
-        .select(`
-          id,
-          amount_paid,
-          wallet_amount,
-          payment_status,
-          status,
-          created_at,
-          updated_at,
-          payment_groups!inner(paid_at)
-        `)
-        .in("payment_status", ["paid", "partial"])
-        .neq("status", "cancelled")
-        .gte("payment_groups.paid_at", revenueWindow),
-      supabaseAdmin
-        .from("payment_orders")
-        .select("amount, paid_at")
-        .eq("purpose", "wallet_top_up")
-        .eq("status", "fulfilled")
-        .gte("paid_at", revenueWindow)
-        .not("paid_at", "is", null),
+        .eq("booking_device_slots.slot_date", today)
+        .gte("booking_device_slots.slot_start_time", "00:00:00"),
       supabaseAdmin
         .from("wallet_transactions")
         .select("paid_amount, created_at")
-        .eq("source", "admin_wallet_sale")
         .eq("kind", "top_up")
         .eq("direction", "credit")
+        .gt("paid_amount", 0)
         .gte("created_at", revenueWindow),
     ]);
 
-    if (touchedError) throw touchedError;
-    if (settledError) throw settledError;
-    if (onlineWalletError) throw onlineWalletError;
-    if (adminWalletError) throw adminWalletError;
+    if (sessionBookingsError) throw sessionBookingsError;
+    if (walletTopUpsError) throw walletTopUpsError;
 
-    const paidBookings = mergeBookingRows(
-      touchedInWindow as { id: string }[] | null,
-      settledInWindow as { id: string }[] | null
+    const bookingRevenueToday = (sessionBookings || []).reduce((sum: number, booking: any) =>
+      sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)), 0
     );
-    const bookingRevenueToday = (paidBookings as any[]).reduce((sum, booking) => {
-      const paidAt = effectivePaidAt(booking);
-      if (!paidAt || arenaDate(new Date(paidAt)) !== today) return sum;
-      return sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0));
-    }, 0);
-    const walletRevenueToday = [
-      ...(onlineWalletSales || []).map((sale: any) => ({ amount: sale.amount, timestamp: sale.paid_at })),
-      ...(adminWalletSales || []).map((sale: any) => ({ amount: sale.paid_amount, timestamp: sale.created_at })),
-    ].reduce((sum, sale) => {
-      if (!sale.timestamp || arenaDate(new Date(sale.timestamp)) !== today) return sum;
-      return sum + Number(sale.amount || 0);
+    const walletRevenueToday = (walletTopUps || []).reduce((sum: number, sale: any) => {
+      if (!sale.created_at || arenaDate(new Date(sale.created_at)) !== today) return sum;
+      return sum + Number(sale.paid_amount || 0);
     }, 0);
     const todayRevenue = bookingRevenueToday + walletRevenueToday;
 

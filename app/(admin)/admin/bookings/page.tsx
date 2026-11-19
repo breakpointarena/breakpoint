@@ -1056,7 +1056,7 @@ export default function AdminBookingsPage() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="bg-[var(--surface)] border-[#27272a] p-4">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-blue-500/10 rounded-lg">
@@ -1089,6 +1089,7 @@ export default function AdminBookingsPage() {
             <div>
               <p className="text-label text-muted-content">Today's Revenue</p>
               <p className="text-xl font-black text-primary"><RevealAmount amount={stats?.todayRevenue || 0} label="today's revenue" /></p>
+              <p className="mt-1 text-[10px] text-muted-content">Sessions starting today; wallet top-ups by purchase date</p>
             </div>
           </div>
         </Card>
