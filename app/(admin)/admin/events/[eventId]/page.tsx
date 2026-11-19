@@ -94,7 +94,7 @@ export default async function AdminEventDetailPage({ params }: { params: Promise
       </Card>
       {event.status !== 'cancelled' && <form action={setEventStatus} className="-mt-4 flex justify-end"><input type="hidden" name="event_id" value={event.id} /><input type="hidden" name="status" value="cancelled" /><Button type="submit" variant="outline" className="border-red-500/30 text-red-300">Cancel event</Button></form>}
 
-      {data.userRole === 'admin' && <section className="space-y-4">
+      {(data.userRole === 'admin' || data.userRole === 'staff') && <section className="space-y-4">
         <div><h2 className="text-xl font-black text-white">Register on behalf of a customer</h2><p className="mt-1 text-sm text-secondary-content">Entry ₹{Number(event.entry_fee).toLocaleString('en-IN')} + service charge {Number(event.service_fee_percent ?? 2)}%. Collected payments are counted as event revenue.</p></div>
         <AdminRegistrationForm eventId={event.id} entryFee={Number(event.entry_fee)} serviceChargePercent={Number(event.service_fee_percent ?? 2)} registrationMode={event.registration_mode} teamSize={Number(event.team_size)} />
       </section>}
