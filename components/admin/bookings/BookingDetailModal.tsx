@@ -18,7 +18,7 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, increaseFoodItemQuantity, decreaseFoodItemQuantity, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, undoLatestSharedPlayChange, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, increaseFoodItemQuantity, decreaseFoodItemQuantity, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, undoLatestSharedPlayChange, deleteLatestSharedPlaySessionAndResumePrevious, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
 import { getDeviceTypes } from "@/app/(admin)/admin/devices/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
@@ -202,6 +202,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
   const [savingSharedPlay, setSavingSharedPlay] = useState(false);
   const [undoingSharedPlay, setUndoingSharedPlay] = useState(false);
+  const [rewindingSharedPlay, setRewindingSharedPlay] = useState(false);
   const [sitInDialogOpen, setSitInDialogOpen] = useState(false);
   const [sitInClockDraft, setSitInClockDraft] = useState("");
   const [sitOutDialogOpen, setSitOutDialogOpen] = useState(false);
@@ -864,6 +865,26 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
       return;
     }
     toast.success(`${result.action} change undone`, { description: "Previous players and session times restored." });
+    await loadBookingDetails();
+    onUpdate?.();
+  };
+
+  const handleDeleteLatestSharedPlaySession = async () => {
+    if (!bookingId || rewindingSharedPlay) return;
+    const confirmed = window.confirm(
+      "Delete the most recent completed play interval and start a new interval for the previous players now?"
+    );
+    if (!confirmed) return;
+
+    setRewindingSharedPlay(true);
+    const result = await deleteLatestSharedPlaySessionAndResumePrevious(bookingId);
+    setRewindingSharedPlay(false);
+    if (!result.success) {
+      toast.error("Could not resume the previous play", { description: result.error });
+      await loadBookingDetails();
+      return;
+    }
+    toast.success("Last play interval deleted", { description: "The previous players have resumed from now." });
     await loadBookingDetails();
     onUpdate?.();
   };
@@ -1635,7 +1656,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                             <Button
                               type="button"
                               size="sm"
-                              disabled={savingSharedPlay || selectedParticipants.length === 0}
+                              disabled={savingSharedPlay || rewindingSharedPlay || selectedParticipants.length === 0}
                               onClick={openSitInDialog}
                               className="bg-emerald-600 text-white hover:bg-emerald-500"
                             >
@@ -1645,7 +1666,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                               type="button"
                               size="sm"
                               variant="outline"
-                              disabled={savingSharedPlay || selectedParticipants.length === 0}
+                              disabled={savingSharedPlay || rewindingSharedPlay || selectedParticipants.length === 0}
                               onClick={openSitOutDialog}
                               className="border-zinc-700 text-secondary-content"
                             >
@@ -1655,7 +1676,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                               type="button"
                               size="sm"
                               variant="outline"
-                              disabled={savingSharedPlay || activePlayers.length === 0}
+                              disabled={savingSharedPlay || rewindingSharedPlay || activePlayers.length === 0}
                               onClick={openSitOutAllDialog}
                               className="border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
                             >
@@ -1666,7 +1687,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                                 type="button"
                                 size="sm"
                                 variant="outline"
-                                disabled={savingSharedPlay || undoingSharedPlay}
+                                disabled={savingSharedPlay || undoingSharedPlay || rewindingSharedPlay}
                                 onClick={handleUndoSharedPlayChange}
                                 className="border-white/15 text-secondary-content hover:text-white"
                                 title={`Undo last ${booking.latest_shared_play_change.action_label.toLowerCase()} change`}
@@ -1675,6 +1696,21 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                                 Undo last change
                               </Button>
                             )}
+                            {isLiveActualSession && booking.shared_play_enabled && activePlayers.length === 0 && sharedPlaySessions.length > 1 &&
+                              !(booking.shared_play_participants || []).some((participant: any) => participant.checked_out_at) && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={savingSharedPlay || undoingSharedPlay || rewindingSharedPlay}
+                                  onClick={() => void handleDeleteLatestSharedPlaySession()}
+                                  className="border-red-500/40 text-red-300 hover:bg-red-500/10"
+                                  title="Delete the most recent completed interval and resume the players from the previous one"
+                                >
+                                  {rewindingSharedPlay ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Trash2 className="mr-1 h-3 w-3" />}
+                                  Delete last &amp; resume previous
+                                </Button>
+                              )}
                           </div>
                         )}
                       </div>

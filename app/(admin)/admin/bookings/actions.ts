@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { getWalletBalance } from "@/lib/wallet/server";
 import { annotateRemovableFoodItems } from "@/lib/bookings/foodItems";
@@ -12,7 +13,7 @@ import { decideCheckout, type CheckoutDecision } from "@/lib/bookings/checkoutGu
 import { deviceCharge, extraPlayersCharge, hourlyRateForPlayerCount, perExtraPlayerCharge } from "@/lib/payments/money";
 import { isBillableBooking, settlementStatus } from "@/lib/payments/paymentStatus";
 import { roundToTwo } from "@/lib/currency";
-import { calculateSharedPlayShares } from "@/lib/bookings/sharedPlay";
+import { calculateSharedPlayShares, getSharedPlaySessions } from "@/lib/bookings/sharedPlay";
 import { redeemHourPassesForBooking } from "@/lib/subscriptions/redeemHourPasses";
 import { isHourPackEligibleForDevice } from "@/lib/subscriptions/hourPass";
 import { resolveHappyHour } from "@/lib/payments/happyHour";
@@ -1255,6 +1256,63 @@ export async function undoLatestSharedPlayChange(bookingId: string) {
     return { success: true as const, action: data as string };
   } catch (error: any) {
     return { success: false as const, error: error.message || "Could not undo the last play change." };
+  }
+}
+
+export async function deleteLatestSharedPlaySessionAndResumePrevious(bookingId: string) {
+  const actor = await requireStaff();
+  try {
+    const { data: booking, error: bookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("id, status, billed_on_actual_time, completed_at, shared_play_enabled")
+      .eq("id", bookingId)
+      .maybeSingle();
+    if (bookingError) throw bookingError;
+    if (!booking || booking.status !== "checked_in" || booking.completed_at || booking.billed_on_actual_time !== true || booking.shared_play_enabled !== true) {
+      return { success: false as const, error: "This shared-play session is no longer active." };
+    }
+
+    const { data: participants, error: participantsError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .select("id, checked_out_at, shared_play_periods(id, participant_id, started_at, ended_at, hourly_rate, extra_player_rate, included_players)")
+      .eq("booking_id", bookingId);
+    if (participantsError) throw participantsError;
+    if ((participants || []).some((participant: any) => participant.checked_out_at)) {
+      return { success: false as const, error: "This session cannot be rewound after a participant has checked out." };
+    }
+
+    const periods = (participants || []).flatMap((participant: any) =>
+      (participant.shared_play_periods || []).map((period: any) => ({ ...period, participant_id: participant.id }))
+    );
+    if (periods.some((period: any) => !period.ended_at)) {
+      return { success: false as const, error: "Sit all players out before deleting the last play interval." };
+    }
+    const latestEnd = periods.reduce((latest: number, period: any) => Math.max(latest, new Date(period.ended_at).getTime()), 0);
+    if (!latestEnd) return { success: false as const, error: "There is no completed play interval to delete." };
+    const sessions = getSharedPlaySessions(periods, new Date(latestEnd));
+    const latestSession = sessions[sessions.length - 1];
+    const previousSession = sessions[sessions.length - 2];
+    if (!latestSession || !previousSession) {
+      return { success: false as const, error: "There is no previous play interval to resume." };
+    }
+
+    const { data, error } = await supabaseAdmin.rpc("delete_latest_shared_play_session_and_resume_previous", {
+      p_booking_id: bookingId,
+      p_latest_start: new Date(latestSession.startedAt).toISOString(),
+      p_latest_end: new Date(latestSession.endedAt).toISOString(),
+      p_latest_participant_ids: latestSession.participantIds,
+      p_previous_start: new Date(previousSession.startedAt).toISOString(),
+      p_previous_end: new Date(previousSession.endedAt).toISOString(),
+      p_previous_participant_ids: previousSession.participantIds,
+      p_created_by: actor.userId,
+    });
+    if (error) throw error;
+
+    revalidatePath("/admin/bookings");
+    return { success: true as const, message: data as string };
+  } catch (error: any) {
+    console.error("Delete latest shared-play session error:", error);
+    return { success: false as const, error: error.message || "Could not resume the previous play interval." };
   }
 }
 
