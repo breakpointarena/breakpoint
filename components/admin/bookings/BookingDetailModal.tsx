@@ -27,7 +27,7 @@ import { QRCodeSVG } from "qrcode.react";
 import {
   User, Phone, Mail, Calendar, Clock, IndianRupee, Pencil, X,
   Loader2, CheckCircle2, LogIn, LogOut, Undo2,
-  UtensilsCrossed, QrCode, MapPin, Gamepad2, Plus, Minus, Search, Filter, Trash2, Play, Pause, UserPlus, ChevronDown
+  UtensilsCrossed, QrCode, MapPin, Gamepad2, Plus, Minus, Search, Filter, Trash2, Play, Pause, UserPlus, ChevronDown, Info
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -1701,6 +1701,17 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                               return total + Math.max(0, endedAt - startedAt);
                             }, 0) / 60_000
                           );
+                          const participantPlayAmount = Number(
+                            booking.status === "completed"
+                              ? participant?.billed_amount
+                              : participant
+                                ? sharedParticipantShares.get(participant.id) || 0
+                                : 0
+                          );
+                          const participantFoodAmount = (booking.booking_food_items || []).reduce(
+                            (total: number, item: any) => total + (item.participant_id === participant?.id ? Number(item.line_total || 0) : 0),
+                            0
+                          );
                           return (
                             <div key={name} className="flex items-center justify-between gap-3 rounded-md border border-[#27272a] bg-[var(--surface)] px-3 py-2">
                               <div className="flex min-w-0 items-center gap-3">
@@ -1742,6 +1753,27 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                                         : 0
                                   ).toFixed(2)}
                                 </span>
+                                <Popover>
+                                  <PopoverTrigger asChild>
+                                    <button
+                                      type="button"
+                                      onClick={(event) => event.stopPropagation()}
+                                      className="rounded-full p-1 text-secondary-content hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                      aria-label={`View amount breakdown for ${name}`}
+                                      title="View amount breakdown"
+                                    >
+                                      <Info className="h-4 w-4" />
+                                    </button>
+                                  </PopoverTrigger>
+                                  <PopoverContent onClick={(event) => event.stopPropagation()} align="end" className="w-64 bg-[var(--surface)] border-[#3f3f46]">
+                                    <p className="text-sm font-bold text-white mb-3">{name} · Amount breakdown</p>
+                                    <div className="space-y-2 text-sm">
+                                      <div className="flex justify-between gap-4"><span className="text-secondary-content">Play time</span><span className="font-semibold">&#8377;{participantPlayAmount.toFixed(2)}</span></div>
+                                      <div className="flex justify-between gap-4"><span className="text-secondary-content">Food &amp; beverages</span><span className="font-semibold">&#8377;{participantFoodAmount.toFixed(2)}</span></div>
+                                      <div className="flex justify-between gap-4 border-t border-[#3f3f46] pt-2"><span className="text-white font-semibold">Total</span><span className="text-primary font-black">&#8377;{(participantPlayAmount + participantFoodAmount).toFixed(2)}</span></div>
+                                    </div>
+                                  </PopoverContent>
+                                </Popover>
                               {booking.status === "checked_in" && (
                                 <span className={participant?.checked_out_at
                                   ? "min-w-16 rounded border border-amber-500/40 px-2 py-1 text-center text-xs font-bold text-amber-300"
@@ -2057,7 +2089,15 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 </div>
                 {booking.booking_food_items && booking.booking_food_items.length > 0 ? (
                   <div className="space-y-3">
-                    {booking.booking_food_items.map((item: any) => (
+                    {Object.entries<{ name: string; items: any[] }>(booking.booking_food_items.reduce((groups: Record<string, { name: string; items: any[] }>, item: any) => {
+                      const participantName = item.participant_id && booking.shared_play_enabled ? booking.shared_play_participants?.find((participant: any) => participant.id === item.participant_id)?.name : null;
+                      const name = participantName || booking.customer_name || "Customer";
+                      const key = item.participant_id || "primary-customer";
+                      groups[key] ||= { name, items: [] }; groups[key].items.push(item); return groups;
+                    }, {} as Record<string, { name: string; items: any[] }>)).map(([customerKey, customerGroup]) => (
+                      <section key={customerKey} className="space-y-2">
+                        <div className="flex items-center justify-between rounded-md bg-[var(--background)] px-3 py-2 border border-[#27272a]"><p className="text-sm font-bold text-primary">{customerGroup.name}</p><p className="text-xs text-secondary-content">{customerGroup.items.length} food item(s) &#8377;{customerGroup.items.reduce((sum, item) => sum + Number(item.line_total || 0), 0).toLocaleString("en-IN")}</p></div>
+                        <div className="space-y-3">{customerGroup.items.map((item: any) => (
                       <div key={item.id} className="flex justify-between items-center p-4 bg-[var(--surface)] border border-[#27272a] rounded-lg hover:border-primary/30 transition-colors">
                         <div className="flex-1">
                           <p className="text-lg font-bold text-white mb-1">{item.item_name}</p>
@@ -2125,6 +2165,9 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                           )}
                         </div>
                       </div>
+                          ))}
+                        </div>
+                      </section>
                     ))}
                   </div>
                 ) : (
