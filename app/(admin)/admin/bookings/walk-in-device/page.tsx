@@ -62,7 +62,7 @@ import {
   resolveBackdatedStart,
   resolvePlannedSession
 } from "@/lib/bookings/walkInSession";
-import { allFilled, isPlausibleEmail } from "@/lib/utils/forms";
+import { isPlausibleEmail } from "@/lib/utils/forms";
 import {
   generateStartTimes,
   filterPastTimeSlots,
@@ -741,14 +741,14 @@ export default function WalkInBookingPage() {
 
     // Validate DOB
     // isValidDob covers both the DD-MM-YYYY shape and the accepted year range.
-    if (!isValidDob(customerDob)) {
+    if (customerDob && !isValidDob(customerDob)) {
       toast.error(DOB_ERROR);
       setSubmitting(false);
       return;
     }
 
-    const formattedDob = formatDateForDB(customerDob);
-    if (!formattedDob) {
+    const formattedDob = customerDob ? formatDateForDB(customerDob) : null;
+    if (customerDob && !formattedDob) {
       toast.error("Invalid Date of Birth", {
         description: "Please check the date format"
       });
@@ -868,7 +868,7 @@ export default function WalkInBookingPage() {
    * digit. `DOB_ERROR` is the one place the wording lives.
    */
   const describeDobProblem = (value: string): string | null => {
-    if (!value.trim()) return "Date of birth is required.";
+    if (!value.trim()) return null;
     if (value.length < 10 && !showDetailErrors) return null;
     return isValidDob(value) ? null : DOB_ERROR;
   };
@@ -878,10 +878,8 @@ export default function WalkInBookingPage() {
     customerDob.trim() || showDetailErrors ? describeDobProblem(customerDob) : null;
 
   const emailError =
-    (customerEmail.trim().length > 0 || showDetailErrors) && !isPlausibleEmail(customerEmail)
-      ? customerEmail.trim()
-        ? "Enter a complete email address, like customer@domain.com."
-        : "Email is required."
+    customerEmail.trim().length > 0 && !isPlausibleEmail(customerEmail)
+      ? "Enter a complete email address, like customer@domain.com."
       : null;
 
   const nameError =
@@ -897,7 +895,7 @@ export default function WalkInBookingPage() {
    * cannot.
    */
   const requiredDetailsFilled = Boolean(
-    customerName.trim() && customerDob.trim() && customerEmail.trim()
+    customerName.trim()
   );
 
   /**
@@ -912,9 +910,9 @@ export default function WalkInBookingPage() {
 
   // Whether the step may actually advance: filled *and* valid.
   const customerDetailsComplete =
-    allFilled(customerName, customerDob) &&
-    isValidDob(customerDob) &&
-    isPlausibleEmail(customerEmail);
+    customerName.trim() &&
+    (!customerDob.trim() || isValidDob(customerDob)) &&
+    (!customerEmail.trim() || isPlausibleEmail(customerEmail));
 
   const handleDobChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const formatted = handleDobInput(e.target.value);
@@ -1415,13 +1413,12 @@ export default function WalkInBookingPage() {
 
                   <div className="space-y-2">
                     <Label htmlFor="dob" className="text-xs font-black text-muted-content uppercase tracking-wider flex items-center gap-1.5">
-                      <Cake className="h-3.5 w-3.5 text-muted-content" /> Date of Birth (DD-MM-YYYY) <span className="text-red-500">*</span>
+                      <Cake className="h-3.5 w-3.5 text-muted-content" /> Date of Birth (DD-MM-YYYY) <span className="text-muted-content">(optional)</span>
                     </Label>
                     <Input
                       id="dob"
                       type="text"
                       placeholder="DD-MM-YYYY"
-                      required
                       maxLength={10}
                       value={customerDob}
                       onChange={handleDobChange}
@@ -1436,12 +1433,11 @@ export default function WalkInBookingPage() {
 
                   <div className="space-y-2">
                     <Label htmlFor="email" className="text-xs font-black text-muted-content uppercase tracking-wider flex items-center gap-1.5">
-                      <Mail className="h-3.5 w-3.5 text-muted-content" /> Email <span className="text-red-500">*</span>
+                      <Mail className="h-3.5 w-3.5 text-muted-content" /> Email <span className="text-muted-content">(optional)</span>
                     </Label>
                     <Input
                       id="email"
                       type="email"
-                      required
                       value={customerEmail}
                       onChange={(e) => setCustomerEmail(e.target.value)}
                       placeholder="customer@domain.com"

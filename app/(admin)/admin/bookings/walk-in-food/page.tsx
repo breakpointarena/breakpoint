@@ -31,7 +31,7 @@ import {
   useCustomerSuggestions
 } from "@/components/admin/customers/CustomerSuggestions";
 import { formatDateForDB, handleDobInput, isValidDob, DOB_ERROR } from "@/lib/utils/dates";
-import { allFilled, isPlausibleEmail } from "@/lib/utils/forms";
+import { isPlausibleEmail } from "@/lib/utils/forms";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { bookingNotificationId } from "@/lib/hooks/useAdminNotificationPolling";
@@ -94,7 +94,7 @@ export default function WalkInFoodOnlyPage() {
    * digit. `DOB_ERROR` is the one place the wording lives.
    */
   const describeDobProblem = (value: string): string | null => {
-    if (!value.trim()) return "Date of birth is required.";
+    if (!value.trim()) return null;
     if (value.length < 10 && !showDetailErrors) return null;
     return isValidDob(value) ? null : DOB_ERROR;
   };
@@ -104,10 +104,8 @@ export default function WalkInFoodOnlyPage() {
     customerDob.trim() || showDetailErrors ? describeDobProblem(customerDob) : null;
 
   const emailError =
-    (customerEmail.trim().length > 0 || showDetailErrors) && !isPlausibleEmail(customerEmail)
-      ? customerEmail.trim()
-        ? "Enter a complete email address, like customer@domain.com."
-        : "Email is required."
+    customerEmail.trim().length > 0 && !isPlausibleEmail(customerEmail)
+      ? "Enter a complete email address, like customer@domain.com."
       : null;
 
   const nameError =
@@ -123,14 +121,14 @@ export default function WalkInFoodOnlyPage() {
    * cannot.
    */
   const requiredDetailsFilled = Boolean(
-    customerName.trim() && customerDob.trim() && customerEmail.trim()
+    customerName.trim()
   );
 
   // Whether the step may actually advance: filled *and* valid.
   const registrationComplete =
-    allFilled(customerName, customerDob) &&
-    isValidDob(customerDob) &&
-    isPlausibleEmail(customerEmail);
+    customerName.trim() &&
+    (!customerDob.trim() || isValidDob(customerDob)) &&
+    (!customerEmail.trim() || isPlausibleEmail(customerEmail));
 
   /**
    * Matching profiles, offered while the number is typed.
@@ -431,7 +429,7 @@ export default function WalkInFoodOnlyPage() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className="text-zinc-400">Email <span className="text-red-500">*</span></Label>
+                    <Label className="text-zinc-400">Email <span className="text-zinc-500">(optional)</span></Label>
                     <Input
                       type="email"
                       value={customerEmail}
@@ -447,7 +445,7 @@ export default function WalkInFoodOnlyPage() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className="text-zinc-400">Date of Birth (DD-MM-YYYY) <span className="text-red-500">*</span></Label>
+                    <Label className="text-zinc-400">Date of Birth (DD-MM-YYYY) <span className="text-zinc-500">(optional)</span></Label>
                     <Input
                       value={customerDob}
                       onChange={(e) => setCustomerDob(handleDobInput(e.target.value))}
