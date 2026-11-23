@@ -507,7 +507,8 @@ export function sessionClaimWindow(
  *
  * Deliberately no limit on how far back it may go. The sessions that need this
  * most are the forgotten ones - checked in on Friday, noticed on Monday - and a
- * ceiling would lock out exactly the case the feature exists for. The floor is
+ * ceiling would lock out exactly the case the feature exists for. Checkout may
+ * be rounded up to 30 minutes ahead of the clock, but no further. The floor is
  * the session's own start, which is not a policy but arithmetic: a session
  * cannot end before it began, and a negative duration would price as a negative
  * bill.
@@ -562,12 +563,13 @@ export function resolveCheckoutTime(
     }
   }
 
-  const nowStamp = `${arenaDate(now)} ${arenaClockTime(now)}`
-  if (entered > nowStamp) {
-    // Refused rather than clamped: picking tomorrow off a date picker is a
-    // common slip, and silently billing it as "now" would hide the mistake
-    // behind a plausible-looking total.
-    return { ok: false, error: 'Checkout cannot be in the future. Check the date and AM/PM.' }
+  const latestAllowed = new Date(now.getTime() + 30 * 60 * 1000)
+  const latestAllowedStamp = `${arenaDate(latestAllowed)} ${arenaClockTime(latestAllowed)}`
+  if (entered > latestAllowedStamp) {
+    return {
+      ok: false,
+      error: 'Checkout cannot be more than 30 minutes in the future. Check the date and AM/PM.',
+    }
   }
 
   return { ok: true, date: input.date, clock }

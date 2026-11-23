@@ -26,6 +26,7 @@ export function AddFoodModal({ onFormSuccess, open, setOpen }: AddFoodModalProps
   const [previewCategory, setPreviewCategory] = useState<FoodCategory>("Snacks");
   const [previewStatus, setPreviewStatus] = useState<FoodStatus>("available");
   const [price, setPrice] = useState("");
+  const [description, setDescription] = useState("");
   const [isMrpItem, setIsMrpItem] = useState(false);
   const [quantity, setQuantity] = useState("10");
   const [localFile, setLocalFile] = useState<File | null>(null);
@@ -90,6 +91,7 @@ export function AddFoodModal({ onFormSuccess, open, setOpen }: AddFoodModalProps
         clearImage();
         setPreviewName("");
         setPrice("");
+        setDescription("");
         setIsMrpItem(false);
         setQuantity("10");
 
@@ -246,7 +248,7 @@ export function AddFoodModal({ onFormSuccess, open, setOpen }: AddFoodModalProps
 
             <div className="space-y-2">
               <label className="text-xs font-bold text-[#a1a1aa] uppercase tracking-wider">Description</label>
-              <textarea name="description" placeholder="Describe flavors, cooking styles, textures, or key details..." className="w-full rounded-md border border-[#27272a] bg-[var(--surface)] px-3 py-2.5 text-sm text-white focus:ring-1 focus:ring-primary focus:border-primary h-24 outline-none resize-none transition-colors" />
+              <textarea name="description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe flavors, cooking styles, textures, or key details..." className="w-full rounded-md border border-[#27272a] bg-[var(--surface)] px-3 py-2.5 text-sm text-white focus:ring-1 focus:ring-primary focus:border-primary h-24 outline-none resize-none transition-colors" />
             </div>
           </div>
 

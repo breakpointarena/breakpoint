@@ -77,7 +77,7 @@ export function TodaysRevenueModal({ open, onClose, bookings, walletSales, total
             <p className="text-label mt-1">{bookings.length} bookings · {walletSales.length} wallet top-ups</p>
           </div>
 
-          <p className="col-span-2 text-xs text-secondary-content">Booking revenue is assigned to sessions starting today (from midnight), regardless of payment date. Wallet top-ups are assigned to the date paid.</p>
+          <p className="col-span-2 text-xs text-secondary-content">Device bookings count on their session date, food-only orders on their order date, and wallet top-ups on the date paid.</p>
 
           <div className="p-4 bg-[var(--surface)] border border-[#27272a] rounded-lg">
             <p className="text-xs text-muted-content mb-1">Booking Payments</p>
@@ -163,7 +163,9 @@ export function TodaysRevenueModal({ open, onClose, bookings, walletSales, total
                       </div>
                       <p className="text-xs text-white">{booking.customer_name}</p>
                       <p className="text-label mt-1">
-                        {slot?.device_type} • {formatDbTimeRange(slot?.slot_start_time, slot?.slot_end_time)}
+                        {slot
+                          ? `${slot.device_type} • ${formatDbTimeRange(slot.slot_start_time, slot.slot_end_time)}`
+                          : "Food-only order"}
                       </p>
                     </div>
                     <div className="text-right">

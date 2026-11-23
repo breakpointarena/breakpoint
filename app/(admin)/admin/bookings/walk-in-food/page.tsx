@@ -22,7 +22,8 @@ import {
   Pizza,
   Sandwich,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Search
 } from "lucide-react";
 import { toast } from "sonner";
 import { createFoodOnlyWalkInBooking, lookupWalkInCustomer } from "../actions";
@@ -30,6 +31,7 @@ import {
   CustomerSuggestions,
   useCustomerSuggestions
 } from "@/components/admin/customers/CustomerSuggestions";
+import { CUSTOMER_NAME_MIN_CHARS } from "@/lib/customers/suggestions";
 import { formatDateForDB, handleDobInput, isValidDob, DOB_ERROR } from "@/lib/utils/dates";
 import { isPlausibleEmail } from "@/lib/utils/forms";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
@@ -43,6 +45,7 @@ export default function WalkInFoodOnlyPage() {
 
   // Customer details
   const [customerPhone, setCustomerPhone] = useState("");
+  const [nameSearch, setNameSearch] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
   const [customerDob, setCustomerDob] = useState("");
@@ -58,6 +61,7 @@ export default function WalkInFoodOnlyPage() {
   const [loadingMenu, setLoadingMenu] = useState(false);
   const [selectedItems, setSelectedItems] = useState<{ id: string; name: string; price: number; quantity: number; category: string }[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>("All");
+  const [menuSearchQuery, setMenuSearchQuery] = useState("");
   const [isCartOpen, setIsCartOpen] = useState(false);
 
   // Submission
@@ -141,9 +145,20 @@ export default function WalkInFoodOnlyPage() {
    */
   const phoneSuggestions = useCustomerSuggestions({
     query: customerPhone,
-    enabled: step === 1,
+    enabled: step === 1 && !showFullRegistrationFields,
     onPick: (suggestion) => {
       // Its number, not the typed one - that is the point of picking a name.
+      setCustomerPhone(suggestion.phone);
+      loadCustomerProfile(suggestion.phone);
+    }
+  });
+
+  const nameSuggestions = useCustomerSuggestions({
+    query: nameSearch,
+    kind: "name",
+    enabled: step === 1 && !showFullRegistrationFields,
+    onPick: (suggestion) => {
+      setNameSearch("");
       setCustomerPhone(suggestion.phone);
       loadCustomerProfile(suggestion.phone);
     }
@@ -335,9 +350,13 @@ export default function WalkInFoodOnlyPage() {
 
   // Filter menu items
   const categories = ["All", "Snacks", "Drinks", "Meals"];
-  const filteredMenuItems = activeCategory === "All"
-    ? menuItems.filter(item => item.quantity > 0) // Only show items with stock
-    : menuItems.filter(item => item.category === activeCategory && item.quantity > 0);
+  const filteredMenuItems = menuItems.filter(item => {
+    const matchesCategory = activeCategory === "All" || item.category === activeCategory;
+    const matchesSearch = `${item.name} ${item.description || ""}`
+      .toLowerCase()
+      .includes(menuSearchQuery.trim().toLowerCase());
+    return matchesCategory && matchesSearch && item.quantity > 0;
+  });
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] p-4 md:p-8">
@@ -382,6 +401,26 @@ export default function WalkInFoodOnlyPage() {
             <h2 className="text-lg font-bold text-white mb-4">Customer Information</h2>
 
             <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="food-customer-name-search" className="text-zinc-400">Find Existing Customer by Name</Label>
+                <Input
+                  id="food-customer-name-search"
+                  type="text"
+                  value={nameSearch}
+                  onChange={(event) => setNameSearch(event.target.value)}
+                  placeholder={`Type ${CUSTOMER_NAME_MIN_CHARS} letters or more`}
+                  className="bg-zinc-950 border-zinc-800 text-white"
+                  {...nameSuggestions.inputProps}
+                />
+                <CustomerSuggestions state={nameSuggestions} typedName={nameSearch} />
+              </div>
+
+              <div className="flex items-center gap-3 text-xs text-zinc-600" aria-hidden="true">
+                <span className="h-px flex-1 bg-zinc-800" />
+                <span>OR LOOK UP BY PHONE</span>
+                <span className="h-px flex-1 bg-zinc-800" />
+              </div>
+
               <div className="space-y-2">
                 <Label className="text-zinc-400">Phone Number <span className="text-red-500">*</span></Label>
                 <div className="flex gap-2">
@@ -503,6 +542,18 @@ export default function WalkInFoodOnlyPage() {
                     {category}
                   </button>
                 ))}
+              </div>
+
+              <div className="relative mb-4">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                <Input
+                  type="search"
+                  value={menuSearchQuery}
+                  onChange={(event) => setMenuSearchQuery(event.target.value)}
+                  placeholder="Search food and beverages..."
+                  aria-label="Search food and beverages"
+                  className="bg-zinc-950 border-zinc-800 pl-10 text-white placeholder:text-zinc-500"
+                />
               </div>
 
               {loadingMenu ? (

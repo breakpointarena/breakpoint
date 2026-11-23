@@ -107,8 +107,8 @@ export function CheckOutSessionDialog({
             <LogOut className="h-5 w-5 text-primary" /> Check out session
           </DialogTitle>
           <DialogDescription className="text-secondary-content">
-            The bill is the time between check-in and this moment. Change it only if
-            the customer left earlier than now.
+            The bill uses the time between check-in and checkout. You can round the
+            checkout time forward by up to 30 minutes.
           </DialogDescription>
         </DialogHeader>
 
