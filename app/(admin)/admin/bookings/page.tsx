@@ -71,7 +71,7 @@ export default function AdminBookingsPage() {
    */
   const lastResyncRef = useRef(0);
 
-  /** The attention tab is a cross-status view, not one of the status filters. */
+  /** The attention tab is a completed-booking view, not a normal status filter. */
   const isAttentionTab = activeStatusFilter === "attention";
   // The page opens on today's sessions - the slots the front desk is working.
   // Defaults to the arena's today. `formatLocalDate` reads the browser's clock,
@@ -346,7 +346,7 @@ export default function AdminBookingsPage() {
    *
    * Deliberately not keyed on the bookings array. Every list load replaces it
    * with a fresh reference, so keying on it re-ran this after *every* fetch -
-   * including a status-tab switch, which cannot change a cross-status count.
+   * including a status-tab switch, which cannot change the completed-attention count.
    * Mount seeds it; refreshAll() re-reads it after anything that can move it.
    */
   useEffect(() => {
@@ -1248,10 +1248,9 @@ export default function AdminBookingsPage() {
         <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
           <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-amber-200/90 leading-relaxed">
-            <span className="font-bold">Showing every unfinished booking, across all dates.</span>{" "}
-            Sessions checked in but never checked out, bookings nobody arrived for,
-            and sessions that were used but never paid for. The date range above
-            does not apply to this tab.
+            <span className="font-bold">Showing checked-out bookings that need follow-up, across all dates.</span>{" "}
+            Completed sessions with an outstanding balance stay here until settled.
+            The date range above does not apply to this tab.
           </p>
         </div>
       )}

@@ -348,17 +348,10 @@ export async function getAllBookings(filters?: BookingFilters) {
 }
 
 /**
- * Every booking that stopped part-way through, whatever day it happened on.
+ * Checked-out bookings that still need follow-up, such as an unpaid balance.
  *
- * Deliberately ignores the page's date range. The whole reason this list exists
- * is the bookings nobody noticed - production had eighteen sessions checked in
- * and never checked out, the oldest fifty-one days old, and a list scoped to
- * "today" would show none of them. Scoping this to a date range would rebuild
- * the blind spot it is meant to remove.
- *
- * `cancelled` is excluded by the status filter rather than relying on
- * `bookingAttention` to drop it: a cancelled booking is a decision somebody
- * already made, not an loose end.
+ * Deliberately ignores the page's date range so outstanding checkouts remain
+ * visible until settled, even when the session happened on an earlier day.
  */
 export async function getAttentionBookings() {
   await requireStaff();
@@ -367,7 +360,7 @@ export async function getAttentionBookings() {
     const { data, error } = await supabaseAdmin
       .from("bookings")
       .select(BOOKING_LIST_SELECT)
-      .in("status", ["confirmed", "checked_in", "completed"])
+      .eq("status", "completed")
       .order("created_at", { ascending: false });
 
     if (error) throw error;
@@ -2276,6 +2269,7 @@ export async function getBookingStats(
     const revenueWindow = revenueWindowStart(today);
     const [
       { data: sessionBookings, error: sessionBookingsError },
+      { data: foodOnlyBookings, error: foodOnlyBookingsError },
       { data: walletTopUps, error: walletTopUpsError },
     ] = await Promise.all([
       supabaseAdmin
@@ -2284,6 +2278,16 @@ export async function getBookingStats(
         .neq("status", "cancelled")
         .eq("booking_device_slots.slot_date", today)
         .gte("booking_device_slots.slot_start_time", "00:00:00"),
+      // Food-only walk-ins have no device slot to join. Attribute their
+      // collections to the day the order was opened, just as a session's
+      // collections are attributed to its slot date.
+      supabaseAdmin
+        .from("bookings")
+        .select("amount_paid, wallet_amount, created_at")
+        .eq("device_subtotal", 0)
+        .gt("food_subtotal", 0)
+        .neq("status", "cancelled")
+        .gte("created_at", revenueWindow),
       supabaseAdmin
         .from("wallet_transactions")
         .select("paid_amount, created_at")
@@ -2294,16 +2298,21 @@ export async function getBookingStats(
     ]);
 
     if (sessionBookingsError) throw sessionBookingsError;
+    if (foodOnlyBookingsError) throw foodOnlyBookingsError;
     if (walletTopUpsError) throw walletTopUpsError;
 
     const bookingRevenueToday = (sessionBookings || []).reduce((sum: number, booking: any) =>
       sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)), 0
     );
+    const foodOnlyRevenueToday = (foodOnlyBookings || []).reduce((sum: number, booking: any) => {
+      if (!booking.created_at || arenaDate(new Date(booking.created_at)) !== today) return sum;
+      return sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0));
+    }, 0);
     const walletRevenueToday = (walletTopUps || []).reduce((sum: number, sale: any) => {
       if (!sale.created_at || arenaDate(new Date(sale.created_at)) !== today) return sum;
       return sum + Number(sale.paid_amount || 0);
     }, 0);
-    const todayRevenue = bookingRevenueToday + walletRevenueToday;
+    const todayRevenue = bookingRevenueToday + foodOnlyRevenueToday + walletRevenueToday;
 
     // Group by status
     const grouped = (statusCounts || []).reduce((acc: any, item: any) => {

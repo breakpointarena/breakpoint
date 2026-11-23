@@ -70,6 +70,7 @@ export async function getDashboardData() {
 
     const [
       { data: todaySlots, error: slotsError },
+      { data: foodOnlyBookings, error: foodOnlyBookingsError },
       { data: touchedInWindow, error: paymentsError },
       { data: settledInWindow, error: settledError },
       { data: walletTopUps, error: walletTopUpsError },
@@ -115,6 +116,17 @@ export async function getDashboardData() {
         `)
         .eq("slot_date", today)
         .gte("slot_start_time", "00:00:00"),
+
+      // Food-only walk-ins have no slot. Use the order date as their service
+      // date so they are represented in today's revenue without depending on
+      // an embedded device-slot row.
+      supabaseAdmin
+        .from("bookings")
+        .select("amount_paid, wallet_amount, created_at")
+        .eq("device_subtotal", 0)
+        .gt("food_subtotal", 0)
+        .neq("status", "cancelled")
+        .gte("created_at", revenueWindowStart(today)),
 
 
 
@@ -224,6 +236,7 @@ export async function getDashboardData() {
     ]);
 
     if (slotsError) throw slotsError;
+    if (foodOnlyBookingsError) throw foodOnlyBookingsError;
     if (devicesError) throw devicesError;
     if (recentError) throw recentError;
 
@@ -266,6 +279,10 @@ export async function getDashboardData() {
       (sum, booking) => sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)),
       0
     );
+    todaysRevenue += (foodOnlyBookings || []).reduce((sum: number, booking: any) => {
+      if (!booking.created_at || arenaDate(new Date(booking.created_at)) !== today) return sum;
+      return sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0));
+    }, 0);
     let todaysBookingSettlements = 0;
     let thisWeekRevenue = 0;
 
@@ -482,7 +499,52 @@ export async function getTodaysRevenueDetails() {
 
     if (sessionBookingsError) throw sessionBookingsError;
 
-    const filteredBookings = (sessionBookings || []).filter((booking: any) =>
+    // These orders have no device-slot row, so they need their own read and
+    // are attributed to the day the food-only order was created.
+    const { data: foodOnlyBookings, error: foodOnlyBookingsError } = await supabaseAdmin
+      .from("bookings")
+      .select(`
+        id,
+        booking_number,
+        customer_name,
+        customer_phone,
+        total_amount,
+        amount_paid,
+        wallet_amount,
+        device_subtotal,
+        food_subtotal,
+        subscription_discount,
+        promo_discount,
+        happy_hour_discount,
+        hour_pass_discount,
+        cash_amount,
+        card_amount,
+        upi_amount,
+        online_amount,
+        status,
+        payment_status,
+        created_at,
+        updated_at,
+        booking_device_slots(
+          slot_date,
+          slot_start_time,
+          slot_end_time,
+          device_type,
+          device_station_number
+        )
+      `)
+      .eq("device_subtotal", 0)
+      .gt("food_subtotal", 0)
+      .neq("status", "cancelled")
+      .gte("created_at", revenueWindow);
+
+    if (foodOnlyBookingsError) throw foodOnlyBookingsError;
+
+    const filteredBookings = [...(sessionBookings || []), ...(foodOnlyBookings || [])].filter((booking: any) =>
+      // Orders are assigned to their creation date; ignore old orders returned
+      // by the timezone-safe query window.
+      (!booking.food_subtotal || Number(booking.device_subtotal || 0) !== 0 ||
+        !booking.created_at || arenaDate(new Date(booking.created_at)) === today) &&
       Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)) > 0
     );
 
