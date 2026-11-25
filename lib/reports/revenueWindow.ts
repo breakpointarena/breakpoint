@@ -1,3 +1,5 @@
+import { arenaDate } from "@/lib/utils/dates";
+
 /**
  * Which rows the revenue figures have to read, and how far back to ask for them.
  *
@@ -30,6 +32,26 @@ export function effectivePaidAt(booking: {
   created_at?: string | null
 }): string | null {
   return booking.payment_groups?.paid_at || booking.updated_at || booking.created_at || null
+}
+
+/** The reporting day a booking's collected revenue belongs to. */
+export function bookingRevenueDate(booking: {
+  booking_device_slots?: Array<{ slot_date?: string | null }> | null;
+  payment_status?: string | null;
+  payment_groups?: { paid_at?: string | null } | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}): string | null {
+  const sessionDate = (booking.booking_device_slots || [])
+    .map((slot) => slot?.slot_date)
+    .filter((date): date is string => Boolean(date))
+    .sort()[0];
+  if (sessionDate) return sessionDate;
+
+  const paidAt = booking.payment_status === "pending"
+    ? booking.created_at
+    : booking.payment_groups?.paid_at || booking.updated_at || booking.created_at;
+  return paidAt ? arenaDate(new Date(paidAt)) : null;
 }
 
 /**

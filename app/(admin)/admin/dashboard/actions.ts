@@ -11,6 +11,7 @@ import {
   getOccupiedDeviceIds,
 } from "@/lib/devices/occupancy";
 import {
+  bookingRevenueDate,
   effectivePaidAt,
   mergeBookingRows,
   revenueWindowStart,
@@ -70,7 +71,7 @@ export async function getDashboardData() {
 
     const [
       { data: todaySlots, error: slotsError },
-      { data: foodOnlyBookings, error: foodOnlyBookingsError },
+      { data: revenueBookings, error: revenueBookingsError },
       { data: touchedInWindow, error: paymentsError },
       { data: settledInWindow, error: settledError },
       { data: walletTopUps, error: walletTopUpsError },
@@ -114,19 +115,15 @@ export async function getDashboardData() {
             online_amount
           )
         `)
-        .eq("slot_date", today)
-        .gte("slot_start_time", "00:00:00"),
+        .eq("slot_date", today),
 
-      // Food-only walk-ins have no slot. Use the order date as their service
-      // date so they are represented in today's revenue without depending on
-      // an embedded device-slot row.
+      // Use the same session-date and payment-date fallback as Reports. Some
+      // walk-in sessions have no scheduled slot date, so filtering only today's
+      // slot rows would omit revenue that Reports correctly assigns to today.
       supabaseAdmin
         .from("bookings")
-        .select("amount_paid, wallet_amount, created_at")
-        .eq("device_subtotal", 0)
-        .gt("food_subtotal", 0)
-        .neq("status", "cancelled")
-        .gte("created_at", revenueWindowStart(today)),
+        .select("amount_paid, wallet_amount, payment_status, created_at, updated_at, booking_device_slots(slot_date), payment_groups(paid_at)")
+        .neq("status", "cancelled"),
 
 
 
@@ -236,7 +233,7 @@ export async function getDashboardData() {
     ]);
 
     if (slotsError) throw slotsError;
-    if (foodOnlyBookingsError) throw foodOnlyBookingsError;
+    if (revenueBookingsError) throw revenueBookingsError;
     if (devicesError) throw devicesError;
     if (recentError) throw recentError;
 
@@ -268,19 +265,10 @@ export async function getDashboardData() {
       settledInWindow as { id: string }[] | null
     );
 
-    // Booking revenue is assigned to the scheduled session date. A booking
-    // with several device slots is counted once, not once per device.
-    const sessionBookings = new Map<string, any>();
-    for (const slot of slots) {
-      const booking = slot.bookings;
-      if (booking?.id && booking.status !== "cancelled") sessionBookings.set(booking.id, booking);
-    }
-    let todaysRevenue = Array.from(sessionBookings.values()).reduce(
-      (sum, booking) => sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)),
-      0
-    );
-    todaysRevenue += (foodOnlyBookings || []).reduce((sum: number, booking: any) => {
-      if (!booking.created_at || arenaDate(new Date(booking.created_at)) !== today) return sum;
+    // Booking revenue follows the same date attribution as Reports, and each
+    // booking is naturally counted once even when it has multiple device slots.
+    let todaysRevenue = (revenueBookings || []).reduce((sum: number, booking: any) => {
+      if (bookingRevenueDate(booking) !== today) return sum;
       return sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0));
     }, 0);
     let todaysBookingSettlements = 0;
@@ -288,8 +276,8 @@ export async function getDashboardData() {
 
     /**
      * The payment-date reads still drive booking settlements and the rolling
-     * seven-day figure. Today's main revenue tile uses today's slots above, so
-     * it does not move when a booking is paid on a different day.
+     * seven-day figure. Today's main revenue tile follows Reports' session-date
+     * attribution, so it does not move when a booking is paid on a different day.
      */
     if (!paymentsError && !settledError) {
       for (const booking of paidBookings as any[]) {
@@ -458,10 +446,9 @@ export async function getTodaysRevenueDetails() {
 
   try {
     const today = arenaToday();
-
-    /** Booking payments are listed by the scheduled session date. */
     const revenueWindow = revenueWindowStart(today);
-    const { data: sessionBookings, error: sessionBookingsError } = await supabaseAdmin
+
+    const { data: revenueBookings, error: revenueBookingsError } = await supabaseAdmin
       .from("bookings")
       .select(`
           id,
@@ -485,66 +472,21 @@ export async function getTodaysRevenueDetails() {
           payment_status,
           created_at,
           updated_at,
-          booking_device_slots!inner(
+          booking_device_slots(
             slot_date,
             slot_start_time,
             slot_end_time,
             device_type,
             device_station_number
-          )
+          ),
+          payment_groups(paid_at)
       `)
-      .neq("status", "cancelled")
-      .eq("booking_device_slots.slot_date", today)
-      .gte("booking_device_slots.slot_start_time", "00:00:00");
+      .neq("status", "cancelled");
 
-    if (sessionBookingsError) throw sessionBookingsError;
+    if (revenueBookingsError) throw revenueBookingsError;
 
-    // These orders have no device-slot row, so they need their own read and
-    // are attributed to the day the food-only order was created.
-    const { data: foodOnlyBookings, error: foodOnlyBookingsError } = await supabaseAdmin
-      .from("bookings")
-      .select(`
-        id,
-        booking_number,
-        customer_name,
-        customer_phone,
-        total_amount,
-        amount_paid,
-        wallet_amount,
-        device_subtotal,
-        food_subtotal,
-        subscription_discount,
-        promo_discount,
-        happy_hour_discount,
-        hour_pass_discount,
-        cash_amount,
-        card_amount,
-        upi_amount,
-        online_amount,
-        status,
-        payment_status,
-        created_at,
-        updated_at,
-        booking_device_slots(
-          slot_date,
-          slot_start_time,
-          slot_end_time,
-          device_type,
-          device_station_number
-        )
-      `)
-      .eq("device_subtotal", 0)
-      .gt("food_subtotal", 0)
-      .neq("status", "cancelled")
-      .gte("created_at", revenueWindow);
-
-    if (foodOnlyBookingsError) throw foodOnlyBookingsError;
-
-    const filteredBookings = [...(sessionBookings || []), ...(foodOnlyBookings || [])].filter((booking: any) =>
-      // Orders are assigned to their creation date; ignore old orders returned
-      // by the timezone-safe query window.
-      (!booking.food_subtotal || Number(booking.device_subtotal || 0) !== 0 ||
-        !booking.created_at || arenaDate(new Date(booking.created_at)) === today) &&
+    const filteredBookings = (revenueBookings || []).filter((booking: any) =>
+      bookingRevenueDate(booking) === today &&
       Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)) > 0
     );
 

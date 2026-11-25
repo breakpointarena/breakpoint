@@ -37,6 +37,7 @@ import {
 } from "@/lib/bookings/walkInSession";
 import { arenaDate, arenaToday } from "@/lib/utils/dates";
 import {
+  bookingRevenueDate,
   revenueWindowStart,
 } from "@/lib/reports/revenueWindow";
 import { needsAttention } from "@/lib/bookings/attention";
@@ -2263,31 +2264,18 @@ export async function getBookingStats(
         )
       : (allStatuses || []);
 
-    // Attribute booking collections to the scheduled session date. The joined
-    // slot filter keeps this independent of when the booking was created or paid.
+    // Use the Reports page's session-date and payment-date fallback so walk-in
+    // rows without a dated slot are included on the same day in both places.
     const today = arenaToday();
     const revenueWindow = revenueWindowStart(today);
     const [
-      { data: sessionBookings, error: sessionBookingsError },
-      { data: foodOnlyBookings, error: foodOnlyBookingsError },
+      { data: revenueBookings, error: revenueBookingsError },
       { data: walletTopUps, error: walletTopUpsError },
     ] = await Promise.all([
       supabaseAdmin
         .from("bookings")
-        .select("amount_paid, wallet_amount, booking_device_slots!inner(slot_date, slot_start_time)")
-        .neq("status", "cancelled")
-        .eq("booking_device_slots.slot_date", today)
-        .gte("booking_device_slots.slot_start_time", "00:00:00"),
-      // Food-only walk-ins have no device slot to join. Attribute their
-      // collections to the day the order was opened, just as a session's
-      // collections are attributed to its slot date.
-      supabaseAdmin
-        .from("bookings")
-        .select("amount_paid, wallet_amount, created_at")
-        .eq("device_subtotal", 0)
-        .gt("food_subtotal", 0)
-        .neq("status", "cancelled")
-        .gte("created_at", revenueWindow),
+        .select("amount_paid, wallet_amount, payment_status, created_at, updated_at, booking_device_slots(slot_date), payment_groups(paid_at)")
+        .neq("status", "cancelled"),
       supabaseAdmin
         .from("wallet_transactions")
         .select("paid_amount, created_at")
@@ -2297,22 +2285,18 @@ export async function getBookingStats(
         .gte("created_at", revenueWindow),
     ]);
 
-    if (sessionBookingsError) throw sessionBookingsError;
-    if (foodOnlyBookingsError) throw foodOnlyBookingsError;
+    if (revenueBookingsError) throw revenueBookingsError;
     if (walletTopUpsError) throw walletTopUpsError;
 
-    const bookingRevenueToday = (sessionBookings || []).reduce((sum: number, booking: any) =>
-      sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0)), 0
-    );
-    const foodOnlyRevenueToday = (foodOnlyBookings || []).reduce((sum: number, booking: any) => {
-      if (!booking.created_at || arenaDate(new Date(booking.created_at)) !== today) return sum;
+    const bookingRevenueToday = (revenueBookings || []).reduce((sum: number, booking: any) => {
+      if (bookingRevenueDate(booking) !== today) return sum;
       return sum + Math.max(0, Number(booking.amount_paid || 0) - Number(booking.wallet_amount || 0));
     }, 0);
     const walletRevenueToday = (walletTopUps || []).reduce((sum: number, sale: any) => {
       if (!sale.created_at || arenaDate(new Date(sale.created_at)) !== today) return sum;
       return sum + Number(sale.paid_amount || 0);
     }, 0);
-    const todayRevenue = bookingRevenueToday + foodOnlyRevenueToday + walletRevenueToday;
+    const todayRevenue = bookingRevenueToday + walletRevenueToday;
 
     // Group by status
     const grouped = (statusCounts || []).reduce((acc: any, item: any) => {

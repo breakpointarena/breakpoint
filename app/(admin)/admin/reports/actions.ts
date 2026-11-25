@@ -9,6 +9,7 @@ import {
 } from "@/lib/payments/paymentStatus";
 import { foodPaymentRatio, revenueSplit, type BookingMoney } from "@/lib/payments/revenueSplit";
 import { partitionCancelled, refundPosition } from "@/lib/reports/cancellations";
+import { bookingRevenueDate } from "@/lib/reports/revenueWindow";
 import { arenaDate } from "@/lib/utils/dates";
 
 /** The money columns, named as `revenueSplit` wants them. */
@@ -522,23 +523,7 @@ export async function getRevenueReports(filters?: ReportFilters) {
     if (adminWalletError) throw adminWalletError;
     if (eventRegistrationPaymentsError) throw eventRegistrationPaymentsError;
 
-    /** Booking revenue belongs to the day its scheduled session starts. */
-    const reportDate = (booking: any): string | null => {
-      const sessionDate = (booking.booking_device_slots || [])
-        .map((slot: any) => slot?.slot_date)
-        .filter(Boolean)
-        .sort()[0];
-      if (sessionDate) return sessionDate;
-
-      // Rows without a device session (for example, food-only bookings) retain
-      // their payment date, with the same stable fallbacks used previously.
-      const paidAt =
-        booking.payment_status === 'pending'
-          ? booking.created_at
-          : booking.payment_groups?.paid_at || booking.updated_at || booking.created_at;
-
-      return paidAt ? arenaDate(new Date(paidAt)) : null;
-    };
+    const reportDate = bookingRevenueDate;
 
     let filteredData = data || [];
     if (filters?.dateFrom || filters?.dateTo) {
