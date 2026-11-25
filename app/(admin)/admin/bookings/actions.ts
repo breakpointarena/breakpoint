@@ -4384,6 +4384,161 @@ export async function checkOutWalkInSession(
   }
 }
 
+/** Correct a completed, unpaid standard walk-in checkout and reprice it. */
+export async function editWalkInCheckoutTime(
+  bookingId: string,
+  statedEnd: { date: string; clock: string }
+) {
+  await requireAdmin();
+
+  try {
+    const { data: booking, error: bookingError } = await supabaseAdmin
+      .from("bookings")
+      .select("status, billed_on_actual_time, checked_in_at, completed_at, shared_play_enabled, customer_phone, food_subtotal, promo_discount, walk_in_device_type_id, walk_in_device_type_name, amount_paid, payment_status, hour_pass_discount, manual_discount")
+      .eq("id", bookingId)
+      .maybeSingle();
+    if (bookingError) throw bookingError;
+    if (!booking) return { success: false, error: "Booking not found." };
+    if (booking.status !== "completed" || !booking.billed_on_actual_time || !booking.completed_at) {
+      return { success: false, error: "Only a completed walk-in session can have its checkout time edited." };
+    }
+    if (booking.shared_play_enabled) {
+      return { success: false, error: "Checkout time editing is not available for shared-play sessions yet." };
+    }
+    if (Number(booking.amount_paid || 0) > 0 || booking.payment_status === "paid" || booking.payment_status === "refunded") {
+      return { success: false, error: "Checkout time can only be edited before any payment is recorded." };
+    }
+    if (Number(booking.hour_pass_discount || 0) > 0 || Number(booking.manual_discount || 0) > 0) {
+      return { success: false, error: "Checkout time cannot be edited after an hour-pass or manual discount was applied." };
+    }
+
+    const resolved = resolveCheckoutTime({
+      date: statedEnd.date,
+      clock: statedEnd.clock,
+      checkedInAt: booking.checked_in_at
+    });
+    if (!resolved.ok) return { success: false, error: resolved.error };
+
+    const startedAt = new Date(booking.checked_in_at);
+    const endedAt = new Date(`${resolved.date}T${resolved.clock}+05:30`);
+    if (!Number.isFinite(endedAt.getTime())) {
+      return { success: false, error: "Choose a valid checkout date and time." };
+    }
+    const played = Math.max(1, Math.ceil((endedAt.getTime() - startedAt.getTime()) / 60_000));
+
+    const { data: slot, error: slotError } = await supabaseAdmin
+      .from("booking_device_slots")
+      .select("id, hourly_rate, player_count, included_players, extra_player_charge")
+      .eq("booking_id", bookingId)
+      .maybeSingle();
+    if (slotError) throw slotError;
+    if (!slot) return { success: false, error: "This session has no station on it, so it cannot be repriced." };
+
+    const pricing = priceSession({
+      playedMinutes: played,
+      hourlyRate: Number(slot.hourly_rate || 0),
+      playerCount: Number(slot.player_count || 1),
+      includedPlayers: Number(slot.included_players || 1),
+      extraPlayerCharge: Number(slot.extra_player_charge || 0)
+    });
+    const deviceSubtotal = pricing.deviceSubtotal;
+    const { data: deviceType, error: deviceTypeError } = await supabaseAdmin
+      .from("device_types")
+      .select("name, display_name")
+      .eq("id", booking.walk_in_device_type_id)
+      .maybeSingle();
+    if (deviceTypeError) throw deviceTypeError;
+
+    const membership = await resolveActiveMembership(booking.customer_phone || "");
+    const subscriptionDiscount = calculateMembershipDiscount(deviceSubtotal, membership.discountPercentage);
+    const happyHour = await resolveHappyHour(
+      deviceType?.display_name || booking.walk_in_device_type_name || "",
+      deviceType?.name || booking.walk_in_device_type_name || "",
+      startedAt,
+      formatDbTime(toClockTime(startedAt)),
+      formatDbTime(toClockTime(endedAt)),
+      deviceSubtotal
+    );
+    const promoDiscount = Number(booking.promo_discount || 0);
+    const totalDiscount = Math.min(
+      roundToTwo(subscriptionDiscount + happyHour.discount + promoDiscount),
+      deviceSubtotal
+    );
+    const totalAmount = Math.max(0, roundToTwo(
+      deviceSubtotal + Number(booking.food_subtotal || 0) - totalDiscount
+    ));
+    const updatedAt = new Date().toISOString();
+
+    const { data: updatedBooking, error: updateBookingError } = await supabaseAdmin
+      .from("bookings")
+      .update({
+        completed_at: endedAt.toISOString(),
+        completed_at_is_stated: true,
+        device_subtotal: deviceSubtotal,
+        subscription_discount: subscriptionDiscount,
+        happy_hour_discount: happyHour.discount,
+        total_amount: totalAmount,
+        payment_status: settlementStatus({ amountPaid: Number(booking.amount_paid || 0), total: totalAmount }),
+        updated_at: updatedAt
+      })
+      .eq("id", bookingId)
+      .eq("status", "completed")
+      .eq("completed_at", booking.completed_at)
+      .select("id")
+      .maybeSingle();
+    if (updateBookingError) throw updateBookingError;
+    if (!updatedBooking) {
+      return { success: false, error: "This booking changed while you were editing it. Refresh and try again." };
+    }
+
+    const { error: slotUpdateError } = await supabaseAdmin
+      .from("booking_device_slots")
+      .update({
+        slot_date: toSlotDate(startedAt),
+        slot_start_time: toClockTime(startedAt),
+        slot_end_time: toClockTime(endedAt),
+        duration_hours: pricing.durationHours,
+        slot_total: pricing.deviceCharges,
+        extra_players_total: pricing.extraPlayersTotal
+      })
+      .eq("id", slot.id);
+    if (slotUpdateError) throw slotUpdateError;
+
+    const { data: participants, error: participantsError } = await supabaseAdmin
+      .from("shared_play_participants")
+      .select("id")
+      .eq("booking_id", bookingId);
+    if (participantsError) throw participantsError;
+    const participantIds = (participants || []).map((participant: { id: string }) => participant.id);
+    if (participantIds.length > 0) {
+      const { error: periodsUpdateError } = await supabaseAdmin
+        .from("shared_play_periods")
+        .update({ ended_at: endedAt.toISOString() })
+        .in("participant_id", participantIds)
+        .eq("ended_at", booking.completed_at);
+      if (periodsUpdateError) throw periodsUpdateError;
+    }
+
+    await rewriteSessionLineItems(
+      bookingId,
+      pricing,
+      Number(slot.hourly_rate || 0),
+      { subscriptionDiscount, subscriptionPercentage: membership.discountPercentage, happyHour }
+    );
+    revalidatePath("/admin/bookings");
+
+    return {
+      success: true,
+      completedAt: endedAt.toISOString(),
+      durationLabel: formatPlayedDuration(pricing.playedMinutes),
+      totalAmount
+    };
+  } catch (err: any) {
+    console.error("Edit walk-in checkout time error:", err);
+    return { success: false, error: err.message || "Could not update the checkout time." };
+  }
+}
+
 /**
  * Replaces the device and discount lines on a session with ones describing what
  * was actually played and what it earned.
