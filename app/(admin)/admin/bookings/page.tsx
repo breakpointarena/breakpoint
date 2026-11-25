@@ -56,7 +56,7 @@ export default function AdminBookingsPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebounce(searchQuery, 300); // Debounce search by 300ms
-  const [activeStatusFilter, setActiveStatusFilter] = useState("all");
+  const [activeStatusFilter, setActiveStatusFilter] = useState("checked_in");
   const [attentionCount, setAttentionCount] = useState(0);
 
   /**
@@ -930,12 +930,12 @@ export default function AdminBookingsPage() {
   };
 
   const filterTabs = [
-    { id: "all", label: "All Bookings", count: stats?.total || 0 },
-    { id: "confirmed", label: "Confirmed", count: stats?.confirmed || 0 },
     { id: "checked_in", label: "Checked In", count: stats?.checked_in || 0 },
+    { id: "confirmed", label: "Confirmed", count: stats?.confirmed || 0 },
     { id: "completed", label: "Completed", count: stats?.completed || 0 },
     { id: "cancelled", label: "Cancelled", count: stats?.cancelled || 0 },
-    { id: "attention", label: "Needs Attention", count: attentionCount }
+    { id: "attention", label: "Needs Attention", count: attentionCount },
+    { id: "all", label: "All Bookings", count: stats?.total || 0 }
   ];
 
   // When a booking happens, for ordering purposes: the slot it reserves, or for
