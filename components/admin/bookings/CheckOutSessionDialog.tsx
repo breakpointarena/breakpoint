@@ -34,6 +34,7 @@ export interface CheckOutTarget {
   booking_number?: string | null;
   customer_name?: string | null;
   checked_in_at?: string | null;
+  completed_at?: string | null;
   deviceLabel?: string | null;
   estimateBooking?: LiveSessionBooking;
 }
@@ -54,12 +55,14 @@ function minutesBetween(from: string, to: string): number | null {
 
 export function CheckOutSessionDialog({
   target,
+  mode = "checkout",
   open,
   onOpenChange,
   onConfirm,
   loading = false,
 }: {
   target: CheckOutTarget | null;
+  mode?: "checkout" | "edit";
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** `statedEnd` is undefined when the desk did not touch the time. */
@@ -76,11 +79,13 @@ export function CheckOutSessionDialog({
   // the wrong session, and priced without complaint.
   useEffect(() => {
     if (!open) return;
-    const now = new Date();
-    setDate(arenaToday(now));
-    setClock(arenaClockTime(now).slice(0, 5));
-    setTouched(false);
-  }, [open, target?.id]);
+    const initialTime = mode === "edit" && target?.completed_at
+      ? new Date(target.completed_at)
+      : new Date();
+    setDate(arenaToday(initialTime));
+    setClock(arenaClockTime(initialTime).slice(0, 5));
+    setTouched(mode === "edit");
+  }, [open, target?.id, target?.completed_at, mode]);
 
   const resolved = useMemo(
     () =>
@@ -106,8 +111,11 @@ export function CheckOutSessionDialog({
     // so pricing follows the selected end regardless of the browser's timezone.
     const checkoutAt = new Date(`${resolved.date}T${resolved.clock}+05:30`);
     if (!Number.isFinite(checkoutAt.getTime())) return null;
-    return liveSessionEstimate(target.estimateBooking, checkoutAt);
-  }, [target, resolved]);
+    const estimateBooking = mode === "edit"
+      ? { ...target.estimateBooking, status: "checked_in", completed_at: null }
+      : target.estimateBooking;
+    return liveSessionEstimate(estimateBooking, checkoutAt);
+  }, [target, resolved, mode]);
 
   const blocked = Boolean(touched && resolved && !resolved.ok);
 
@@ -116,11 +124,13 @@ export function CheckOutSessionDialog({
       <DialogContent className="bg-[var(--background)] border-2 border-primary/40 text-white max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg font-black uppercase tracking-tight">
-            <LogOut className="h-5 w-5 text-primary" /> Check out session
+            <LogOut className="h-5 w-5 text-primary" />
+            {mode === "edit" ? "Edit checkout time" : "Check out session"}
           </DialogTitle>
           <DialogDescription className="text-secondary-content">
-            The bill uses the time between check-in and checkout. You can round the
-            checkout time forward by up to 30 minutes.
+            {mode === "edit"
+              ? "Correct the recorded checkout time. The bill is recalculated from the session duration."
+              : <>The bill uses the time between check-in and checkout. You can round the checkout time forward by up to 30 minutes.</>}
           </DialogDescription>
         </DialogHeader>
 
@@ -137,7 +147,9 @@ export function CheckOutSessionDialog({
             </div>
 
             <div className="space-y-2">
-              <Label className="text-label text-muted-content">Left at</Label>
+              <Label className="text-label text-muted-content">
+                {mode === "edit" ? "Correct checkout time" : "Left at"}
+              </Label>
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   type="date"
@@ -162,7 +174,9 @@ export function CheckOutSessionDialog({
               ) : (
                 <p className="text-xs text-muted-content">
                   {played ? `${played} played.` : " "}
-                  {touched ? " Recorded as a stated checkout." : " Using the current time."}
+                  {mode === "edit"
+                    ? " Saving recalculates the booking total."
+                    : touched ? " Recorded as a stated checkout." : " Using the current time."}
                 </p>
               )}
               {!blocked && estimate && (
@@ -192,7 +206,7 @@ export function CheckOutSessionDialog({
             disabled={loading || blocked}
             className="bg-gradient-primary hover:bg-gradient-primary-hover text-[var(--button-text)] font-black uppercase text-xs"
           >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Check out"}
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : mode === "edit" ? "Save changes" : "Check out"}
           </Button>
         </DialogFooter>
       </DialogContent>

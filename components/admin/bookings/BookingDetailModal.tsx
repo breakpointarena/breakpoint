@@ -18,7 +18,7 @@ import { AttentionPanel } from "./AttentionBadges";
 import { BreakpointLoader } from "@/components/shared/BreakpointLoader";
 import { SessionTimeline } from "./SessionTimeline";
 import { CheckOutSessionDialog } from "@/components/admin/bookings/CheckOutSessionDialog";
-import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, addFoodToBooking, increaseFoodItemQuantity, decreaseFoodItemQuantity, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, undoLatestSharedPlayChange, deleteLatestSharedPlaySessionAndResumePrevious, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
+import { getBookingDetails, checkInBooking, checkOutBooking, checkInWalkInSession, checkOutWalkInSession, editWalkInCheckoutTime, addFoodToBooking, increaseFoodItemQuantity, decreaseFoodItemQuantity, removeFoodItemFromBooking, setWalkInPlannedEnd, updatePlayerCount, setSharedPlayParticipants, undoLatestSharedPlayChange, deleteLatestSharedPlaySessionAndResumePrevious, getCustomersForSharedPlay, linkSharedPlayParticipantToCustomer, getSharedPlayParticipantCheckoutQuote, getSharedPlayCheckoutAllQuotes, checkOutSharedPlayParticipant, checkOutAllSharedPlayParticipants, changeCheckedInWalkInDevice, changeCheckedInSharedPlayDevice, changeCheckedInWalkInStartTime, deleteBooking } from "@/app/(admin)/admin/bookings/actions";
 import { getDeviceTypes } from "@/app/(admin)/admin/devices/actions";
 import { getMenuItems } from "@/app/(admin)/admin/food/actions";
 import { createCustomerAction } from "@/app/(admin)/admin/customers/actions";
@@ -80,6 +80,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [checkOutOpen, setCheckOutOpen] = useState(false);
+  const [checkOutMode, setCheckOutMode] = useState<"checkout" | "edit">("checkout");
   const [addFoodModalOpen, setAddFoodModalOpen] = useState(false);
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [selectedFoodItems, setSelectedFoodItems] = useState<Record<string, number>>({});
@@ -670,15 +671,33 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
         return;
       }
     }
+    setCheckOutMode("checkout");
+    setCheckOutOpen(true);
+  };
+
+  const handleEditSessionCheckout = () => {
+    setCheckOutMode("edit");
     setCheckOutOpen(true);
   };
 
   const confirmSessionCheckOut = async (statedEnd?: { date: string; clock: string }) => {
     if (!bookingId) return;
+    if (checkOutMode === "edit" && !statedEnd) return;
     setActionLoading(true);
-    const result = await checkOutWalkInSession(bookingId, statedEnd);
+    const result = checkOutMode === "edit"
+      ? await editWalkInCheckoutTime(bookingId, statedEnd!)
+      : await checkOutWalkInSession(bookingId, statedEnd);
     if (result.success) {
       setCheckOutOpen(false);
+      if (checkOutMode === "edit") {
+        toast.success("Checkout time updated", {
+          description: `Recalculated bill: ₹${Number(result.totalAmount).toFixed(2)}.`
+        });
+        loadBookingDetails();
+        onUpdate?.();
+        setActionLoading(false);
+        return;
+      }
       toast.success(`Checked out — ${result.durationLabel} played`, {
         description: `Billed ₹${Number(result.totalAmount).toFixed(2)} for the time actually played.`
       });
@@ -1334,6 +1353,33 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                         <div className="flex items-center gap-1 text-blue-500">
                           <LogOut className="h-3.5 w-3.5" />
                           <span>Out: {new Date(booking.completed_at).toLocaleString()}</span>
+                          {isAdmin && isSession && booking.status === "completed" && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              aria-label="Edit checkout time"
+                              title={Number(booking.amount_paid || 0) > 0 || booking.payment_status === "paid"
+                                ? "Checkout time can only be edited before payment is recorded"
+                                : booking.shared_play_enabled
+                                  ? "Checkout time editing is not available for shared-play sessions"
+                                  : Number(booking.hour_pass_discount || 0) > 0 || Number(booking.manual_discount || 0) > 0
+                                    ? "Checkout time cannot be edited after an hour-pass or manual discount"
+                                    : "Edit checkout time and recalculate the bill"}
+                              disabled={
+                                Number(booking.amount_paid || 0) > 0 ||
+                                booking.payment_status === "paid" ||
+                                booking.payment_status === "refunded" ||
+                                booking.shared_play_enabled ||
+                                Number(booking.hour_pass_discount || 0) > 0 ||
+                                Number(booking.manual_discount || 0) > 0
+                              }
+                              onClick={handleEditSessionCheckout}
+                              className="h-7 w-7 text-secondary-content hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -2962,6 +3008,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
 
       <CheckOutSessionDialog
         open={checkOutOpen}
+        mode={checkOutMode}
         onOpenChange={setCheckOutOpen}
         loading={actionLoading}
         target={
@@ -2971,6 +3018,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 booking_number: booking.booking_number,
                 customer_name: booking.customer_name,
                 checked_in_at: booking.checked_in_at,
+                completed_at: booking.completed_at,
                 deviceLabel: booking.walk_in_device_type_name,
                 estimateBooking: booking,
               }
