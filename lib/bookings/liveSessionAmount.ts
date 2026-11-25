@@ -9,7 +9,7 @@ interface LiveSessionSlot {
   extra_player_charge?: number | string | null;
 }
 
-interface LiveSessionBooking {
+export interface LiveSessionBooking {
   billed_on_actual_time?: boolean | null;
   shared_play_enabled?: boolean | null;
   status?: string | null;

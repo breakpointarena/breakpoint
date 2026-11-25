@@ -2972,6 +2972,7 @@ export function BookingDetailModal({ bookingId, open, onClose, onUpdate, openFoo
                 customer_name: booking.customer_name,
                 checked_in_at: booking.checked_in_at,
                 deviceLabel: booking.walk_in_device_type_name,
+                estimateBooking: booking,
               }
             : null
         }

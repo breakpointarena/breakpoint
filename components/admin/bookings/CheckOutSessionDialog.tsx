@@ -8,6 +8,8 @@ import { TimeOfDayField } from "@/components/ui/time-of-day-field";
 import { LogOut, Loader2, Clock } from "lucide-react";
 import { arenaClockTime, arenaToday, formatClockTime12h } from "@/lib/utils/dates";
 import { formatPlayedDuration, resolveCheckoutTime } from "@/lib/bookings/walkInSession";
+import { liveSessionEstimate, type LiveSessionBooking } from "@/lib/bookings/liveSessionAmount";
+import { formatCurrencyWithSymbol } from "@/lib/currency";
 
 /**
  * Closing a walk-in session at the time the customer actually left.
@@ -33,6 +35,7 @@ export interface CheckOutTarget {
   customer_name?: string | null;
   checked_in_at?: string | null;
   deviceLabel?: string | null;
+  estimateBooking?: LiveSessionBooking;
 }
 
 /** Minutes between two arena wall-clock stamps, for the preview only. */
@@ -97,6 +100,15 @@ export function CheckOutSessionDialog({
     return mins === null ? null : formatPlayedDuration(mins);
   }, [target, resolved, date, clock]);
 
+  const estimate = useMemo(() => {
+    if (!target?.estimateBooking || !resolved?.ok) return null;
+    // Checkout date/time is an arena wall-clock reading. Use the arena's zone
+    // so pricing follows the selected end regardless of the browser's timezone.
+    const checkoutAt = new Date(`${resolved.date}T${resolved.clock}+05:30`);
+    if (!Number.isFinite(checkoutAt.getTime())) return null;
+    return liveSessionEstimate(target.estimateBooking, checkoutAt);
+  }, [target, resolved]);
+
   const blocked = Boolean(touched && resolved && !resolved.ok);
 
   return (
@@ -151,6 +163,11 @@ export function CheckOutSessionDialog({
                 <p className="text-xs text-muted-content">
                   {played ? `${played} played.` : " "}
                   {touched ? " Recorded as a stated checkout." : " Using the current time."}
+                </p>
+              )}
+              {!blocked && estimate && (
+                <p className="text-sm font-semibold text-white" aria-live="polite">
+                  Estimated total (device + food): {formatCurrencyWithSymbol(estimate.totalAmount)}
                 </p>
               )}
             </div>
