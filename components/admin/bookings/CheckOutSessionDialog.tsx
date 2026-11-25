@@ -181,7 +181,7 @@ export function CheckOutSessionDialog({
               )}
               {!blocked && estimate && (
                 <p className="text-sm font-semibold text-white" aria-live="polite">
-                  Estimated total (device + food): {formatCurrencyWithSymbol(estimate.totalAmount)}
+                  Estimated device cost: {formatCurrencyWithSymbol(estimate.deviceSubtotal)}
                 </p>
               )}
             </div>
